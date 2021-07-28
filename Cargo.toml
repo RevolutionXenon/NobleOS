@@ -1,0 +1,6 @@
+[workspace]
+members = ["Photon","Hydrogen", "Helium"]
+exclude = []
+
+[profile.dev]
+opt-level=3

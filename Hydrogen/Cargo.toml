@@ -1,0 +1,20 @@
+[package]
+name = "hydrogen"
+version = "0.1.0"
+edition = "2018"
+
+#Hydrogen is the Noble bootloader:
+# Frame buffer initialization
+# Kernel space binary loading
+# Virtual memory initialization
+# Kernel entry
+
+[features]
+qemu = []
+
+[dependencies]
+uefi = "0.11.0"
+uefi-services = "0.8.0"
+rlibc = "1.0.0"
+log = "0.4.14"
+Photon = {path = "../Photon"}

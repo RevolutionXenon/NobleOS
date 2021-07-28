@@ -1,0 +1,15 @@
+[package]
+name = "helium"
+version = "0.1.0"
+edition = "2018"
+
+#Helium is the Noble Kernel:
+# Program loading
+# Thread management
+# Code execution
+# CPU time sharing
+# Interrupt handling
+# System call handling
+# Pipe management
+
+[dependencies]

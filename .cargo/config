@@ -1,0 +1,8 @@
+# Booloader target
+[target.x86_64-unknown-uefi]
+
+# Kernel target
+#[target.x86_64-pc-unknown-noblekernel]
+
+# Programs target
+#[target.x86_64-pc-noble]
