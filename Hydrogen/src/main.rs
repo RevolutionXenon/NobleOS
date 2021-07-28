@@ -18,18 +18,15 @@ use core::convert::TryInto;
 use core::intrinsics::copy_nonoverlapping;
 use core::mem::transmute;
 use core::ptr;
-use core::ptr::write_volatile;
-use log::info;
 use uefi::alloc::exit_boot_services;
 use uefi::prelude::*;
 use uefi::proto::console::gop::GraphicsOutput;
-use uefi::proto::console::text::{Input, Key, ScanCode};
+use uefi::proto::console::text::{Input, Key};
 use uefi::proto::media::file::{File, FileAttribute, FileMode, RegularFile};
 use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::table::boot::MemoryType;
 use uefi::table::runtime::ResetType;
 use photon::*;
-use start_screen::START_SCREEN;
 
 mod start_screen;
 mod command;
@@ -247,9 +244,9 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     kernel_entry_fn(graphics_frame_pointer);
 
     //HALT COMPUTER
-    println!("Reached halting function.");
-    unsafe { asm!("HLT"); }
-    loop{}
+    //println!("Reached halting function.");
+    //unsafe { asm!("HLT"); }
+    //loop{}
 }
 
 //Set a larger graphics mode
