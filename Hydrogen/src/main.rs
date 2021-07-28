@@ -35,6 +35,7 @@ mod start_screen;
 mod command;
 
 const EFI_PAGE_SIZE: u64 = 0x1000;                                 //MEMORY PAGE SIZE (4KiB)
+const CURRENT_VERSION: &str = "v20210727-A";
 
 // MAIN
 //Main entry point after firmware boot
@@ -112,6 +113,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     };}
     //Print Startup
     println!("Welcome to Noble!");
+    print!("Hydrogen Bootloader "); println!(CURRENT_VERSION);
 
     // COMMAND LINE
     //Enter Read-Evaluate-Print Loop
@@ -240,9 +242,9 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     // BOOT SEQUENCE
     //TODO Switch memory maps
     //Kernel entry
-    let kernel_entry_fn = unsafe { transmute::<*mut u8, extern "C" fn() -> !>(code_pointer.add(k_eheader.e_entry as usize)) };
-    unsafe { asm!("mov rdi, ${0}", in(reg) graphics_frame_pointer as usize); }
-    kernel_entry_fn();
+    let kernel_entry_fn = unsafe { transmute::<*mut u8, extern "sysv64" fn(*mut u8) -> !>(code_pointer.add(k_eheader.e_entry as usize)) };
+    //unsafe { asm!("mov rdi, ${0}", in(reg) graphics_frame_pointer as usize); }
+    kernel_entry_fn(graphics_frame_pointer);
 
     //HALT COMPUTER
     println!("Reached halting function.");

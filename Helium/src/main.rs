@@ -7,7 +7,7 @@ use core::panic::PanicInfo;
 use core::ptr::write_volatile;
 
 #[no_mangle]
-pub extern "C" fn _start(arg: *mut u8) -> ! {
+pub extern "sysv64" fn _start(arg: *mut u8) -> ! {
     //Write grey to screen
     unsafe{
         for i in 0..1080{
