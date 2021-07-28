@@ -28,7 +28,7 @@ use uefi::proto::media::file::{File, FileAttribute, FileMode, RegularFile};
 use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::table::boot::MemoryType;
 use uefi::table::runtime::ResetType;
-use Photon::*;
+use photon::*;
 use start_screen::START_SCREEN;
 
 mod start_screen;
