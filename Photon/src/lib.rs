@@ -1,6 +1,7 @@
 #![no_std]
 
 pub mod font_handler;
+pub mod line_draw;
 
 use core::ptr::write_volatile;
 use crate::font_handler::retrieve_font_bitmap;
@@ -35,6 +36,8 @@ pub const CHAR_PRNT_Y_POS: usize = 2;                                  //TEXT MO
 pub const CHAR_PRNT_X_DIM: usize = 118;                                //TEXT MODE WIDTH OF PRINT RESULT WINDOW
 pub const CHAR_PRNT_Y_DIM_DSP: usize = 62;                             //TEXT MODE HEIGHT OF PRINT RESULT WINDOW ON SCREEN
 pub const CHAR_PRNT_Y_DIM_MEM: usize = 200;                            //TEXT MODE HEIGHT OF PRINT RESULT WINDOW IN MEMORY
+pub const CHAR_INPT_X_POS: usize = 1;
+pub const CHAR_INPT_Y_POS: usize = 65;
 pub const CHAR_INPT_X_DIM: usize = 118;                                //TEXT MODE WIDTH OF INPUT WINDOW
 pub const CHAR_INPT_Y_DIM_MEM: usize = 20;                             //TEXT MODE HEIGHT OF INPUT WINDOW IN MEMORY
 

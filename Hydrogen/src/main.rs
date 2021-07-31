@@ -14,6 +14,8 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
+use photon::line_draw::draw_hline_to_textframe;
+use photon::line_draw::draw_vline_to_textframe;
 use core::convert::TryInto;
 use core::intrinsics::copy_nonoverlapping;
 use core::mem::transmute;
@@ -109,6 +111,11 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         print!($text);print!("\n");
     };}
     //Print Startup
+    draw_hline_to_textframe(&mut screen_charbuffer, CHAR_PRNT_Y_POS-1, 0, CHAR_SCRN_X_DIM-1);
+    draw_hline_to_textframe(&mut screen_charbuffer, CHAR_INPT_Y_POS-1, 0, CHAR_SCRN_X_DIM-1);
+    draw_hline_to_textframe(&mut screen_charbuffer, CHAR_INPT_Y_POS+1, 0, CHAR_SCRN_X_DIM-1);
+    draw_vline_to_textframe(&mut screen_charbuffer, 0, CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1);
+    draw_vline_to_textframe(&mut screen_charbuffer, CHAR_SCRN_X_DIM-1, CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1);
     println!("Welcome to Noble!");
     print!("Hydrogen Bootloader "); println!(CURRENT_VERSION);
 
