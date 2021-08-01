@@ -162,13 +162,14 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                 //User has typed a character
                 else {
                     //Add character to input stack
-                    draw_char_to_textframe_and_pixelframe(&mut screen_framebuffer, &mut screen_charbuffer, input_char, CHAR_INPT_X_POS + input_pbuffer, CHAR_INPT_Y_POS, COLR_BACK, COLR_FORE);
-                    draw_char_from_pixelframe_to_hardwarebuffer(graphics_frame_pointer, &screen_framebuffer,CHAR_INPT_X_POS + input_pbuffer, CHAR_INPT_Y_POS);
-                    print_char_to_textstack(&mut input_charstack, &mut input_pbuffer, input_char);
+                    //draw_char_to_textframe_and_pixelframe(&mut screen_framebuffer, &mut screen_charbuffer, input_char, CHAR_INPT_X_POS + input_pbuffer, CHAR_INPT_Y_POS, COLR_BACK, COLR_FORE);
+                    //draw_char_from_pixelframe_to_hardwarebuffer(graphics_frame_pointer, &screen_framebuffer,CHAR_INPT_X_POS + input_pbuffer, CHAR_INPT_Y_POS);
+                    //print_char_to_textstack(&mut input_charstack, &mut input_pbuffer, input_char);
                     //screen_charbuffer[(CHAR_SCRN_X_DIM *(CHAR_SCRN_Y_DIM -2))+1..(CHAR_SCRN_X_DIM *(CHAR_SCRN_Y_DIM -2))+1+ CHAR_INPT_X_DIM].clone_from_slice(&input_charstack[0..CHAR_INPT_X_DIM]);
                     //Refresh screen
                     //draw_textframe_to_pixelframe(&mut screen_framebuffer, &screen_charbuffer, COLR_BACK, COLR_FORE);
                     //draw_pixelframe_to_hardwarebuffer(graphics_frame_pointer, &screen_framebuffer);
+                    input_character(graphics_frame_pointer, &mut screen_framebuffer, &mut screen_charbuffer, &mut input_charstack, &mut input_pbuffer, input_char);
                 }
             }
             //Modifier or Control Key

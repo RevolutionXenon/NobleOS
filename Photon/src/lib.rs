@@ -214,3 +214,28 @@ pub fn print_char_to_textstack(stack: &mut [char], pbuffer: &mut usize, c: char)
         stack[*pbuffer] = ' ';
     }
 }
+
+//Input character
+pub fn input_character(hardwarebuffer: *mut u8, framebuffer: &mut[u8;PIXL_SCRN_X_DIM*PIXL_SCRN_Y_DIM*PIXL_SCRN_B_DEP], charbuffer: &mut[char;CHAR_SCRN_X_DIM*CHAR_SCRN_Y_DIM], stack: &mut [char], pbuffer: &mut usize, c: char){
+    let control:bool = (c as u32) < 0x20;             //Determines if character is a control character
+    let control_newline:bool = c=='\n' || c=='\r';    //Determines if character is a newline character
+    let printable:bool = !control || control_newline; //Determines if a character is printable
+    let control_backwards:bool = c=='\x08';           //Determines if character types backwards (i.e. backspace)
+    let end_forward:bool = *pbuffer >= stack.len();   //Determines if the end of the stack is reached and position can no longer move forward
+    let end_backward:bool = *pbuffer <= 0;            //Determines if the beginning of the stack is reached and position can no longer move backwards
+
+    //add printable character to stack
+    if printable && !end_forward {
+        stack[*pbuffer] = c;
+        draw_char_to_textframe_and_pixelframe(framebuffer, charbuffer, c, CHAR_INPT_X_POS+*pbuffer, CHAR_INPT_Y_POS, COLR_BACK, COLR_FORE);
+        draw_char_from_pixelframe_to_hardwarebuffer(hardwarebuffer, framebuffer, CHAR_INPT_X_POS+*pbuffer, CHAR_INPT_Y_POS);
+        *pbuffer = *pbuffer + 1;
+    }
+    //backspace handling
+    else if control_backwards && !end_backward {
+        *pbuffer = *pbuffer - 1;
+        stack[*pbuffer] = ' ';
+        draw_char_to_textframe_and_pixelframe(framebuffer, charbuffer, ' ', CHAR_INPT_X_POS+*pbuffer, CHAR_INPT_Y_POS, COLR_BACK, COLR_FORE);
+        draw_char_from_pixelframe_to_hardwarebuffer(hardwarebuffer, framebuffer, CHAR_INPT_X_POS+*pbuffer, CHAR_INPT_Y_POS);
+    }
+}
