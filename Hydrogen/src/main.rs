@@ -16,6 +16,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use photon::line_draw::draw_hline_to_textframe;
 use photon::line_draw::draw_vline_to_textframe;
+use x86_64::structures::paging::*;
 use core::convert::TryInto;
 use core::intrinsics::copy_nonoverlapping;
 use core::mem::transmute;
@@ -33,8 +34,8 @@ use photon::*;
 mod start_screen;
 mod command;
 
-const EFI_PAGE_SIZE: u64 = 0x1000;                                 //MEMORY PAGE SIZE (4KiB)
-const CURRENT_VERSION: &str = "v20210727-A";
+const EFI_PAGE_SIZE: u64 = 0x1000; //MEMORY PAGE SIZE (4KiB)
+const CURRENT_VERSION: &str = "v2021-08-01-1";
 
 // MAIN
 //Main entry point after firmware boot
@@ -161,11 +162,13 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                 //User has typed a character
                 else {
                     //Add character to input stack
+                    draw_char_to_textframe_and_pixelframe(&mut screen_framebuffer, &mut screen_charbuffer, input_char, CHAR_INPT_X_POS + input_pbuffer, CHAR_INPT_Y_POS, COLR_BACK, COLR_FORE);
+                    draw_char_from_pixelframe_to_hardwarebuffer(graphics_frame_pointer, &screen_framebuffer,CHAR_INPT_X_POS + input_pbuffer, CHAR_INPT_Y_POS);
                     print_char_to_textstack(&mut input_charstack, &mut input_pbuffer, input_char);
-                    screen_charbuffer[(CHAR_SCRN_X_DIM *(CHAR_SCRN_Y_DIM -2))+1..(CHAR_SCRN_X_DIM *(CHAR_SCRN_Y_DIM -2))+1+ CHAR_INPT_X_DIM].clone_from_slice(&input_charstack[0..CHAR_INPT_X_DIM]);
+                    //screen_charbuffer[(CHAR_SCRN_X_DIM *(CHAR_SCRN_Y_DIM -2))+1..(CHAR_SCRN_X_DIM *(CHAR_SCRN_Y_DIM -2))+1+ CHAR_INPT_X_DIM].clone_from_slice(&input_charstack[0..CHAR_INPT_X_DIM]);
                     //Refresh screen
-                    draw_textframe_to_pixelframe(&mut screen_framebuffer, &screen_charbuffer, COLR_BACK, COLR_FORE);
-                    draw_pixelframe_to_hardwarebuffer(graphics_frame_pointer, &screen_framebuffer);
+                    //draw_textframe_to_pixelframe(&mut screen_framebuffer, &screen_charbuffer, COLR_BACK, COLR_FORE);
+                    //draw_pixelframe_to_hardwarebuffer(graphics_frame_pointer, &screen_framebuffer);
                 }
             }
             //Modifier or Control Key
@@ -245,6 +248,12 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
 
     // BOOT SEQUENCE
     //TODO Switch memory maps
+    /*unsafe{
+        let ptb:&mut PageTable = PageTable::new();
+        let ptb_iter = PageTable::iter_mut(ptb);
+        let mapped_page_table = MappedPageTable::new(page_table_1);
+        
+    }*/
     //Kernel entry
     let kernel_entry_fn = unsafe { transmute::<*mut u8, extern "sysv64" fn(*mut u8) -> !>(code_pointer.add(k_eheader.e_entry as usize)) };
     //unsafe { asm!("mov rdi, ${0}", in(reg) graphics_frame_pointer as usize); }
@@ -286,7 +295,7 @@ fn boot_commands(system_table: &SystemTable<Boot>, command: &str) -> (u8, String
         //Memory Map
         return (
             0x00,
-            format!(">{}\n{}\n", command, memory_map(system_table.boot_services())))
+            format!(">{}\n{}", command, memory_map(system_table.boot_services())))
     } else if command.eq_ignore_ascii_case("shutdown"){
         //Shutdown
         return (

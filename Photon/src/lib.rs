@@ -43,10 +43,28 @@ pub const CHAR_INPT_Y_DIM_MEM: usize = 20;                             //TEXT MO
 
 // GRAPHICS
 //Draw a framebuffer to the screen
-pub fn draw_pixelframe_to_hardwarebuffer(buffer: *mut u8, framebuffer: &[u8;PIXL_SCRN_X_DIM*PIXL_SCRN_Y_DIM* PIXL_SCRN_B_DEP]){
+pub fn draw_pixelframe_to_hardwarebuffer(buffer: *mut u8, framebuffer: &[u8;PIXL_SCRN_X_DIM*PIXL_SCRN_Y_DIM*PIXL_SCRN_B_DEP]){
     unsafe{
-        for i in 0..framebuffer.len(){
+        for i in 0..PIXL_SCRN_X_DIM*PIXL_SCRN_Y_DIM* PIXL_SCRN_B_DEP{
             write_volatile(buffer.add(i), framebuffer[i]);
+        }
+    }
+}
+
+//Draw an area of pixels containing a character from a framebuffer to the screen
+pub fn draw_char_from_pixelframe_to_hardwarebuffer(buffer: *mut u8, framebuffer: &[u8;PIXL_SCRN_X_DIM*PIXL_SCRN_Y_DIM*PIXL_SCRN_B_DEP], x: usize, y: usize){
+    //Check valid character position
+    if x >= CHAR_SCRN_X_DIM || y >= CHAR_SCRN_Y_DIM {
+        return;
+    }
+    unsafe{
+        for i in y*16..y*16+16{
+            for j in x*16..x*16+16{
+                for k in 0..PIXL_SCRN_B_DEP{
+                    let p = i*PIXL_SCRN_X_DIM*PIXL_SCRN_B_DEP + j*PIXL_SCRN_B_DEP + k;
+                    write_volatile(buffer.add(p), framebuffer[p]);
+                }
+            }
         }
     }
 }
@@ -65,12 +83,11 @@ pub fn draw_charf_to_pixelframe(framebuffer: &mut [u8;PIXL_SCRN_X_DIM*PIXL_SCRN_
         return;
     }
     let bitmap = retrieve_font_bitmap(&codepoint);
-    let stride = PIXL_SCRN_X_DIM;
     for byte_row in 0..16{
         for byte_column in 0..2{
             for bit in 0..8{
                 if bitmap[byte_row*2 + byte_column] & (1 << bit) != 0{
-                    let pixel_index = (y*16 + byte_row)*stride + (x*16 + byte_column*8 + bit);
+                    let pixel_index = (y*16 + byte_row)*PIXL_SCRN_X_DIM + (x*16 + byte_column*8 + bit);
                     framebuffer[pixel_index*PIXL_SCRN_B_DEP..(pixel_index+1)*PIXL_SCRN_B_DEP].copy_from_slice(&foreground);
                 }
             }
@@ -102,7 +119,7 @@ pub fn draw_charfb_to_pixelframe(framebuffer: &mut [u8;PIXL_SCRN_X_DIM*PIXL_SCRN
 }
 
 //Place a character into a character buffer and update it in a corresponding frame buffer
-pub fn draw_char_to_textframe_and_pixelframe(framebuffer: &mut [u8;PIXL_SCRN_X_DIM*PIXL_SCRN_Y_DIM*PIXL_SCRN_B_DEP], charbuffer: &mut [char;3600], codepoint: char, x: usize, y:usize, background: [u8;PIXL_SCRN_B_DEP], foreground: [u8;PIXL_SCRN_B_DEP]){
+pub fn draw_char_to_textframe_and_pixelframe(framebuffer: &mut [u8;PIXL_SCRN_X_DIM*PIXL_SCRN_Y_DIM*PIXL_SCRN_B_DEP], charbuffer: &mut [char;CHAR_SCRN_X_DIM*CHAR_SCRN_Y_DIM], codepoint: char, x: usize, y:usize, background: [u8;PIXL_SCRN_B_DEP], foreground: [u8;PIXL_SCRN_B_DEP]){
     charbuffer[y* CHAR_SCRN_X_DIM +x]=codepoint;
     draw_charfb_to_pixelframe(framebuffer, charbuffer[y* CHAR_SCRN_X_DIM +x], x, y, background, foreground);
 }
