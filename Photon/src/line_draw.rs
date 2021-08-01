@@ -39,7 +39,7 @@ pub fn draw_hline_to_textframe(textframe: &mut [char;CHAR_SCRN_X_DIM*CHAR_SCRN_Y
         else if check == '╨' {textframe[pos] = '╩';}
         else if check == '╩' {textframe[pos] = '╩';}
         else if check == '╬' {textframe[pos] = '╬';}
-        else                 {textframe[pos] = '=';}
+        else                 {textframe[pos] = '═';}
     }
     {
         let pos: usize = y*CHAR_SCRN_X_DIM + x2;
