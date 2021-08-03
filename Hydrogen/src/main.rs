@@ -16,11 +16,12 @@ use alloc::vec;
 use alloc::vec::Vec;
 use photon::line_draw::draw_hline_to_textframe;
 use photon::line_draw::draw_vline_to_textframe;
-use x86_64::structures::paging::*;
+use x86_64::registers::control::*;
 use core::convert::TryInto;
 use core::intrinsics::copy_nonoverlapping;
 use core::mem::transmute;
 use core::ptr;
+use core::ptr::write_volatile;
 use uefi::alloc::exit_boot_services;
 use uefi::prelude::*;
 use uefi::proto::console::gop::GraphicsOutput;
@@ -36,6 +37,7 @@ mod command;
 
 const EFI_PAGE_SIZE: u64 = 0x1000; //MEMORY PAGE SIZE (4KiB)
 const CURRENT_VERSION: &str = "v2021-08-01-1";
+
 
 // MAIN
 //Main entry point after firmware boot
@@ -198,19 +200,19 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     if k_eheader.ei_abiversion != 0x00 {println!("Kernel load: Incorrect ei_abiversion."); panic!();}
     if k_eheader.e_machine != 0x3E {println!("Kernel load: Incorrect e_machine."); panic!();}
     //Print ELF header info
-    println!(&format!("Kernel Entry Point:                 {:04X}", k_eheader.e_entry));
-    println!(&format!("Kernel Program Header Offset:       {:04X}", k_eheader.e_phoff));
-    println!(&format!("Kernel Section Header Offset:       {:04X}", k_eheader.e_shoff));
-    println!(&format!("Kernel ELF Header Size:             {:04X}", k_eheader.e_ehsize));
-    println!(&format!("Kernel Program Header Entry Size:   {:04X}", k_eheader.e_phentsize));
-    println!(&format!("Kernel Program Header Number:       {:04X}", k_eheader.e_phnum));
-    println!(&format!("Kernel Section Header Entry Size:   {:04X}", k_eheader.e_shentsize));
-    println!(&format!("Kernel Section Header Number:       {:04X}", k_eheader.e_shnum));
-    println!(&format!("Kernel Section Header String Index: {:04X}", k_eheader.e_shstrndx));
+    println!(&format!("Kernel Entry Point:                 0x{:04X}", k_eheader.e_entry));
+    println!(&format!("Kernel Program Header Offset:       0x{:04X}", k_eheader.e_phoff));
+    println!(&format!("Kernel Section Header Offset:       0x{:04X}", k_eheader.e_shoff));
+    println!(&format!("Kernel ELF Header Size:             0x{:04X}", k_eheader.e_ehsize));
+    println!(&format!("Kernel Program Header Entry Size:   0x{:04X}", k_eheader.e_phentsize));
+    println!(&format!("Kernel Program Header Number:       0x{:04X}", k_eheader.e_phnum));
+    println!(&format!("Kernel Section Header Entry Size:   0x{:04X}", k_eheader.e_shentsize));
+    println!(&format!("Kernel Section Header Number:       0x{:04X}", k_eheader.e_shnum));
+    println!(&format!("Kernel Section Header String Index: 0x{:04X}", k_eheader.e_shstrndx));
     //Read program headers
     let mut code_list:Vec<(u64,u64,u64,u64)> = vec![(0,0,0,0);5];
     let mut code_num = 0;
-    let mut code_size = 0;
+    let mut kernel_size = 0;
     for _ in 0..k_eheader.e_phnum{
         let pheader = match ELFProgramHeader64::new(&{let mut buf = [0u8;0x38]; fs_kernel.read(&mut buf).expect_success("Kernel file read failed at program header."); buf}, k_eheader.ei_data){
             Ok(result) => result,
@@ -219,13 +221,13 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         if pheader.p_type == 0x01 {
             code_list[code_num] = (pheader.p_offset, pheader.p_filesz, pheader.p_vaddr, pheader.p_memsz);
             code_num = code_num + 1;
-            if pheader.p_vaddr + pheader.p_memsz > code_size {
-                code_size = pheader.p_vaddr + pheader.p_memsz;
+            if pheader.p_vaddr + pheader.p_memsz > kernel_size {
+                kernel_size = pheader.p_vaddr + pheader.p_memsz;
             }
         }
     }
     //Allocate memory for code
-    let code_pointer = unsafe { reserve_code_space(boot_services, code_size as usize, EFI_PAGE_SIZE as usize) };
+    let code_pointer = unsafe { reserve_code_space(boot_services, kernel_size as usize, EFI_PAGE_SIZE as usize) };
     for i in 0..code_num{
         fs_kernel.set_position(code_list[i].0).expect_success("Kernel file read failed at seeking code.");
         let mut buf:Vec<u8> = vec![0; code_list[i].1 as usize];
@@ -238,6 +240,23 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     //println!(&format!("GOP: {:016X}", graphics_output_protocol.frame_buffer().as_mut_ptr() as usize));
     //let arg = graphics_output_protocol.frame_buffer().as_mut_ptr() as usize;
     //println!(&format!("Graphics output pointer at: {:p}", graphics_frame_pointer));
+    println!(&format!("Kernel Code Size: 0x{:X}", kernel_size));
+
+    //TODO SWITCH MEMORY MAPS
+    let _kernel_location:   u64 = 0b_1111111111111111_100000000_000000000_000000000_000000000_000000000000;
+    let _frame_location:    u64 = 0b_1111111111111111_100000010_000000000_000000000_000000000_000000000000;
+    let _table_location:    u64 = 0b_1111111111111111_111111111_000000000_000000000_000000000_000000000000;
+    unsafe{
+        //4th level page table to be placed into CR3
+        let pml4:*mut u8 = reserve_code_space(boot_services, EFI_PAGE_SIZE as usize, EFI_PAGE_SIZE as usize);
+        write_pte(pml4.add(0o777), pml4 as u64);
+        //TODO Kernel Page Table
+        //TODO Frame Buffer Page Table
+        let pdpte_frame = create_pdpte_offset(boot_services, graphics_frame_pointer as u64, PIXL_SCRN_Y_DIM*PIXL_SCRN_X_DIM*PIXL_SCRN_B_DEP);
+        write_pte(pml4.add(0o402), pdpte_frame as u64);
+
+        println!(&format!("Frame Buffer PDPTE Location: {:p}", pdpte_frame));
+    }
 
     // EXIT BOOT SERVICES
     //exit
@@ -248,22 +267,16 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     println!("Boot Services exited.");
 
     // BOOT SEQUENCE
-    //TODO Switch memory maps
-    /*unsafe{
-        let ptb:&mut PageTable = PageTable::new();
-        let ptb_iter = PageTable::iter_mut(ptb);
-        let mapped_page_table = MappedPageTable::new(page_table_1);
-        
-    }*/
+    
     //Kernel entry
     let kernel_entry_fn = unsafe { transmute::<*mut u8, extern "sysv64" fn(*mut u8) -> !>(code_pointer.add(k_eheader.e_entry as usize)) };
     //unsafe { asm!("mov rdi, ${0}", in(reg) graphics_frame_pointer as usize); }
-    kernel_entry_fn(graphics_frame_pointer);
+    //kernel_entry_fn(graphics_frame_pointer);
 
     //HALT COMPUTER
-    //println!("Reached halting function.");
-    //unsafe { asm!("HLT"); }
-    //loop{}
+    println!("Reached halting function.");
+    unsafe { asm!("HLT"); }
+    loop{}
 }
 
 //Set a larger graphics mode
@@ -281,6 +294,7 @@ fn set_graphics_mode(gop: &mut GraphicsOutput) {
     gop.set_mode(&mode)
         .expect_success("Failed to set graphics mode");
 }
+
 
 // COMMAND PROCESSOR
 //Evaluates and executes a bootloader command and returns a return code and associated string
@@ -307,6 +321,12 @@ fn boot_commands(system_table: &SystemTable<Boot>, command: &str) -> (u8, String
         return (
             0x01, // BOOT RETURN CODE : 0x01
             format!(">{}\nBoot sequence started.\n", command))
+    }else if command.eq_ignore_ascii_case("crd"){
+        //Display control registers
+        return (
+            0x00,
+            format!(">{}\nCR0: {:064b}\nCR2: {:064b}\nCR3: {:064b}\nCR4: {:064b}\n", command, Cr0::read().bits(), Cr2::read().as_u64(), Cr3::read().1.bits(), Cr4::read().bits())
+        )
     } else {
         //No result
         return (
@@ -368,6 +388,8 @@ fn memory_map(boot_service: &BootServices) -> String{
     return result;
 }
 
+
+// MEMORY FUNCTIONS
 //Allocate system memory
 unsafe fn reserve_code_space(boot_services: &BootServices, size: usize, align: usize) -> *mut u8 {
     let mem_ty = MemoryType::LOADER_CODE;
@@ -393,7 +415,47 @@ unsafe fn reserve_code_space(boot_services: &BootServices, size: usize, align: u
     }
 }
 
-// HEADER STRUCTS
+//Write page table entry
+unsafe fn write_pte(entry_location: *mut u8, address: u64) -> bool{
+    //Return if invalid address
+    if address | 0o7777 != 0 {return false;}
+    //Convert to bytes
+    let bytes = u64::to_le_bytes(address);
+    //Write address
+    for i in 0..8{
+        write_volatile(entry_location.add(i), bytes[i]);
+    }
+    //Write flags
+    write_volatile(entry_location, 0b00000001);
+    return true;
+}
+
+//Reserve memory area as offset level 3 page table
+unsafe fn create_pdpte_offset(boot_services:&BootServices, offset: u64, size: usize) -> *mut u8{
+    //New level 3 table
+    let pdpte = reserve_code_space(boot_services, EFI_PAGE_SIZE as usize, EFI_PAGE_SIZE as usize);
+    let mut pde: *mut u8 = 0 as *mut u8;
+    let mut pte: *mut u8 = 0 as *mut u8;
+    let pages = size/0b0000000000000000001000000000000 + if size%0b0000000000000000001000000000000 != 0 {1} else {0};
+    for i in 0..pages{
+        if i%0x100 == 0 {
+            if i%0x20000 == 0 {
+                //New level 2 table
+                pde = reserve_code_space(boot_services, EFI_PAGE_SIZE as usize, EFI_PAGE_SIZE as usize);
+                write_pte(pdpte.add(i/0x20000), pde as u64);
+            }
+            //New level 1 table
+            pte = reserve_code_space(boot_services, EFI_PAGE_SIZE as usize, EFI_PAGE_SIZE as usize);
+            write_pte(pde.add(i/0x100), pte as u64);
+        }
+        //New page
+        write_pte(pte.add(i%0x100), offset + (i*0x100) as u64);
+    }
+    return pdpte;
+}
+
+
+// STRUCTS
 //64-bit ELF File Header
 #[derive(Debug)]
 struct ELFFileHeader64 {
