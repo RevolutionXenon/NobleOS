@@ -21,11 +21,12 @@ use core::convert::TryInto;
 use core::intrinsics::copy_nonoverlapping;
 use core::mem::transmute;
 use core::ptr;
+use core::ptr::read_volatile;
 use core::ptr::write_volatile;
 use uefi::alloc::exit_boot_services;
 use uefi::prelude::*;
 use uefi::proto::console::gop::GraphicsOutput;
-use uefi::proto::console::text::{Input, Key};
+use uefi::proto::console::text::{Input, Key, ScanCode};
 use uefi::proto::media::file::{File, FileAttribute, FileMode, RegularFile};
 use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::table::boot::MemoryType;
@@ -36,7 +37,7 @@ mod start_screen;
 mod command;
 
 const EFI_PAGE_SIZE: u64 = 0x1000; //MEMORY PAGE SIZE (4KiB)
-const CURRENT_VERSION: &str = "v2021-08-01-1";
+const CURRENT_VERSION: &str = "v2021-08-03";
 
 
 // MAIN
@@ -99,12 +100,14 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     system_table_boot.boot_services().stall(2_000_000);
 
     // PRINT SETUP
+    //Position variable
+    let mut vertical_positon = CHAR_PRNT_Y_DIM_MEM;
     //Print Macros
     macro_rules! print { ($text:expr) => {
         print_str_to_textbuffer(&mut print_charbuffer, CHAR_PRNT_X_DIM, CHAR_PRNT_Y_DIM_MEM, &mut print_xbuffer, $text);
         for y in 0..CHAR_PRNT_Y_DIM_DSP {
             let s = (CHAR_PRNT_Y_POS+y)*CHAR_SCRN_X_DIM+CHAR_PRNT_X_POS;
-            let p = (CHAR_PRNT_Y_DIM_MEM-CHAR_PRNT_Y_DIM_DSP+y)*CHAR_PRNT_X_DIM;
+            let p = (vertical_positon-CHAR_PRNT_Y_DIM_DSP+y)*CHAR_PRNT_X_DIM;
             screen_charbuffer[s..s+CHAR_PRNT_X_DIM].copy_from_slice(&print_charbuffer[p..p+CHAR_PRNT_X_DIM]);
         }
         draw_textframe_to_pixelframe(&mut screen_framebuffer, &screen_charbuffer, COLR_BACK, COLR_FORE);
@@ -136,6 +139,8 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                 let input_char = char::from(input_char16);
                 //User has hit enter
                 if input_char == '\r'{
+                    //Return to bottom of screen
+                    vertical_positon = CHAR_PRNT_Y_DIM_MEM;
                     //Execute command and get return value
                     let boot_command_return = boot_commands(&system_table_boot, &input_charstack[0..input_pbuffer].iter().collect::<String>());
                     print!(&boot_command_return.1);
@@ -163,19 +168,25 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                 }
                 //User has typed a character
                 else {
-                    //Add character to input stack
-                    //draw_char_to_textframe_and_pixelframe(&mut screen_framebuffer, &mut screen_charbuffer, input_char, CHAR_INPT_X_POS + input_pbuffer, CHAR_INPT_Y_POS, COLR_BACK, COLR_FORE);
-                    //draw_char_from_pixelframe_to_hardwarebuffer(graphics_frame_pointer, &screen_framebuffer,CHAR_INPT_X_POS + input_pbuffer, CHAR_INPT_Y_POS);
-                    //print_char_to_textstack(&mut input_charstack, &mut input_pbuffer, input_char);
-                    //screen_charbuffer[(CHAR_SCRN_X_DIM *(CHAR_SCRN_Y_DIM -2))+1..(CHAR_SCRN_X_DIM *(CHAR_SCRN_Y_DIM -2))+1+ CHAR_INPT_X_DIM].clone_from_slice(&input_charstack[0..CHAR_INPT_X_DIM]);
-                    //Refresh screen
-                    //draw_textframe_to_pixelframe(&mut screen_framebuffer, &screen_charbuffer, COLR_BACK, COLR_FORE);
-                    //draw_pixelframe_to_hardwarebuffer(graphics_frame_pointer, &screen_framebuffer);
                     input_character(graphics_frame_pointer, &mut screen_framebuffer, &mut screen_charbuffer, &mut input_charstack, &mut input_pbuffer, input_char);
                 }
             }
             //Modifier or Control Key
-            Key::Special(_) =>{}
+            Key::Special(scancode) =>{
+                if scancode == ScanCode::UP && vertical_positon > CHAR_PRNT_Y_DIM_DSP {
+                    vertical_positon -= 1;
+                }
+                else if scancode == ScanCode::DOWN && vertical_positon < CHAR_PRNT_Y_DIM_MEM{
+                    vertical_positon += 1;
+                }
+                else if scancode == ScanCode::RIGHT{
+                    print!("");
+                }
+                else if scancode == ScanCode::LEFT{
+                    vertical_positon = CHAR_PRNT_Y_DIM_MEM;
+                    print!("");
+                }
+            }
         }
     }
     println!("Simple REPL exited.");
@@ -243,17 +254,17 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     println!(&format!("Kernel Code Size: 0x{:X}", kernel_size));
 
     //TODO SWITCH MEMORY MAPS
-    let _kernel_location:   u64 = 0b_1111111111111111_100000000_000000000_000000000_000000000_000000000000;
-    let _frame_location:    u64 = 0b_1111111111111111_100000010_000000000_000000000_000000000_000000000000;
-    let _table_location:    u64 = 0b_1111111111111111_111111111_000000000_000000000_000000000_000000000000;
+    let frame_oct = 0o775;
+    let kernel_oct = 0o776;
+    let table_oct = 0o777;
     unsafe{
         //4th level page table to be placed into CR3
         let pml4:*mut u8 = reserve_code_space(boot_services, EFI_PAGE_SIZE as usize, EFI_PAGE_SIZE as usize);
-        write_pte(pml4.add(0o777), pml4 as u64);
+        write_pte(pml4.add(table_oct), pml4 as u64);
         //TODO Kernel Page Table
         //TODO Frame Buffer Page Table
         let pdpte_frame = create_pdpte_offset(boot_services, graphics_frame_pointer as u64, PIXL_SCRN_Y_DIM*PIXL_SCRN_X_DIM*PIXL_SCRN_B_DEP);
-        write_pte(pml4.add(0o402), pdpte_frame as u64);
+        write_pte(pml4.add(frame_oct), pdpte_frame as u64);
 
         println!(&format!("Frame Buffer PDPTE Location: {:p}", pdpte_frame));
     }
@@ -305,38 +316,60 @@ fn boot_commands(system_table: &SystemTable<Boot>, command: &str) -> (u8, String
             0x00,
             format!(">{}\n{}\n", command, match system_table.runtime_services().get_time(){
                 Ok(v) => {let v = v.log(); format!{"{}-{:02}-{:02} {:02}:{:02}:{:02} UTC", v.year(), v.month(), v.day(), v.hour(), v.minute(), v.second()}},
-                Err(e) => format!("Command failed: {:?}", e)}))
-    } else if command.eq_ignore_ascii_case("mem"){
+                Err(e) => format!("Command failed: {:?}", e)}
+            )
+        )
+    }
+    else if command.eq_ignore_ascii_case("mem"){
         //Memory Map
         return (
             0x00,
-            format!(">{}\n{}", command, memory_map(system_table.boot_services())))
-    } else if command.eq_ignore_ascii_case("shutdown"){
+            format!(">{}\n{}", command, command_mem(system_table.boot_services()))
+        )
+    }
+    else if command.eq_ignore_ascii_case("shutdown"){
         //Shutdown
         return (
             0x02, // SHUTDOWN RETURN CODE : 0x02
-            format!(">{}\nShutdown sequence started.\n", command))
-    } else if command.eq_ignore_ascii_case("boot"){
+            format!(">{}\nShutdown sequence started.\n", command)
+        )
+    }
+    else if command.eq_ignore_ascii_case("boot"){
         //Boot
         return (
             0x01, // BOOT RETURN CODE : 0x01
-            format!(">{}\nBoot sequence started.\n", command))
-    }else if command.eq_ignore_ascii_case("crd"){
+            format!(">{}\nBoot sequence started.\n", command)
+        )
+    }
+    else if command.eq_ignore_ascii_case("crd"){
         //Display control registers
         return (
             0x00,
-            format!(">{}\nCR0: {:064b}\nCR2: {:064b}\nCR3: {:064b}\nCR4: {:064b}\n", command, Cr0::read().bits(), Cr2::read().as_u64(), Cr3::read().1.bits(), Cr4::read().bits())
+            format!(">{}\nCR0:  {:064b}\nCR2:  {:064b}\nCR3:  {:064b}\nCR4:  {:064b}\nEFER: {:064b}\n", command, 
+            Cr0::read().bits(), 
+            Cr2::read().as_u64(), 
+            Cr3::read().1.bits(), 
+            Cr4::read().bits(),
+            Efer::read().bits())
         )
-    } else {
+    }
+    else if command.starts_with("peek "){
+        return (
+            0x00,
+            format!(">{}\n{}", command, command_peek(command))
+        )
+    }
+    else{
         //No result
         return (
             0x00,
-            format!(">{}\nUnrecognized command.\n", command))
+            format!(">{}\nCommand not entered properly.\n", command)
+        )
     }
 }
 
 //Display memory map contents to console
-fn memory_map(boot_service: &BootServices) -> String{
+fn command_mem(boot_service: &BootServices) -> String{
     let mut result = "".to_string();
     // Get the estimated map size
     let map_size = boot_service.memory_map_size();
@@ -386,6 +419,53 @@ fn memory_map(boot_service: &BootServices) -> String{
         }
     }
     return result;
+}
+
+//Display the raw contents of a part of memory
+fn command_peek(command: &str) -> String {
+    let mut result = "".to_string();
+    let split:Vec<&str> = command.split(" ").collect();
+    if split.len() != 4 {return "Incorrect number of arguments (requires 3).\n".to_string();}
+    //Read subcommand from arguments
+    //Read numbers from argument
+    let address = match usize::from_str_radix(split[2], 16){
+        Ok(i) => {i},
+        Err(_) => {return format!("2nd argument not valid: {}\n", split[2]);}
+    } as *mut u8;
+    let size = match split[3].to_string().parse::<usize>(){
+        Ok(i) => {i},
+        Err(_) => {return format!("3rd argument not valid: {}\n", split[3]);}
+    };
+    //Read memory
+    if split[1].eq_ignore_ascii_case("u64b"){
+        unsafe{
+            for i in 0..size {
+                let mut le_bytes:[u8;8] = [0;8];
+                for j in 0..8{
+                    le_bytes[j] = read_volatile(address.add(i*8 + j));
+                }
+                let num = u64::from_le_bytes(le_bytes);
+                result = format!("{}0b{:064b}\n", result, num);
+            }
+        }
+        result = format!("{}{:p} {}\n", result, address, size);
+        return result;
+    }
+    else if split[1].eq_ignore_ascii_case("u64x"){
+        unsafe {
+            for i in 0..size {
+                let mut le_bytes:[u8;8] = [0;8];
+                for j in 0..8{
+                    le_bytes[j] = read_volatile(address.add(i*8 + j));
+                }
+                let num = u64::from_le_bytes(le_bytes);
+                result = format!("{}0x{:016X}\n", result, num);
+            }
+        }
+        result = format!("{}{:p} {}\n", result, address, size);
+        return result;
+    }
+    return format!("1st argument not valid: {}\n", split[1]);
 }
 
 
