@@ -344,10 +344,10 @@ fn boot_commands(system_table: &SystemTable<Boot>, command: &str) -> (u8, String
         //Display control registers
         return (
             0x00,
-            format!(">{}\nCR0:  {:064b}\nCR2:  {:064b}\nCR3:  {:064b}\nCR4:  {:064b}\nEFER: {:064b}\n", command, 
+            format!(">{}\nCR0:  {:016x}\nCR2:  {:016x}\nCR3:  {:016x}\nCR4:  {:016x}\nEFER: {:016x}\n", command, 
             Cr0::read().bits(), 
             Cr2::read().as_u64(), 
-            Cr3::read().1.bits(), 
+            Cr3::read().0.start_address(), 
             Cr4::read().bits(),
             Efer::read().bits())
         )
@@ -386,7 +386,7 @@ fn command_mem(boot_service: &BootServices) -> String{
 
     let descriptors = description_iterator.copied().collect::<Vec<_>>();
 
-    assert!(!descriptors.is_empty(), "UEFI Memory Map is empty.");
+    if descriptors.is_empty() {return "UEFI Memory Map is empty.\n".to_string();}
 
     // Print out a list of all the usable memory we see in the memory map.
     // Don't print out everything, the memory map is probably pretty big
@@ -395,27 +395,28 @@ fn command_mem(boot_service: &BootServices) -> String{
     result = format!("{}Usable ranges: {}\n", result, descriptors.len());
 
     for descriptor in descriptors{
+        let size_pages = descriptor.page_count;
+        let size = size_pages * EFI_PAGE_SIZE;
+        let end_address = descriptor.phys_start + size;
+        let mut memory_type_text:&str =                              "RESERVED             ";
         match descriptor.ty {
-            MemoryType::CONVENTIONAL => {
-                let size_pages = descriptor.page_count;
-                let size = size_pages * EFI_PAGE_SIZE;
-                let end_address = descriptor.phys_start + size;
-                result = format!("{}CONV: {:016x}-{:016x} ({:8}KiB / {:8}Pg)\n", result, descriptor.phys_start, end_address, size/1024, size_pages);
-            }
-            MemoryType::LOADER_CODE => {
-                let size_pages = descriptor.page_count;
-                let size = size_pages * EFI_PAGE_SIZE;
-                let end_address = descriptor.phys_start + size;
-                result = format!("{}LODC: {:016x}-{:016x} ({:8}KiB / {:8}Pg)\n", result, descriptor.phys_start, end_address, size/1024, size_pages);
-            }
-            MemoryType::LOADER_DATA => {
-                let size_pages = descriptor.page_count;
-                let size = size_pages * EFI_PAGE_SIZE;
-                let end_address = descriptor.phys_start + size;
-                result = format!("{}LODD: {:016x}-{:016x} ({:8}KiB / {:8}Pg)\n", result, descriptor.phys_start, end_address, size/1024, size_pages);
-            }
+            MemoryType::LOADER_CODE => {memory_type_text =           "LOADER CODE          "}
+            MemoryType::LOADER_DATA => {memory_type_text =           "LOADER DATA          "}
+            MemoryType::BOOT_SERVICES_CODE => {memory_type_text =    "BOOT SERVICES CODE   "}
+            MemoryType::BOOT_SERVICES_DATA => {memory_type_text =    "BOOT SERVICES DATA   "}
+            MemoryType::RUNTIME_SERVICES_CODE => {memory_type_text = "RUNTIME SERVICES CODE"}
+            MemoryType::RUNTIME_SERVICES_DATA => {memory_type_text = "RUNTIME SERVICES DATA"}
+            MemoryType::CONVENTIONAL => {memory_type_text =          "CONVENTIONAL         "}
+            MemoryType::UNUSABLE => {memory_type_text =              "UNUSABLE             "}
+            MemoryType::ACPI_RECLAIM => {memory_type_text =          "ACPI RECLAIM         "}
+            MemoryType::ACPI_NON_VOLATILE => {memory_type_text =     "ACPI NON VOLATILE    "}
+            MemoryType::MMIO => {memory_type_text =                  "MEMORY MAPPED IO     "}
+            MemoryType::MMIO_PORT_SPACE => {memory_type_text =       "MEMORY MAPPED PORT   "}
+            MemoryType::PAL_CODE => {memory_type_text =              "PROCESSOR MEMORY     "}
+            MemoryType::PERSISTENT_MEMORY => {memory_type_text =     "PERSISTENT           "}
             _ => {}
         }
+        result = format!("{}{}: {:016x}-{:016x} ({:8}KiB / {:8}Pg)\n", result, memory_type_text, descriptor.phys_start, end_address, size/1024, size_pages);
     }
     return result;
 }
@@ -440,9 +441,7 @@ fn command_peek(command: &str) -> String {
         unsafe{
             for i in 0..size {
                 let mut le_bytes:[u8;8] = [0;8];
-                for j in 0..8{
-                    le_bytes[j] = read_volatile(address.add(i*8 + j));
-                }
+                for j in 0..8{asm!("mov {0}, [{1}]", out(reg_byte) le_bytes[j], in(reg) address.add(i*8 + j), options(readonly, nostack))}
                 let num = u64::from_le_bytes(le_bytes);
                 result = format!("{}0b{:064b}\n", result, num);
             }
@@ -454,11 +453,21 @@ fn command_peek(command: &str) -> String {
         unsafe {
             for i in 0..size {
                 let mut le_bytes:[u8;8] = [0;8];
-                for j in 0..8{
-                    le_bytes[j] = read_volatile(address.add(i*8 + j));
-                }
+                for j in 0..8{asm!("mov {0}, [{1}]", out(reg_byte) le_bytes[j], in(reg) address.add(i*8 + j), options(readonly, nostack))}
                 let num = u64::from_le_bytes(le_bytes);
                 result = format!("{}0x{:016X}\n", result, num);
+            }
+        }
+        result = format!("{}{:p} {}\n", result, address, size);
+        return result;
+    }
+    else if split[1].eq_ignore_ascii_case("u64o"){
+        unsafe {
+            for i in 0..size {
+                let mut le_bytes:[u8;8] = [0;8];
+                for j in 0..8{asm!("mov {0}, [{1}]", out(reg_byte) le_bytes[j], in(reg) address.add(i*8 + j), options(readonly, nostack))}
+                let num = u64::from_le_bytes(le_bytes);
+                result = format!("{}0o{:022o}\n", result, num);
             }
         }
         result = format!("{}{:p} {}\n", result, address, size);
