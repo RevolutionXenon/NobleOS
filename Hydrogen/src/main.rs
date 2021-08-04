@@ -33,7 +33,6 @@ use uefi::table::boot::MemoryType;
 use uefi::table::runtime::ResetType;
 use photon::*;
 
-mod start_screen;
 mod command;
 
 const EFI_PAGE_SIZE: u64 = 0x1000; //MEMORY PAGE SIZE (4KiB)
