@@ -99,7 +99,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
 
     // NEW GRAPHICS SETUP
     //Screen Variables
-    let mut screen_physical; unsafe{screen_physical = *(graphics_frame_pointer as *mut [u8; PIXL_SCRN_X_DIM*PIXL_SCRN_Y_DIM*PIXL_SCRN_B_DEP]);}
+    //let mut screen_physical; unsafe{screen_physical = *(graphics_frame_pointer as *mut [u8; PIXL_SCRN_X_DIM*PIXL_SCRN_Y_DIM*PIXL_SCRN_B_DEP]);}
     let mut screen_charframe = [Character::new(' ', COLR_FORE, COLR_BACK); CHAR_SCRN_X_DIM*CHAR_SCRN_Y_DIM];
     //Input Window Variables
     let mut input_stack = [Character::new(' ', COLR_FORE, COLR_BACK); CHAR_INPT_X_DIM * CHAR_INPT_Y_DIM_MEM];
@@ -110,7 +110,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     let mut print_x:usize = 0;
     //Screen
     let mut screen:Screen = Screen{
-        screen_physical: &mut screen_physical,
+        screen_physical: graphics_frame_pointer,
         screen_charframe: &mut screen_charframe,
         input_stack: &mut input_stack,
         input_p: &mut input_p,
@@ -155,12 +155,12 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     draw_hline_to_textframe(&mut screen_charbuffer, CHAR_INPT_Y_POS+1, 0, CHAR_SCRN_X_DIM-1);
     draw_vline_to_textframe(&mut screen_charbuffer, 0, CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1);
     draw_vline_to_textframe(&mut screen_charbuffer, CHAR_SCRN_X_DIM-1, CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1);*/
-    //writeln!(screen, "Welcome to Noble!");
-    //writeln!(screen, "Hydrogen Bootloader {}", CURRENT_VERSION);
+    writeln!(screen, "Welcome to Noble!");
+    writeln!(screen, "Hydrogen Bootloader {}", CURRENT_VERSION);
 
     // COMMAND LINE
     //Enter Read-Evaluate-Print Loop
-    /*loop{
+    loop{
         //Wait for key to be pressed
         boot_services.wait_for_event(&mut [input.wait_for_key_event()]).expect_success("Boot services event wait failed");
         //Check input key
@@ -173,16 +173,11 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                 //User has hit enter
                 if input_char == '\r'{
                     //Return to bottom of screen
-                    vertical_positon = CHAR_PRNT_Y_DIM_MEM;
+                    *screen.print_y = CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP;
                     //Execute command and get return value
-                    let boot_command_return = boot_commands(&system_table_boot, &input_charstack[0..input_pbuffer].iter().collect::<String>());
-                    print!(&boot_command_return.1);
-                    input_pbuffer = 0;
-                    input_charstack = [' '; CHAR_INPT_X_DIM * CHAR_INPT_Y_DIM_MEM];
-                    //Refresh Screen
-                    screen_charbuffer[(CHAR_SCRN_X_DIM *(CHAR_SCRN_Y_DIM -2))+1..(CHAR_SCRN_X_DIM *(CHAR_SCRN_Y_DIM -2))+1+ CHAR_INPT_X_DIM].clone_from_slice(&input_charstack[0..CHAR_INPT_X_DIM]);
-                    draw_textframe_to_pixelframe(&mut screen_framebuffer, &screen_charbuffer, COLR_BACK, COLR_FORE);
-                    draw_pixelframe_to_hardwarebuffer(graphics_frame_pointer, &screen_framebuffer);
+                    let boot_command_return = boot_commands(&system_table_boot, &screen.input_as_chararray()[0..*screen.input_p].iter().collect::<String>());
+                    screen.input_flush(Character::new(' ', COLR_FORE, COLR_BACK));
+                    writeln!(screen, "{}", boot_command_return.1);
                     //Check Return Code
                     if boot_command_return.0 != 0 {
                         //Boot Sequence
@@ -201,28 +196,30 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                 }
                 //User has typed a character
                 else {
-                    input_character(graphics_frame_pointer, &mut screen_framebuffer, &mut screen_charbuffer, &mut input_charstack, &mut input_pbuffer, input_char);
+                    screen.character_input_draw_render(Character::new(input_char, COLR_FORE, COLR_BACK));
                 }
             }
             //Modifier or Control Key
             Key::Special(scancode) =>{
-                if scancode == ScanCode::UP && vertical_positon > CHAR_PRNT_Y_DIM_DSP {
-                    vertical_positon -= 1;
+                if scancode == ScanCode::UP && *screen.print_y > 0 {
+                    *screen.print_y -= 1;
+                    screen.printbuffer_draw_render();
                 }
-                else if scancode == ScanCode::DOWN && vertical_positon < CHAR_PRNT_Y_DIM_MEM{
-                    vertical_positon += 1;
+                else if scancode == ScanCode::DOWN && *screen.print_y < CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP{
+                    *screen.print_y += 1;
+                    screen.printbuffer_draw_render();
                 }
                 else if scancode == ScanCode::RIGHT{
-                    print!("");
+                    screen.printbuffer_draw_render();
                 }
                 else if scancode == ScanCode::LEFT{
-                    vertical_positon = CHAR_PRNT_Y_DIM_MEM;
-                    print!("");
+                    *screen.print_y = CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP;
+                    screen.printbuffer_draw_render();
                 }
             }
         }
     }
-    println!("Simple REPL exited.");
+    writeln!(screen, "Simple REPL exited.");
 
     // FIND KERNEL ON DISK
     //Find kernel on disk
@@ -231,7 +228,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         open("helium", FileMode::Read, FileAttribute::DIRECTORY).expect_success("File system kernel open failed at \"helium\".").
         open("x86-64.elf", FileMode::Read, FileAttribute::empty()).expect_success("File system kernel open failed at \"x86-64.elf\".");
     let mut fs_kernel = unsafe { RegularFile::new(fs_kernel_handle) };
-    println!("Found kernel on file system.");
+    writeln!(screen, "Found kernel on file system.");
 
     // LOAD ELF INFORMATION
     //Read ELF header
@@ -240,19 +237,19 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         Err(error) => panic!("{}", error)
     };
     //Check validity
-    if k_eheader.ei_osabi != 0x00 {println!("Kernel load: Incorrect ei_osapi."); panic!();}
-    if k_eheader.ei_abiversion != 0x00 {println!("Kernel load: Incorrect ei_abiversion."); panic!();}
-    if k_eheader.e_machine != 0x3E {println!("Kernel load: Incorrect e_machine."); panic!();}
+    if k_eheader.ei_osabi != 0x00 {writeln!(screen, "Kernel load: Incorrect ei_osapi."); panic!();}
+    if k_eheader.ei_abiversion != 0x00 {writeln!(screen, "Kernel load: Incorrect ei_abiversion."); panic!();}
+    if k_eheader.e_machine != 0x3E {writeln!(screen, "Kernel load: Incorrect e_machine."); panic!();}
     //Print ELF header info
-    println!(&format!("Kernel Entry Point:                 0x{:04X}", k_eheader.e_entry));
-    println!(&format!("Kernel Program Header Offset:       0x{:04X}", k_eheader.e_phoff));
-    println!(&format!("Kernel Section Header Offset:       0x{:04X}", k_eheader.e_shoff));
-    println!(&format!("Kernel ELF Header Size:             0x{:04X}", k_eheader.e_ehsize));
-    println!(&format!("Kernel Program Header Entry Size:   0x{:04X}", k_eheader.e_phentsize));
-    println!(&format!("Kernel Program Header Number:       0x{:04X}", k_eheader.e_phnum));
-    println!(&format!("Kernel Section Header Entry Size:   0x{:04X}", k_eheader.e_shentsize));
-    println!(&format!("Kernel Section Header Number:       0x{:04X}", k_eheader.e_shnum));
-    println!(&format!("Kernel Section Header String Index: 0x{:04X}", k_eheader.e_shstrndx));
+    writeln!(screen, "Kernel Entry Point:                 0x{:04X}", k_eheader.e_entry);
+    writeln!(screen, "Kernel Program Header Offset:       0x{:04X}", k_eheader.e_phoff);
+    writeln!(screen, "Kernel Section Header Offset:       0x{:04X}", k_eheader.e_shoff);
+    writeln!(screen, "Kernel ELF Header Size:             0x{:04X}", k_eheader.e_ehsize);
+    writeln!(screen, "Kernel Program Header Entry Size:   0x{:04X}", k_eheader.e_phentsize);
+    writeln!(screen, "Kernel Program Header Number:       0x{:04X}", k_eheader.e_phnum);
+    writeln!(screen, "Kernel Section Header Entry Size:   0x{:04X}", k_eheader.e_shentsize);
+    writeln!(screen, "Kernel Section Header Number:       0x{:04X}", k_eheader.e_shnum);
+    writeln!(screen, "Kernel Section Header String Index: 0x{:04X}", k_eheader.e_shstrndx);
     //Read program headers
     let mut code_list:Vec<(u64,u64,u64,u64)> = vec![(0,0,0,0);5];
     let mut code_num = 0;
@@ -284,7 +281,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     //println!(&format!("GOP: {:016X}", graphics_output_protocol.frame_buffer().as_mut_ptr() as usize));
     //let arg = graphics_output_protocol.frame_buffer().as_mut_ptr() as usize;
     //println!(&format!("Graphics output pointer at: {:p}", graphics_frame_pointer));
-    println!(&format!("Kernel Code Size: 0x{:X}", kernel_size));
+    writeln!(screen, "Kernel Code Size: 0x{:X}", kernel_size);
 
     //TODO SWITCH MEMORY MAPS
     let frame_oct = 0o775;
@@ -299,7 +296,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         let pdpte_frame = create_pdpte_offset(boot_services, graphics_frame_pointer as u64, PIXL_SCRN_Y_DIM*PIXL_SCRN_X_DIM*PIXL_SCRN_B_DEP);
         write_pte(pml4.add(frame_oct), pdpte_frame as u64);
 
-        println!(&format!("Frame Buffer PDPTE Location: {:p}", pdpte_frame));
+        writeln!(screen, "Frame Buffer PDPTE Location: {:p}", pdpte_frame);
     }
 
     // EXIT BOOT SERVICES
@@ -308,7 +305,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     let (_table_runtime, _esi) = system_table_boot.exit_boot_services(_handle, &mut memory_map_buffer).expect_success("Boot services exit failed");
     exit_boot_services();
     //Declare boot services exited
-    println!("Boot Services exited.");
+    writeln!(screen, "Boot Services exited.");
 
     // BOOT SEQUENCE
     
@@ -318,8 +315,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     //kernel_entry_fn(graphics_frame_pointer);*/
 
     //HALT COMPUTER
-    //write!(screen, "Reached halting function.");
-    screen.character_render(Character::new('X', COLR_BACK, COLR_FORE), 0, 0);
+    write!(screen, "Thank you for the help!");
     unsafe { asm!("HLT"); }
     loop{}
 }

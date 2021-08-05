@@ -3,7 +3,7 @@
 pub mod font_handler;
 pub mod line_draw;
 
-use core::{convert::TryInto, fmt::{Write, Result, Arguments}, ptr::write_volatile};
+use core::{fmt::{Write, Result, Arguments}, ptr::write_volatile};
 use crate::font_handler::retrieve_font_bitmap;
 
 // SCREEN LAYOUT CONSTANTS
@@ -22,13 +22,13 @@ pub const CHAR_PRNT_X_POS: usize = 1;                                  //TEXT MO
 pub const CHAR_PRNT_Y_POS: usize = 2;                                  //TEXT MODE VERTICAL POSITION OF PRINT RESULT WINDOW
 pub const CHAR_PRNT_X_DIM: usize = 118;                                //TEXT MODE WIDTH OF PRINT RESULT WINDOW
 pub const CHAR_PRNT_Y_DIM_DSP: usize = 62;                             //TEXT MODE HEIGHT OF PRINT RESULT WINDOW ON SCREEN
-pub const CHAR_PRNT_Y_DIM_MEM: usize = 200;                            //TEXT MODE HEIGHT OF PRINT RESULT WINDOW IN MEMORY
+pub const CHAR_PRNT_Y_DIM_MEM: usize = 200;                             //TEXT MODE HEIGHT OF PRINT RESULT WINDOW IN MEMORY
 
 pub const CHAR_INPT_X_POS: usize = 1;                                  //TEXT MODE HORIZONTAL POSITION OF INPUT WINDOW
 pub const CHAR_INPT_Y_POS: usize = 65;                                 //TEXT MODE VERTICAL POSITION OF INPUT WINDOW
 pub const CHAR_INPT_X_DIM: usize = 118;                                //TEXT MODE WIDTH OF INPUT WINDOW
 pub const CHAR_INPT_Y_DIM: usize = 1;                                  //TEXT MODE HEIGHT OF INPUT WINDOW
-pub const CHAR_INPT_Y_DIM_MEM: usize = 20;                             //TEXT MODE HEIGHT OF INPUT WINDOW IN MEMORY
+pub const CHAR_INPT_Y_DIM_MEM: usize = 20;                              //TEXT MODE HEIGHT OF INPUT WINDOW IN MEMORY
 
 // STRUCTS
 //Character
@@ -51,7 +51,7 @@ impl Character{
 //Screen
 pub struct Screen<'a>{
     //Screen variables
-    pub screen_physical: &'a mut [u8;PIXL_SCRN_Y_DIM*PIXL_SCRN_X_DIM*PIXL_SCRN_B_DEP],
+    pub screen_physical: *   mut u8,
     pub screen_charframe:&'a mut [Character;CHAR_SCRN_X_DIM*CHAR_SCRN_Y_DIM],
     //Input Window Variables
     pub input_stack:     &'a mut [Character; CHAR_INPT_X_DIM * CHAR_INPT_Y_DIM_MEM],
@@ -83,10 +83,13 @@ impl<'a> Screen<'a>{
                         else {c.background};
                     //Write color to screen
                     unsafe{
-                        write_volatile(
-                            &mut self.screen_physical[pixel_index*PIXL_SCRN_B_DEP..(pixel_index+1)*PIXL_SCRN_B_DEP].try_into().unwrap(), 
-                            color
-                        );
+                        //let mut t = self.screen_physical[pixel_index*PIXL_SCRN_B_DEP..(pixel_index+1)*PIXL_SCRN_B_DEP].as_mut_ptr();
+                        for i in 0..4{
+                            write_volatile(
+                                self.screen_physical.add(pixel_index*PIXL_SCRN_B_DEP + i),
+                                color[i]
+                            );
+                        }
                     }
                 }
             }
@@ -104,7 +107,7 @@ impl<'a> Screen<'a>{
     }
 
     //Input character to input stack
-    pub fn character_handle(&mut self, c: Character) -> usize{
+    pub fn character_input(&mut self, c: Character) -> usize{
         let mut render:usize = 0;
         //control character booleans
         let control:bool = (c.codepoint as u32) < 0x20;                    //Determines if character is a control character
@@ -129,7 +132,7 @@ impl<'a> Screen<'a>{
     }
 
     //Input string to print buffer
-    pub fn string_handle(&mut self, s: &str, foreground: [u8;4], background: [u8;4]) -> bool{
+    pub fn string_print(&mut self, s: &str, foreground: [u8;4], background: [u8;4]) -> bool{
         let mut render:bool = false;
         //begin writing to the buffer
         for codepoint in s.chars(){
@@ -221,9 +224,9 @@ impl<'a> Screen<'a>{
     }
 
     //Input character to input stack, draw it to characterframe, and render it to physical screen
-    pub fn character_handle_draw_render(&mut self, c: Character){
-        let p:usize = self.character_handle(c);
-        if p % CHAR_INPT_X_DIM == 0 || p % CHAR_INPT_X_DIM == CHAR_INPT_X_DIM - 1{
+    pub fn character_input_draw_render(&mut self, c: Character){
+        let p:usize = self.character_input(c);
+        if p % CHAR_INPT_X_DIM == 0 || p % CHAR_INPT_X_DIM == CHAR_INPT_X_DIM - 1 {
             self.inputstack_draw_render();
         }
         else{
@@ -232,14 +235,32 @@ impl<'a> Screen<'a>{
     }
 
     //Input string to print buffer, draw it to characterframe, and render it to physical screen
-    pub fn string_handle_draw_render(&mut self, s: &str, foreground: [u8;4], background: [u8;4]){
-        self.string_handle(s, foreground, background);
+    pub fn string_print_draw_render(&mut self, s: &str, foreground: [u8;4], background: [u8;4]) {
+        self.string_print(s, foreground, background);
         self.printbuffer_draw_render();
+    }
+
+    //Remove all information from input stack and replace with Character given
+    pub fn input_flush(&mut self, c: Character) {
+        for i in 0..CHAR_INPT_X_DIM * CHAR_INPT_Y_DIM_MEM{
+            self.input_stack[i] = c;
+        }
+        *self.input_p = 0;
+        self.inputstack_draw_render();
+    }
+
+    //Return input characterstack as char array
+    pub fn input_as_chararray(&mut self) -> [char; CHAR_INPT_X_DIM*CHAR_INPT_Y_DIM_MEM]{
+        let mut value = [' ';CHAR_INPT_X_DIM*CHAR_INPT_Y_DIM_MEM];
+        for i in 0..CHAR_INPT_X_DIM * CHAR_INPT_Y_DIM_MEM{
+            value[i] = self.input_stack[i].codepoint;
+        }
+        return value;
     }
 }
 impl<'a> Write for Screen<'a>{
     fn write_str(&mut self, s: &str) -> Result {
-        self.string_handle_draw_render(s, COLR_FORE, COLR_BACK);
+        self.string_print_draw_render(s, COLR_FORE, COLR_BACK);
         return Ok(());
     }
 
