@@ -19,9 +19,9 @@ use photon::line_draw::draw_vline_to_textframe;
 use x86_64::registers::control::*;
 use core::convert::TryInto;
 use core::intrinsics::copy_nonoverlapping;
+use core::fmt::Write;
 use core::mem::transmute;
 use core::ptr;
-use core::ptr::read_volatile;
 use core::ptr::write_volatile;
 use uefi::alloc::exit_boot_services;
 use uefi::prelude::*;
@@ -59,6 +59,11 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     let graphics_output_protocol = graphics_output_protocol.expect("Graphics Output Protocol initialization failed at unsafe cell");
     let graphics_output_protocol = unsafe {&mut *graphics_output_protocol.get()};
     let graphics_frame_pointer = graphics_output_protocol.frame_buffer().as_mut_ptr();
+    //Graphics Output Protocol set graphics mode
+    set_graphics_mode(graphics_output_protocol);
+    let _st = graphics_output_protocol.current_mode_info().stride();
+    let _pf = graphics_output_protocol.current_mode_info().pixel_format();
+    let _s = graphics_output_protocol.frame_buffer().size();
     //Simple File System initialization
     let simple_file_system = match boot_services.locate_protocol::<SimpleFileSystem>() {
         Ok(sfs) => sfs,
@@ -76,33 +81,62 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
 
     // GRAPHICS SETUP
     //Screen variables
-    let mut screen_framebuffer:Box<[u8;PIXL_SCRN_X_DIM*PIXL_SCRN_Y_DIM*PIXL_SCRN_B_DEP]> = box[0;PIXL_SCRN_X_DIM*PIXL_SCRN_Y_DIM*PIXL_SCRN_B_DEP]; //Framebuffer for double buffering Screen
+    /*let mut screen_framebuffer:Box<[u8;PIXL_SCRN_X_DIM*PIXL_SCRN_Y_DIM*PIXL_SCRN_B_DEP]> = box[0;PIXL_SCRN_X_DIM*PIXL_SCRN_Y_DIM*PIXL_SCRN_B_DEP]; //Framebuffer for double buffering Screen
     let mut screen_charbuffer: [char;CHAR_SCRN_X_DIM*CHAR_SCRN_Y_DIM] = [' ';CHAR_SCRN_X_DIM*CHAR_SCRN_Y_DIM];                                     //Text data of Screen
     //Print Result Window variables
     let mut print_xbuffer: usize = 0;                                                                                                              //Position of "print head" of Print Result Window
     let mut print_charbuffer: [char; CHAR_PRNT_X_DIM * CHAR_PRNT_Y_DIM_MEM]=[' '; CHAR_PRNT_X_DIM * CHAR_PRNT_Y_DIM_MEM];                          //Text data of Print Result Window
+    let mut vertical_positon = CHAR_PRNT_Y_DIM_MEM;
     //Input Window variables
     let mut input_pbuffer: usize = 0;                                                                                                              //Position of "print head" of Input Window
     let mut input_charstack: [char; CHAR_INPT_X_DIM * CHAR_INPT_Y_DIM_MEM] = [' '; CHAR_INPT_X_DIM * CHAR_INPT_Y_DIM_MEM];                         //Text data of Input Window
-    //Graphics Output Protocol set graphics mode
-    set_graphics_mode(graphics_output_protocol);
-    let _st = graphics_output_protocol.current_mode_info().stride();
-    let _pf = graphics_output_protocol.current_mode_info().pixel_format();
-    let _s = graphics_output_protocol.frame_buffer().size();
     //Draw first screen
     draw_color_to_pixelframe(&mut screen_framebuffer, COLR_BACK);
     draw_pixelframe_to_hardwarebuffer(graphics_frame_pointer, &screen_framebuffer);
     //UI setup
     draw_textframe_to_pixelframe(&mut screen_framebuffer, &screen_charbuffer, COLR_BACK, COLR_FORE);
-    draw_pixelframe_to_hardwarebuffer(graphics_frame_pointer, &screen_framebuffer);
+    draw_pixelframe_to_hardwarebuffer(graphics_frame_pointer, &screen_framebuffer);*/
+
+    // NEW GRAPHICS SETUP
+    //Screen Variables
+    let mut screen_physical; unsafe{screen_physical = *(graphics_frame_pointer as *mut [u8; PIXL_SCRN_X_DIM*PIXL_SCRN_Y_DIM*PIXL_SCRN_B_DEP]);}
+    let mut screen_charframe = [Character::new(' ', COLR_FORE, COLR_BACK); CHAR_SCRN_X_DIM*CHAR_SCRN_Y_DIM];
+    //Input Window Variables
+    let mut input_stack = [Character::new(' ', COLR_FORE, COLR_BACK); CHAR_INPT_X_DIM * CHAR_INPT_Y_DIM_MEM];
+    let mut input_p:usize = 0;
+    //Print Result Window Variables
+    let mut print_buffer = [Character::new(' ', COLR_FORE, COLR_BACK); CHAR_PRNT_X_DIM * CHAR_PRNT_Y_DIM_MEM];
+    let mut print_y:usize = CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP;
+    let mut print_x:usize = 0;
+    //Screen
+    let mut screen:Screen = Screen{
+        screen_physical: &mut screen_physical,
+        screen_charframe: &mut screen_charframe,
+        input_stack: &mut input_stack,
+        input_p: &mut input_p,
+        print_buffer: &mut print_buffer,
+        print_y: &mut print_y,
+        print_x: &mut print_x,
+    };
     //Wait for 2 Seconds
     system_table_boot.boot_services().stall(2_000_000);
 
+    
+    /*//Screen variables
+    screen_physical: &'a mut [u8;PIXL_SCRN_Y_DIM*PIXL_SCRN_X_DIM*PIXL_SCRN_B_DEP],
+    screen_charframe:&'a mut [Character;CHAR_SCRN_X_DIM*CHAR_SCRN_Y_DIM],
+    //Input Window Variables
+    input_stack:     &'a mut [Character; CHAR_INPT_X_DIM * CHAR_INPT_Y_DIM_MEM],
+    input_p:         &'a mut usize,
+    //Print Result Window Variables
+    print_buffer:    &'a mut [Character; CHAR_PRNT_X_DIM * CHAR_PRNT_Y_DIM_MEM],
+    print_y:         &'a mut usize,
+    print_x:         &'a mut usize,*/
+
     // PRINT SETUP
     //Position variable
-    let mut vertical_positon = CHAR_PRNT_Y_DIM_MEM;
     //Print Macros
-    macro_rules! print { ($text:expr) => {
+    /*macro_rules! print { ($text:expr) => {
         print_str_to_textbuffer(&mut print_charbuffer, CHAR_PRNT_X_DIM, CHAR_PRNT_Y_DIM_MEM, &mut print_xbuffer, $text);
         for y in 0..CHAR_PRNT_Y_DIM_DSP {
             let s = (CHAR_PRNT_Y_POS+y)*CHAR_SCRN_X_DIM+CHAR_PRNT_X_POS;
@@ -114,19 +148,19 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     };}
     macro_rules! println { ($text: expr) => {
         print!($text);print!("\n");
-    };}
+    };}*/
     //Print Startup
-    draw_hline_to_textframe(&mut screen_charbuffer, CHAR_PRNT_Y_POS-1, 0, CHAR_SCRN_X_DIM-1);
+    /*draw_hline_to_textframe(&mut screen_charbuffer, CHAR_PRNT_Y_POS-1, 0, CHAR_SCRN_X_DIM-1);
     draw_hline_to_textframe(&mut screen_charbuffer, CHAR_INPT_Y_POS-1, 0, CHAR_SCRN_X_DIM-1);
     draw_hline_to_textframe(&mut screen_charbuffer, CHAR_INPT_Y_POS+1, 0, CHAR_SCRN_X_DIM-1);
     draw_vline_to_textframe(&mut screen_charbuffer, 0, CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1);
-    draw_vline_to_textframe(&mut screen_charbuffer, CHAR_SCRN_X_DIM-1, CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1);
-    println!("Welcome to Noble!");
-    print!("Hydrogen Bootloader "); println!(CURRENT_VERSION);
+    draw_vline_to_textframe(&mut screen_charbuffer, CHAR_SCRN_X_DIM-1, CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1);*/
+    //writeln!(screen, "Welcome to Noble!");
+    //writeln!(screen, "Hydrogen Bootloader {}", CURRENT_VERSION);
 
     // COMMAND LINE
     //Enter Read-Evaluate-Print Loop
-    loop{
+    /*loop{
         //Wait for key to be pressed
         boot_services.wait_for_event(&mut [input.wait_for_key_event()]).expect_success("Boot services event wait failed");
         //Check input key
@@ -281,10 +315,11 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     //Kernel entry
     let kernel_entry_fn = unsafe { transmute::<*mut u8, extern "sysv64" fn(*mut u8) -> !>(code_pointer.add(k_eheader.e_entry as usize)) };
     //unsafe { asm!("mov rdi, ${0}", in(reg) graphics_frame_pointer as usize); }
-    //kernel_entry_fn(graphics_frame_pointer);
+    //kernel_entry_fn(graphics_frame_pointer);*/
 
     //HALT COMPUTER
-    println!("Reached halting function.");
+    //write!(screen, "Reached halting function.");
+    screen.character_render(Character::new('X', COLR_BACK, COLR_FORE), 0, 0);
     unsafe { asm!("HLT"); }
     loop{}
 }
