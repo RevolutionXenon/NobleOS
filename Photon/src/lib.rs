@@ -260,15 +260,18 @@ impl<'a> Screen<'a>{
 }
 impl<'a> Write for Screen<'a>{
     fn write_str(&mut self, s: &str) -> Result {
-        self.string_print_draw_render(s, COLR_FORE, COLR_BACK);
+        self.string_print(s, COLR_FORE, COLR_BACK);
         return Ok(());
     }
 
     fn write_char(&mut self, c: char) -> Result {
-        self.write_str(c.encode_utf8(&mut [0; 4]))
+        self.string_print(c.encode_utf8(&mut [0; 4]), COLR_FORE, COLR_BACK);
+        return Ok(());
     }
 
     fn write_fmt(mut self: &mut Self, args: Arguments<'_>) -> Result {
-        core::fmt::write(&mut self, args)
+        let r = core::fmt::write(&mut self, args);
+        self.printbuffer_draw_render();
+        return r;
     }
 }

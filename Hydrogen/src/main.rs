@@ -4,6 +4,7 @@
 #![feature(box_syntax)]
 #![feature(asm)]
 #![feature(bench_black_box)]
+#![allow(unused_must_use)]
 
 extern crate rlibc;
 extern crate alloc;
@@ -129,18 +130,18 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                     //Return to bottom of screen
                     *screen.print_y = CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP;
                     //Execute command and get return value
-                    let boot_command_return = boot_commands(&system_table_boot, &screen.input_as_chararray()[0..*screen.input_p].iter().collect::<String>());
+                    let command = &screen.input_as_chararray()[0..*screen.input_p].iter().collect::<String>();
+                    let boot_command_return = command_processor(&mut screen, &system_table_boot, command);
                     screen.input_flush(Character::new(' ', COLR_FORE, COLR_BACK));
-                    writeln!(screen, "{}", boot_command_return.1);
                     //Check Return Code
-                    if boot_command_return.0 != 0 {
+                    if boot_command_return != 0 {
                         //Boot Sequence
-                        if boot_command_return.0 == 1 {
+                        if boot_command_return == 1 {
                             //Exit to boot
                             break;
                         }
                         //Shutdown sequence
-                        else if boot_command_return.0 == 2 {
+                        else if boot_command_return == 2 {
                             //Wait for 5 seconds
                             system_table_boot.boot_services().stall(5000000);
                             //Shut down computer
@@ -292,77 +293,60 @@ fn set_graphics_mode(gop: &mut GraphicsOutput) {
 
 // COMMAND PROCESSOR
 //Evaluates and executes a bootloader command and returns a return code and associated string
-fn boot_commands(system_table: &SystemTable<Boot>, command: &str) -> (u8, String) {
+fn command_processor(screen: &mut Screen, system_table: &SystemTable<Boot>, command: &str) -> u8 {
+    writeln!(screen, ">{}", command);
     if command.eq_ignore_ascii_case("time"){
-        //Time
-        return (
-            0x00,
-            format!(">{}\n{}\n", command, match system_table.runtime_services().get_time(){
-                Ok(v) => {let v = v.log(); format!{"{}-{:02}-{:02} {:02}:{:02}:{:02} UTC", v.year(), v.month(), v.day(), v.hour(), v.minute(), v.second()}},
-                Err(e) => format!("Command failed: {:?}", e)}
-            )
-        )
+        //Display Time
+        writeln!(screen, ">{}", match system_table.runtime_services().get_time(){
+            Ok(v) => {let v = v.log(); format!{"{}-{:02}-{:02} {:02}:{:02}:{:02} UTC", v.year(), v.month(), v.day(), v.hour(), v.minute(), v.second()}},
+            Err(e) => format!("Command failed: {:?}", e)});
     }
     else if command.eq_ignore_ascii_case("mem"){
         //Memory Map
-        return (
-            0x00,
-            format!(">{}\n{}", command, command_mem(system_table.boot_services()))
-        )
+        command_mem(screen, system_table.boot_services());
     }
     else if command.eq_ignore_ascii_case("shutdown"){
+        writeln!(screen, "Shutdown sequence started.");
         //Shutdown
-        return (
-            0x02, // SHUTDOWN RETURN CODE : 0x02
-            format!(">{}\nShutdown sequence started.\n", command)
-        )
+        return 0x02;
     }
     else if command.eq_ignore_ascii_case("boot"){
+        writeln!(screen, "Boot sequence started.");
         //Boot
-        return (
-            0x01, // BOOT RETURN CODE : 0x01
-            format!(">{}\nBoot sequence started.\n", command)
-        )
+        return 0x01;
     }
     else if command.eq_ignore_ascii_case("crd"){
-        //Display control registers
-        return (
-            0x00,
-            format!(">{}\nCR0:  {:016x}\nCR2:  {:016x}\nCR3:  {:016x}\nCR4:  {:016x}\nEFER: {:016x}\n", command, 
-            Cr0::read().bits(), 
-            Cr2::read().as_u64(), 
-            Cr3::read().0.start_address(), 
-            Cr4::read().bits(),
-            Efer::read().bits())
-        )
+        //Control Register Display
+        writeln!(screen, "CR0:  {:016x}", Cr0::read().bits());
+        writeln!(screen, "CR2:  {:016x}", Cr2::read().as_u64());
+        writeln!(screen, "CR3A: {:016x}", Cr3::read().0.start_address());
+        writeln!(screen, "CR3F: {:016x}", Cr3::read().1.bits());
+        writeln!(screen, "CR4:  {:016x}", Cr4::read().bits());
+        writeln!(screen, "EFER: {:016x}", Efer::read().bits());
     }
     else if command.starts_with("peek "){
-        return (
-            0x00,
-            format!(">{}\n{}", command, command_peek(command))
-        )
+        //Peek Memory
+        command_peek(screen, command);
     }
     else{
         //No result
-        return (
-            0x00,
-            format!(">{}\nCommand not entered properly.\n", command)
-        )
+        writeln!(screen, "Command not entered properly.");
     }
+    //Return to Command Line
+    return 0x00;
 }
 
 //Display memory map contents to console
-fn command_mem(boot_service: &BootServices) -> String{
-    let mut result = "".to_string();
+fn command_mem(screen: &mut Screen, boot_service: &BootServices){
     // Get the estimated map size
     let map_size = boot_service.memory_map_size();
 
-    result = format!("{}Map size: {}\n", result, map_size);
+    writeln!(screen, "Map size: {}", map_size);
 
     // Build a buffer big enough to handle the memory map
     let mut buffer = vec![0;map_size+512];
-    result = format!("{}Buffer len: {}\n", result, buffer.len());
-    result = format!("{}Buffer cap: {}\n", result, buffer.capacity());
+    writeln!(screen, "Buffer len: {}", buffer.len());
+    writeln!(screen, "Buffer cap: {}", buffer.capacity());
 
     let (_k, description_iterator) = boot_service
         .memory_map(&mut buffer)
@@ -370,13 +354,16 @@ fn command_mem(boot_service: &BootServices) -> String{
 
     let descriptors = description_iterator.copied().collect::<Vec<_>>();
 
-    if descriptors.is_empty() {return "UEFI Memory Map is empty.\n".to_string();}
+    if descriptors.is_empty() {
+        writeln!(screen, "UEFI Memory Map is empty.");
+        return;
+    }
 
     // Print out a list of all the usable memory we see in the memory map.
     // Don't print out everything, the memory map is probably pretty big
     // (e.g. OVMF under QEMU returns a map with nearly 50 entries here).
 
-    result = format!("{}Usable ranges: {}\n", result, descriptors.len());
+    writeln!(screen, "Usable ranges: {}", descriptors.len());
 
     for descriptor in descriptors{
         let size_pages = descriptor.page_count;
@@ -400,25 +387,33 @@ fn command_mem(boot_service: &BootServices) -> String{
             MemoryType::PERSISTENT_MEMORY => {memory_type_text =     "PERSISTENT           "}
             _ => {}
         }
-        result = format!("{}{}: {:016x}-{:016x} ({:8}KiB / {:8}Pg)\n", result, memory_type_text, descriptor.phys_start, end_address, size/1024, size_pages);
+        writeln!(screen, "{}: {:016x}-{:016x} ({:8}KiB / {:8}Pg)", memory_type_text, descriptor.phys_start, end_address, size/1024, size_pages);
     }
-    return result;
 }
 
 //Display the raw contents of a part of memory
-fn command_peek(command: &str) -> String {
+fn command_peek(screen: &mut Screen, command: &str) {
     let mut result = "".to_string();
     let split:Vec<&str> = command.split(" ").collect();
-    if split.len() != 4 {return "Incorrect number of arguments (requires 3).\n".to_string();}
+    if split.len() != 4 {
+        writeln!(screen, "Incorrect number of arguments: {} (requires 3).", split.len());
+        return;
+    }
     //Read subcommand from arguments
     //Read numbers from argument
     let address = match usize::from_str_radix(split[2], 16){
         Ok(i) => {i},
-        Err(_) => {return format!("2nd argument not valid: {}\n", split[2]);}
+        Err(_) => {
+            writeln!(screen, "2nd argument not valid: {}", split[2]);
+            return;
+        }
     } as *mut u8;
     let size = match split[3].to_string().parse::<usize>(){
         Ok(i) => {i},
-        Err(_) => {return format!("3rd argument not valid: {}\n", split[3]);}
+        Err(_) => {
+            writeln!(screen, "3rd argument not valid: {}", split[3]);
+            return;
+        }
     };
     //Read memory
     if split[1].eq_ignore_ascii_case("u64b"){
@@ -427,11 +422,10 @@ fn command_peek(command: &str) -> String {
                 let mut le_bytes:[u8;8] = [0;8];
                 for j in 0..8{asm!("mov {0}, [{1}]", out(reg_byte) le_bytes[j], in(reg) address.add(i*8 + j), options(readonly, nostack))}
                 let num = u64::from_le_bytes(le_bytes);
-                result = format!("{}0b{:064b}\n", result, num);
+                writeln!(screen, "0x{:016X}: 0b{:064b}", address as usize + i*8, num);
             }
         }
-        result = format!("{}{:p} {}\n", result, address, size);
-        return result;
+        writeln!(screen, "{:p} {}", address, size);
     }
     else if split[1].eq_ignore_ascii_case("u64x"){
         unsafe {
@@ -439,11 +433,10 @@ fn command_peek(command: &str) -> String {
                 let mut le_bytes:[u8;8] = [0;8];
                 for j in 0..8{asm!("mov {0}, [{1}]", out(reg_byte) le_bytes[j], in(reg) address.add(i*8 + j), options(readonly, nostack))}
                 let num = u64::from_le_bytes(le_bytes);
-                result = format!("{}0x{:016X}\n", result, num);
+                writeln!(screen, "0x{:016X}: 0x{:016X}", address as usize + i*8, num);
             }
         }
-        result = format!("{}{:p} {}\n", result, address, size);
-        return result;
+        writeln!(screen, "{:p} {}", address, size);
     }
     else if split[1].eq_ignore_ascii_case("u64o"){
         unsafe {
@@ -451,13 +444,14 @@ fn command_peek(command: &str) -> String {
                 let mut le_bytes:[u8;8] = [0;8];
                 for j in 0..8{asm!("mov {0}, [{1}]", out(reg_byte) le_bytes[j], in(reg) address.add(i*8 + j), options(readonly, nostack))}
                 let num = u64::from_le_bytes(le_bytes);
-                result = format!("{}0o{:022o}\n", result, num);
+                writeln!(screen, "0x{:016X}: 0o{:022o}", address as usize + i*8, num);
             }
         }
-        result = format!("{}{:p} {}\n", result, address, size);
-        return result;
+        writeln!(screen, "{:p} {}", address, size);
     }
-    return format!("1st argument not valid: {}\n", split[1]);
+    else{
+        writeln!(screen, "1st argument not valid: {}", split[1]);
+    }
 }
 
 
