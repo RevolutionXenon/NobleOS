@@ -79,24 +79,6 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     let input = input.expect("Input initialization failed at unsafe cell");
     let input = unsafe {&mut *input.get()};
 
-    // GRAPHICS SETUP
-    //Screen variables
-    /*let mut screen_framebuffer:Box<[u8;PIXL_SCRN_X_DIM*PIXL_SCRN_Y_DIM*PIXL_SCRN_B_DEP]> = box[0;PIXL_SCRN_X_DIM*PIXL_SCRN_Y_DIM*PIXL_SCRN_B_DEP]; //Framebuffer for double buffering Screen
-    let mut screen_charbuffer: [char;CHAR_SCRN_X_DIM*CHAR_SCRN_Y_DIM] = [' ';CHAR_SCRN_X_DIM*CHAR_SCRN_Y_DIM];                                     //Text data of Screen
-    //Print Result Window variables
-    let mut print_xbuffer: usize = 0;                                                                                                              //Position of "print head" of Print Result Window
-    let mut print_charbuffer: [char; CHAR_PRNT_X_DIM * CHAR_PRNT_Y_DIM_MEM]=[' '; CHAR_PRNT_X_DIM * CHAR_PRNT_Y_DIM_MEM];                          //Text data of Print Result Window
-    let mut vertical_positon = CHAR_PRNT_Y_DIM_MEM;
-    //Input Window variables
-    let mut input_pbuffer: usize = 0;                                                                                                              //Position of "print head" of Input Window
-    let mut input_charstack: [char; CHAR_INPT_X_DIM * CHAR_INPT_Y_DIM_MEM] = [' '; CHAR_INPT_X_DIM * CHAR_INPT_Y_DIM_MEM];                         //Text data of Input Window
-    //Draw first screen
-    draw_color_to_pixelframe(&mut screen_framebuffer, COLR_BACK);
-    draw_pixelframe_to_hardwarebuffer(graphics_frame_pointer, &screen_framebuffer);
-    //UI setup
-    draw_textframe_to_pixelframe(&mut screen_framebuffer, &screen_charbuffer, COLR_BACK, COLR_FORE);
-    draw_pixelframe_to_hardwarebuffer(graphics_frame_pointer, &screen_framebuffer);*/
-
     // NEW GRAPHICS SETUP
     //Screen Variables
     //let mut screen_physical; unsafe{screen_physical = *(graphics_frame_pointer as *mut [u8; PIXL_SCRN_X_DIM*PIXL_SCRN_Y_DIM*PIXL_SCRN_B_DEP]);}
@@ -121,34 +103,6 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     //Wait for 2 Seconds
     system_table_boot.boot_services().stall(2_000_000);
 
-    
-    /*//Screen variables
-    screen_physical: &'a mut [u8;PIXL_SCRN_Y_DIM*PIXL_SCRN_X_DIM*PIXL_SCRN_B_DEP],
-    screen_charframe:&'a mut [Character;CHAR_SCRN_X_DIM*CHAR_SCRN_Y_DIM],
-    //Input Window Variables
-    input_stack:     &'a mut [Character; CHAR_INPT_X_DIM * CHAR_INPT_Y_DIM_MEM],
-    input_p:         &'a mut usize,
-    //Print Result Window Variables
-    print_buffer:    &'a mut [Character; CHAR_PRNT_X_DIM * CHAR_PRNT_Y_DIM_MEM],
-    print_y:         &'a mut usize,
-    print_x:         &'a mut usize,*/
-
-    // PRINT SETUP
-    //Position variable
-    //Print Macros
-    /*macro_rules! print { ($text:expr) => {
-        print_str_to_textbuffer(&mut print_charbuffer, CHAR_PRNT_X_DIM, CHAR_PRNT_Y_DIM_MEM, &mut print_xbuffer, $text);
-        for y in 0..CHAR_PRNT_Y_DIM_DSP {
-            let s = (CHAR_PRNT_Y_POS+y)*CHAR_SCRN_X_DIM+CHAR_PRNT_X_POS;
-            let p = (vertical_positon-CHAR_PRNT_Y_DIM_DSP+y)*CHAR_PRNT_X_DIM;
-            screen_charbuffer[s..s+CHAR_PRNT_X_DIM].copy_from_slice(&print_charbuffer[p..p+CHAR_PRNT_X_DIM]);
-        }
-        draw_textframe_to_pixelframe(&mut screen_framebuffer, &screen_charbuffer, COLR_BACK, COLR_FORE);
-        draw_pixelframe_to_hardwarebuffer(graphics_frame_pointer, &screen_framebuffer);
-    };}
-    macro_rules! println { ($text: expr) => {
-        print!($text);print!("\n");
-    };}*/
     //Print Startup
     /*draw_hline_to_textframe(&mut screen_charbuffer, CHAR_PRNT_Y_POS-1, 0, CHAR_SCRN_X_DIM-1);
     draw_hline_to_textframe(&mut screen_charbuffer, CHAR_INPT_Y_POS-1, 0, CHAR_SCRN_X_DIM-1);
@@ -311,11 +265,10 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     
     //Kernel entry
     let kernel_entry_fn = unsafe { transmute::<*mut u8, extern "sysv64" fn(*mut u8) -> !>(code_pointer.add(k_eheader.e_entry as usize)) };
-    //unsafe { asm!("mov rdi, ${0}", in(reg) graphics_frame_pointer as usize); }
-    //kernel_entry_fn(graphics_frame_pointer);*/
+    kernel_entry_fn(graphics_frame_pointer);
 
     //HALT COMPUTER
-    write!(screen, "Thank you for the help!");
+    writeln!(screen, "Halt reached.");
     unsafe { asm!("HLT"); }
     loop{}
 }
