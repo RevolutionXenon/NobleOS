@@ -88,8 +88,8 @@ use x86_64::{
 use photon::*;
 
 //Constants
-const EFI_PAGE_SIZE: u64 = 0x1000;           //MEMORY PAGE SIZE (4KiB)
-const CURRENT_VERSION: &str = "v2021-08-05"; //CURRENT VERSION OF BOOTLOADER
+const EFI_PAGE_SIZE: u64 = 0x1000;            //MEMORY PAGE SIZE (4KiB)
+const HYDROGEN_VERSION: &str = "v2021-08-05"; //CURRENT VERSION OF BOOTLOADER
 
 
 // MAIN
@@ -162,10 +162,12 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     screen.draw_vline( 0,                 CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1,  COLR_PRRED, COLR_BLACK);
     screen.draw_vline( CHAR_SCRN_X_DIM-1, CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1,  COLR_PRRED, COLR_BLACK);
     screen.draw_string("NOBLE OS", 0, 0, COLR_WHITE, COLR_BLACK);
-    screen.draw_string("HYDROGEN BOOTLOADER", 0, CHAR_SCRN_X_DIM - 20 - CURRENT_VERSION.len(), COLR_WHITE, COLR_BLACK);
-    screen.draw_string(CURRENT_VERSION, 0, CHAR_SCRN_X_DIM - CURRENT_VERSION.len(), COLR_WHITE, COLR_BLACK);
+    screen.draw_string("HYDROGEN BOOTLOADER", 0, CHAR_SCRN_X_DIM - 20 - HYDROGEN_VERSION.len(), COLR_WHITE, COLR_BLACK);
+    screen.draw_string(HYDROGEN_VERSION, 0, CHAR_SCRN_X_DIM - HYDROGEN_VERSION.len(), COLR_WHITE, COLR_BLACK);
     screen.characterframe_render();
-    writeln!(screen, "Welcome to Noble!");
+    writeln!(screen, "Welcome to Noble OS");
+    writeln!(screen, "Hydrogen Bootloader     {}", HYDROGEN_VERSION);
+    writeln!(screen, "Photon Graphics Library {}", PHOTON_VERSION);
 
     // COMMAND LINE
     //Enter Read-Evaluate-Print Loop

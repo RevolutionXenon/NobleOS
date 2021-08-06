@@ -41,6 +41,7 @@ pub const CHAR_INPT_Y_POS: usize = 65;                                 //TEXT MO
 pub const CHAR_INPT_X_DIM: usize = 118;                                //TEXT MODE WIDTH OF INPUT WINDOW
 pub const CHAR_INPT_Y_DIM: usize = 1;                                  //TEXT MODE HEIGHT OF INPUT WINDOW
 pub const CHAR_INPT_Y_DIM_MEM: usize = 1;                              //TEXT MODE HEIGHT OF INPUT WINDOW IN MEMORY
+pub const PHOTON_VERSION: &str = "v2021-08-05";                        //CURRENT VERSION OF BOOTLOADER
 
 
 // STRUCTS
