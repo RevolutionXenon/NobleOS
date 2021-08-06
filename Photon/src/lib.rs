@@ -1,7 +1,6 @@
 #![no_std]
 
 pub mod font_handler;
-pub mod line_draw;
 
 use core::{fmt::{Write, Result, Arguments}, ptr::write_volatile};
 use crate::font_handler::retrieve_font_bitmap;
@@ -22,13 +21,13 @@ pub const CHAR_PRNT_X_POS: usize = 1;                                  //TEXT MO
 pub const CHAR_PRNT_Y_POS: usize = 2;                                  //TEXT MODE VERTICAL POSITION OF PRINT RESULT WINDOW
 pub const CHAR_PRNT_X_DIM: usize = 118;                                //TEXT MODE WIDTH OF PRINT RESULT WINDOW
 pub const CHAR_PRNT_Y_DIM_DSP: usize = 62;                             //TEXT MODE HEIGHT OF PRINT RESULT WINDOW ON SCREEN
-pub const CHAR_PRNT_Y_DIM_MEM: usize = 200;                             //TEXT MODE HEIGHT OF PRINT RESULT WINDOW IN MEMORY
+pub const CHAR_PRNT_Y_DIM_MEM: usize = 400;                             //TEXT MODE HEIGHT OF PRINT RESULT WINDOW IN MEMORY
 
 pub const CHAR_INPT_X_POS: usize = 1;                                  //TEXT MODE HORIZONTAL POSITION OF INPUT WINDOW
 pub const CHAR_INPT_Y_POS: usize = 65;                                 //TEXT MODE VERTICAL POSITION OF INPUT WINDOW
 pub const CHAR_INPT_X_DIM: usize = 118;                                //TEXT MODE WIDTH OF INPUT WINDOW
 pub const CHAR_INPT_Y_DIM: usize = 1;                                  //TEXT MODE HEIGHT OF INPUT WINDOW
-pub const CHAR_INPT_Y_DIM_MEM: usize = 20;                              //TEXT MODE HEIGHT OF INPUT WINDOW IN MEMORY
+pub const CHAR_INPT_Y_DIM_MEM: usize = 1;                              //TEXT MODE HEIGHT OF INPUT WINDOW IN MEMORY
 
 // STRUCTS
 //Character
@@ -191,6 +190,7 @@ impl<'a> Screen<'a>{
         return render;
     }
 
+
     // COMPOSITE FUNCTIONS
     //Render entire charframe
     pub fn characterframe_render(&mut self){
@@ -256,6 +256,154 @@ impl<'a> Screen<'a>{
             value[i] = self.input_stack[i].codepoint;
         }
         return value;
+    }
+
+    
+    // DRAWING
+    //Horizontal Line
+    pub fn draw_hline(&mut self, y: usize, x1: usize, x2:usize, foreground: [u8;4], background: [u8;4]){
+        {
+            let pos: usize = y*CHAR_SCRN_X_DIM + x1;
+            let draw: &mut Character = &mut self.screen_charframe[pos];
+            let check: char = (*draw).codepoint;
+            if      check == '═' {*draw = Character::new('═', foreground, background);}
+            else if check == '║' {*draw = Character::new('╠', foreground, background);}
+            else if check == '╔' {*draw = Character::new('╔', foreground, background);}
+            else if check == '╗' {*draw = Character::new('╦', foreground, background);}
+            else if check == '╚' {*draw = Character::new('╚', foreground, background);}
+            else if check == '╝' {*draw = Character::new('╩', foreground, background);}
+            else if check == '╞' {*draw = Character::new('╞', foreground, background);}
+            else if check == '╠' {*draw = Character::new('╠', foreground, background);}
+            else if check == '╡' {*draw = Character::new('═', foreground, background);}
+            else if check == '╣' {*draw = Character::new('╬', foreground, background);}
+            else if check == '╥' {*draw = Character::new('╔', foreground, background);}
+            else if check == '╦' {*draw = Character::new('╦', foreground, background);}
+            else if check == '╨' {*draw = Character::new('╚', foreground, background);}
+            else if check == '╩' {*draw = Character::new('╩', foreground, background);}
+            else if check == '╬' {*draw = Character::new('╬', foreground, background);}
+            else                 {*draw = Character::new('╞', foreground, background);}
+        }
+        for x in x1+1..x2{
+            let pos: usize = y*CHAR_SCRN_X_DIM + x;
+            let draw: &mut Character = &mut self.screen_charframe[pos];
+            let check: char = (*draw).codepoint;
+            if      check == '═' {*draw = Character::new('═', foreground, background);}
+            else if check == '║' {*draw = Character::new('╬', foreground, background);}
+            else if check == '╔' {*draw = Character::new('╦', foreground, background);}
+            else if check == '╗' {*draw = Character::new('╦', foreground, background);}
+            else if check == '╚' {*draw = Character::new('╩', foreground, background);}
+            else if check == '╝' {*draw = Character::new('╩', foreground, background);}
+            else if check == '╞' {*draw = Character::new('═', foreground, background);}
+            else if check == '╠' {*draw = Character::new('╬', foreground, background);}
+            else if check == '╡' {*draw = Character::new('═', foreground, background);}
+            else if check == '╣' {*draw = Character::new('╬', foreground, background);}
+            else if check == '╥' {*draw = Character::new('╦', foreground, background);}
+            else if check == '╦' {*draw = Character::new('╦', foreground, background);}
+            else if check == '╨' {*draw = Character::new('╩', foreground, background);}
+            else if check == '╩' {*draw = Character::new('╩', foreground, background);}
+            else if check == '╬' {*draw = Character::new('╬', foreground, background);}
+            else                 {*draw = Character::new('═', foreground, background);}
+        }
+        {
+            let pos: usize = y*CHAR_SCRN_X_DIM + x2;
+            let draw: &mut Character = &mut self.screen_charframe[pos];
+            let check: char = (*draw).codepoint;
+            if      check == '═' {*draw = Character::new('═',foreground, background);}
+            else if check == '║' {*draw = Character::new('╣',foreground, background);}
+            else if check == '╔' {*draw = Character::new('╦',foreground, background);}
+            else if check == '╗' {*draw = Character::new('╗',foreground, background);}
+            else if check == '╚' {*draw = Character::new('╩',foreground, background);}
+            else if check == '╝' {*draw = Character::new('╝',foreground, background);}
+            else if check == '╞' {*draw = Character::new('═',foreground, background);}
+            else if check == '╠' {*draw = Character::new('╬',foreground, background);}
+            else if check == '╡' {*draw = Character::new('╡',foreground, background);}
+            else if check == '╣' {*draw = Character::new('╣',foreground, background);}
+            else if check == '╥' {*draw = Character::new('╗',foreground, background);}
+            else if check == '╦' {*draw = Character::new('╦',foreground, background);}
+            else if check == '╨' {*draw = Character::new('╝',foreground, background);}
+            else if check == '╩' {*draw = Character::new('╩',foreground, background);}
+            else if check == '╬' {*draw = Character::new('╬',foreground, background);}
+            else                 {*draw = Character::new('╡',foreground, background);}
+        }
+    }
+    
+    //Vertical Line
+    pub fn draw_vline(&mut self, x: usize, y1: usize, y2:usize, foreground: [u8;4], background: [u8;4]){
+        {
+            let pos: usize = y1*CHAR_SCRN_X_DIM + x;
+            let draw: &mut Character = &mut self.screen_charframe[pos];
+            let check: char = (*draw).codepoint;
+            if      check == '═' {*draw = Character::new('╦', foreground, background);}
+            else if check == '║' {*draw = Character::new('║', foreground, background);}
+            else if check == '╔' {*draw = Character::new('╔', foreground, background);}
+            else if check == '╗' {*draw = Character::new('╗', foreground, background);}
+            else if check == '╚' {*draw = Character::new('╠', foreground, background);}
+            else if check == '╝' {*draw = Character::new('╣', foreground, background);}
+            else if check == '╞' {*draw = Character::new('╔', foreground, background);}
+            else if check == '╠' {*draw = Character::new('╠', foreground, background);}
+            else if check == '╡' {*draw = Character::new('╗', foreground, background);}
+            else if check == '╣' {*draw = Character::new('╣', foreground, background);}
+            else if check == '╥' {*draw = Character::new('╥', foreground, background);}
+            else if check == '╦' {*draw = Character::new('╦', foreground, background);}
+            else if check == '╨' {*draw = Character::new('║', foreground, background);}
+            else if check == '╩' {*draw = Character::new('╬', foreground, background);}
+            else if check == '╬' {*draw = Character::new('╬', foreground, background);}
+            else                 {*draw = Character::new('╥', foreground, background);}
+        }
+        for y in y1+1..y2{
+            let pos: usize = y*CHAR_SCRN_X_DIM + x;
+            let draw: &mut Character = &mut self.screen_charframe[pos];
+            let check: char = (*draw).codepoint;
+            if      check == '═' {*draw = Character::new('╬', foreground, background);}
+            else if check == '║' {*draw = Character::new('║', foreground, background);}
+            else if check == '╔' {*draw = Character::new('╠', foreground, background);}
+            else if check == '╗' {*draw = Character::new('╣', foreground, background);}
+            else if check == '╚' {*draw = Character::new('╠', foreground, background);}
+            else if check == '╝' {*draw = Character::new('╣', foreground, background);}
+            else if check == '╞' {*draw = Character::new('╠', foreground, background);}
+            else if check == '╠' {*draw = Character::new('╠', foreground, background);}
+            else if check == '╡' {*draw = Character::new('╣', foreground, background);}
+            else if check == '╣' {*draw = Character::new('╣', foreground, background);}
+            else if check == '╥' {*draw = Character::new('║', foreground, background);}
+            else if check == '╦' {*draw = Character::new('╬', foreground, background);}
+            else if check == '╨' {*draw = Character::new('║', foreground, background);}
+            else if check == '╩' {*draw = Character::new('╬', foreground, background);}
+            else if check == '╬' {*draw = Character::new('╬', foreground, background);}
+            else                 {*draw = Character::new('║', foreground, background);}
+        }
+        {
+            let pos: usize = y2*CHAR_SCRN_X_DIM + x;
+            let draw: &mut Character = &mut self.screen_charframe[pos];
+            let check: char = (*draw).codepoint;
+            if      check == '═' {*draw = Character::new('╩', foreground, background);}
+            else if check == '║' {*draw = Character::new('║', foreground, background);}
+            else if check == '╔' {*draw = Character::new('╠', foreground, background);}
+            else if check == '╗' {*draw = Character::new('╣', foreground, background);}
+            else if check == '╚' {*draw = Character::new('╚', foreground, background);}
+            else if check == '╝' {*draw = Character::new('╝', foreground, background);}
+            else if check == '╞' {*draw = Character::new('╚', foreground, background);}
+            else if check == '╠' {*draw = Character::new('╠', foreground, background);}
+            else if check == '╡' {*draw = Character::new('╝', foreground, background);}
+            else if check == '╣' {*draw = Character::new('╣', foreground, background);}
+            else if check == '╥' {*draw = Character::new('║', foreground, background);}
+            else if check == '╦' {*draw = Character::new('╬', foreground, background);}
+            else if check == '╨' {*draw = Character::new('╨', foreground, background);}
+            else if check == '╩' {*draw = Character::new('╩', foreground, background);}
+            else if check == '╬' {*draw = Character::new('╬', foreground, background);}
+            else                 {*draw = Character::new('╨', foreground, background);}
+        }
+    }
+
+    //Place string in arbitrary location on screen
+    pub fn draw_string(&mut self, s: &str, y: usize, x: usize, foreground: [u8;4], background: [u8;4]){
+        let mut p = y*CHAR_SCRN_X_DIM + x;
+        //Check validity
+        if p + s.len() >= self.screen_charframe.len() {return;}
+        //Place characters on screen
+        for c in s.chars(){
+            self.screen_charframe[p] = Character::new(c, foreground, background);
+            p += 1;
+        }
     }
 }
 impl<'a> Write for Screen<'a>{

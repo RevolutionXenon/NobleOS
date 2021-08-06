@@ -15,8 +15,6 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
-use photon::line_draw::draw_hline_to_textframe;
-use photon::line_draw::draw_vline_to_textframe;
 use x86_64::registers::control::*;
 use core::convert::TryInto;
 use core::intrinsics::copy_nonoverlapping;
@@ -37,7 +35,7 @@ use photon::*;
 mod command;
 
 const EFI_PAGE_SIZE: u64 = 0x1000; //MEMORY PAGE SIZE (4KiB)
-const CURRENT_VERSION: &str = "v2021-08-03";
+const CURRENT_VERSION: &str = "v2021-08-05";
 
 
 // MAIN
@@ -105,13 +103,16 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     system_table_boot.boot_services().stall(2_000_000);
 
     //Print Startup
-    /*draw_hline_to_textframe(&mut screen_charbuffer, CHAR_PRNT_Y_POS-1, 0, CHAR_SCRN_X_DIM-1);
-    draw_hline_to_textframe(&mut screen_charbuffer, CHAR_INPT_Y_POS-1, 0, CHAR_SCRN_X_DIM-1);
-    draw_hline_to_textframe(&mut screen_charbuffer, CHAR_INPT_Y_POS+1, 0, CHAR_SCRN_X_DIM-1);
-    draw_vline_to_textframe(&mut screen_charbuffer, 0, CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1);
-    draw_vline_to_textframe(&mut screen_charbuffer, CHAR_SCRN_X_DIM-1, CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1);*/
+    screen.draw_hline( CHAR_PRNT_Y_POS-1, 0,                 CHAR_SCRN_X_DIM-1,  COLR_FORE, COLR_BACK);
+    screen.draw_hline( CHAR_INPT_Y_POS-1, 0,                 CHAR_SCRN_X_DIM-1,  COLR_FORE, COLR_BACK);
+    screen.draw_hline( CHAR_INPT_Y_POS+1, 0,                 CHAR_SCRN_X_DIM-1,  COLR_FORE, COLR_BACK);
+    screen.draw_vline( 0,                 CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1,  COLR_FORE, COLR_BACK);
+    screen.draw_vline( CHAR_SCRN_X_DIM-1, CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1,  COLR_FORE, COLR_BACK);
+    screen.draw_string("NOBLE OS", 0, 0, COLR_FORE, COLR_BACK);
+    screen.draw_string("HYDROGEN BOOTLOADER", 0, CHAR_SCRN_X_DIM - 20 - CURRENT_VERSION.len(), COLR_FORE, COLR_BACK);
+    screen.draw_string(CURRENT_VERSION, 0, CHAR_SCRN_X_DIM - CURRENT_VERSION.len(), COLR_FORE, COLR_BACK);
+    screen.characterframe_render();
     writeln!(screen, "Welcome to Noble!");
-    writeln!(screen, "Hydrogen Bootloader {}", CURRENT_VERSION);
 
     // COMMAND LINE
     //Enter Read-Evaluate-Print Loop
@@ -164,11 +165,16 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                     *screen.print_y += 1;
                     screen.printbuffer_draw_render();
                 }
-                else if scancode == ScanCode::RIGHT{
+                else if scancode == ScanCode::END{
+                    *screen.print_y = CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP;
                     screen.printbuffer_draw_render();
                 }
-                else if scancode == ScanCode::LEFT{
-                    *screen.print_y = CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP;
+                else if scancode == ScanCode::PAGE_UP{
+                    *screen.print_y = if *screen.print_y > CHAR_PRNT_Y_DIM_DSP {*screen.print_y - CHAR_PRNT_Y_DIM_DSP} else {0};
+                    screen.printbuffer_draw_render();
+                }
+                else if scancode == ScanCode::PAGE_DOWN{
+                    *screen.print_y = if *screen.print_y < CHAR_PRNT_Y_DIM_MEM - 2*CHAR_PRNT_Y_DIM_DSP {*screen.print_y + CHAR_PRNT_Y_DIM_DSP} else {CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP};
                     screen.printbuffer_draw_render();
                 }
             }
@@ -222,6 +228,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
             }
         }
     }
+    writeln!(screen, "Kernel Code Size: 0x{:X}", kernel_size);
     //Allocate memory for code
     let code_pointer = unsafe { reserve_code_space(boot_services, kernel_size as usize, EFI_PAGE_SIZE as usize) };
     for i in 0..code_num{
@@ -230,13 +237,6 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         fs_kernel.read(&mut buf).expect_success("Kernel file read failed at loading code.");
         unsafe { copy_nonoverlapping(buf.as_ptr(), code_pointer.add(code_list[i].2 as usize), code_list[i].3 as usize); }
     }
-
-    // PRE EXIT TESTING GROUNDS
-    //println!(&format!("{:16X}", graphics_output_protocol.frame_buffer().as_mut_ptr() as usize));
-    //println!(&format!("GOP: {:016X}", graphics_output_protocol.frame_buffer().as_mut_ptr() as usize));
-    //let arg = graphics_output_protocol.frame_buffer().as_mut_ptr() as usize;
-    //println!(&format!("Graphics output pointer at: {:p}", graphics_frame_pointer));
-    writeln!(screen, "Kernel Code Size: 0x{:X}", kernel_size);
 
     //TODO SWITCH MEMORY MAPS
     let frame_oct = 0o775;
