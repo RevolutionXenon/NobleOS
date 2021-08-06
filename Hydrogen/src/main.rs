@@ -1,3 +1,5 @@
+// HEADER
+//Flags
 #![no_std]
 #![no_main]
 #![feature(abi_efiapi)]
@@ -6,43 +8,95 @@
 #![feature(bench_black_box)]
 #![allow(unused_must_use)]
 
+//External crates
 extern crate rlibc;
 extern crate alloc;
 
-use alloc::boxed::Box;
-use alloc::format;
-use alloc::string::String;
-use alloc::string::ToString;
-use alloc::vec;
-use alloc::vec::Vec;
-use x86_64::registers::control::*;
-use core::convert::TryInto;
-use core::intrinsics::copy_nonoverlapping;
-use core::fmt::Write;
-use core::mem::transmute;
-use core::ptr;
-use core::ptr::write_volatile;
-use uefi::alloc::exit_boot_services;
-use uefi::prelude::*;
-use uefi::proto::console::gop::GraphicsOutput;
-use uefi::proto::console::text::{Input, Key, ScanCode};
-use uefi::proto::media::file::{File, FileAttribute, FileMode, RegularFile};
-use uefi::proto::media::fs::SimpleFileSystem;
-use uefi::table::boot::MemoryType;
-use uefi::table::runtime::ResetType;
+//Imports
+use alloc::{
+    format, 
+    string::{
+        String, 
+        ToString
+    }, 
+    vec, 
+    vec::{
+        Vec
+    }
+};
+use core::{
+    convert::{
+        TryInto
+    }, 
+    fmt::{
+        Write
+    }, 
+    intrinsics::{
+        copy_nonoverlapping
+    },
+    mem::{
+        transmute
+    },
+    ptr,
+    ptr::{
+        write_volatile
+    }
+};
+use uefi::{
+    alloc::{
+        exit_boot_services
+    },
+    prelude::*,
+    proto::{
+        console::{
+            gop::{
+                GraphicsOutput, 
+                Mode
+            },
+            text::{
+                Input,
+                Key,
+                ScanCode
+            }
+        }, 
+        media::{
+            file::{
+                File, 
+                FileAttribute, 
+                FileMode, 
+                RegularFile
+            }, 
+            fs::{
+                SimpleFileSystem
+            }
+        }
+    },
+    table::{
+        boot::{
+            MemoryType
+        },
+        runtime::{
+            ResetType
+        }
+    }
+};
+use x86_64::{
+    registers::{
+        control::*
+    }
+};
 use photon::*;
 
-mod command;
-
-const EFI_PAGE_SIZE: u64 = 0x1000; //MEMORY PAGE SIZE (4KiB)
-const CURRENT_VERSION: &str = "v2021-08-05";
+//Constants
+const EFI_PAGE_SIZE: u64 = 0x1000;           //MEMORY PAGE SIZE (4KiB)
+const CURRENT_VERSION: &str = "v2021-08-05"; //CURRENT VERSION OF BOOTLOADER
 
 
 // MAIN
 //Main entry point after firmware boot
 #[entry]
 fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
-    // INITIALIZATION
+    // UEFI INITILIZATION
     //Utilities initialization (Alloc & Logger)
     uefi_services::init(&system_table_boot).expect_success("Utilities initialization failed");
     let boot_services = system_table_boot.boot_services();
@@ -78,31 +132,30 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     let input = input.expect("Input initialization failed at unsafe cell");
     let input = unsafe {&mut *input.get()};
 
-    // NEW GRAPHICS SETUP
-    //Screen Variables
-    //let mut screen_physical; unsafe{screen_physical = *(graphics_frame_pointer as *mut [u8; PIXL_SCRN_X_DIM*PIXL_SCRN_Y_DIM*PIXL_SCRN_B_DEP]);}
-    let mut screen_charframe = [Character::new(' ', COLR_WHITE, COLR_BLACK); CHAR_SCRN_X_DIM*CHAR_SCRN_Y_DIM];
-    //Input Window Variables
-    let mut input_stack = [Character::new(' ', COLR_WHITE, COLR_BLACK); CHAR_INPT_X_DIM * CHAR_INPT_Y_DIM_MEM];
-    let mut input_p:usize = 0;
-    //Print Result Window Variables
-    let mut print_buffer = [Character::new(' ', COLR_WHITE, COLR_BLACK); CHAR_PRNT_X_DIM * CHAR_PRNT_Y_DIM_MEM];
-    let mut print_y:usize = CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP;
-    let mut print_x:usize = 0;
-    //Screen
+    // GRAPHICS SETUP
+    //Screen variables
+    let     screen_physical:  *mut u8                                               = graphics_frame_pointer;
+    let mut screen_charframe:      [Character; CHAR_SCRN_X_DIM*CHAR_SCRN_Y_DIM]     = [Character::new(' ', COLR_WHITE, COLR_BLACK); CHAR_SCRN_X_DIM*CHAR_SCRN_Y_DIM];
+    //Input Window variables
+    let mut input_stack:           [Character; CHAR_INPT_X_DIM*CHAR_INPT_Y_DIM_MEM] = [Character::new(' ', COLR_WHITE, COLR_BLACK); CHAR_INPT_X_DIM*CHAR_INPT_Y_DIM_MEM];
+    let mut input_p:               usize                                            = 0;
+    //Print Result Window variables
+    let mut print_buffer:          [Character; CHAR_PRNT_X_DIM*CHAR_PRNT_Y_DIM_MEM] = [Character::new(' ', COLR_WHITE, COLR_BLACK); CHAR_PRNT_X_DIM*CHAR_PRNT_Y_DIM_MEM];
+    let mut print_y:               usize                                            = CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP;
+    let mut print_x:               usize                                            = 0;
+    //Screen struct
     let mut screen:Screen = Screen{
-        screen_physical: graphics_frame_pointer,
+        screen_physical:       screen_physical,
         screen_charframe: &mut screen_charframe,
-        input_stack: &mut input_stack,
-        input_p: &mut input_p,
-        print_buffer: &mut print_buffer,
-        print_y: &mut print_y,
-        print_x: &mut print_x,
+        input_stack:      &mut input_stack,
+        input_p:          &mut input_p,
+        print_buffer:     &mut print_buffer,
+        print_y:          &mut print_y,
+        print_x:          &mut print_x,
     };
-    //Wait for 2 Seconds
+    //Wait 2 seconds
     system_table_boot.boot_services().stall(2_000_000);
-
-    //Print Startup
+    //User Interface initialization
     screen.draw_hline( CHAR_PRNT_Y_POS-1, 0,                 CHAR_SCRN_X_DIM-1,  COLR_PRRED, COLR_BLACK);
     screen.draw_hline( CHAR_INPT_Y_POS-1, 0,                 CHAR_SCRN_X_DIM-1,  COLR_PRRED, COLR_BLACK);
     screen.draw_hline( CHAR_INPT_Y_POS+1, 0,                 CHAR_SCRN_X_DIM-1,  COLR_PRRED, COLR_BLACK);
@@ -130,22 +183,19 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                 if input_char == '\r'{
                     //Return to bottom of screen
                     *screen.print_y = CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP;
-                    //Execute command and get return value
+                    //Execute command and reset input stack
                     let command = &screen.input_as_chararray()[0..*screen.input_p].iter().collect::<String>();
                     let boot_command_return = command_processor(&mut screen, &system_table_boot, command);
                     screen.input_flush(Character::new(' ', COLR_WHITE, COLR_BLACK));
-                    //Check Return Code
+                    //Check return code
                     if boot_command_return != 0 {
-                        //Boot Sequence
+                        //Boot sequence
                         if boot_command_return == 1 {
-                            //Exit to boot
                             break;
                         }
                         //Shutdown sequence
                         else if boot_command_return == 2 {
-                            //Wait for 5 seconds
-                            system_table_boot.boot_services().stall(5000000);
-                            //Shut down computer
+                            system_table_boot.boot_services().stall(5_000_000);
                             system_table_boot.runtime_services().reset(ResetType::Shutdown, Status(0), None);
                         }
                     }
@@ -182,7 +232,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     }
     writeln!(screen, "Simple REPL exited.");
 
-    // FIND KERNEL ON DISK
+    // LOAD KERNEL
     //Find kernel on disk
     let mut fs_root = simple_file_system.open_volume().expect_success("File system root failed to open.");
     let fs_kernel_handle = fs_root.open("noble", FileMode::Read, FileAttribute::DIRECTORY).expect_success("File system kernel open failed at \"noble\".").
@@ -190,14 +240,12 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         open("x86-64.elf", FileMode::Read, FileAttribute::empty()).expect_success("File system kernel open failed at \"x86-64.elf\".");
     let mut fs_kernel = unsafe { RegularFile::new(fs_kernel_handle) };
     writeln!(screen, "Found kernel on file system.");
-
-    // LOAD ELF INFORMATION
     //Read ELF header
     let k_eheader = match ELFFileHeader64::new(&{let mut buf = [0u8;0x40]; fs_kernel.read(&mut buf).expect_success("Kernel file read failed at ELF header."); buf}){
         Ok(result) => result,
         Err(error) => panic!("{}", error)
     };
-    //Check validity
+    //Check ELF header validity
     if k_eheader.ei_osabi != 0x00 {writeln!(screen, "Kernel load: Incorrect ei_osapi."); panic!();}
     if k_eheader.ei_abiversion != 0x00 {writeln!(screen, "Kernel load: Incorrect ei_abiversion."); panic!();}
     if k_eheader.e_machine != 0x3E {writeln!(screen, "Kernel load: Incorrect e_machine."); panic!();}
@@ -230,7 +278,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     }
     writeln!(screen, "Kernel Code Size: 0x{:X}", kernel_size);
     //Allocate memory for code
-    let code_pointer = unsafe { reserve_code_space(boot_services, kernel_size as usize, EFI_PAGE_SIZE as usize) };
+    let code_pointer = unsafe { allocate_memory(boot_services, kernel_size as usize, EFI_PAGE_SIZE as usize) };
     for i in 0..code_num{
         fs_kernel.set_position(code_list[i].0).expect_success("Kernel file read failed at seeking code.");
         let mut buf:Vec<u8> = vec![0; code_list[i].1 as usize];
@@ -238,65 +286,57 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         unsafe { copy_nonoverlapping(buf.as_ptr(), code_pointer.add(code_list[i].2 as usize), code_list[i].3 as usize); }
     }
 
-    //TODO SWITCH MEMORY MAPS
+    // TODO SWITCH MEMORY MAPS
+    //Top level locations
     let frame_oct = 0o775;
-    let kernel_oct = 0o776;
+    let _kernel_oct = 0o776;
     let table_oct = 0o777;
     unsafe{
         //4th level page table to be placed into CR3
-        let pml4:*mut u8 = reserve_code_space(boot_services, EFI_PAGE_SIZE as usize, EFI_PAGE_SIZE as usize);
+        let pml4:*mut u8 = allocate_memory(boot_services, EFI_PAGE_SIZE as usize, EFI_PAGE_SIZE as usize);
         write_pte(pml4.add(table_oct), pml4 as u64);
         //TODO Kernel Page Table
         //TODO Frame Buffer Page Table
         let pdpte_frame = create_pdpte_offset(boot_services, graphics_frame_pointer as u64, PIXL_SCRN_Y_DIM*PIXL_SCRN_X_DIM*PIXL_SCRN_B_DEP);
         write_pte(pml4.add(frame_oct), pdpte_frame as u64);
-
         writeln!(screen, "Frame Buffer PDPTE Location: {:p}", pdpte_frame);
     }
 
-    // EXIT BOOT SERVICES
-    //exit
+    // BOOT SEQUENCE
+    //Exit Boot Services
     let mut memory_map_buffer = [0; 10000];
     let (_table_runtime, _esi) = system_table_boot.exit_boot_services(_handle, &mut memory_map_buffer).expect_success("Boot services exit failed");
     exit_boot_services();
     //Declare boot services exited
     writeln!(screen, "Boot Services exited.");
-
-    // BOOT SEQUENCE
-    
     //Kernel entry
     let kernel_entry_fn = unsafe { transmute::<*mut u8, extern "sysv64" fn(*mut u8) -> !>(code_pointer.add(k_eheader.e_entry as usize)) };
     kernel_entry_fn(graphics_frame_pointer);
 
-    //HALT COMPUTER
-    writeln!(screen, "Halt reached.");
-    unsafe { asm!("HLT"); }
-    loop{}
+    // HALT COMPUTER
+    //writeln!(screen, "Halt reached.");
+    //unsafe { asm!("HLT"); }
+    //loop{}
 }
 
 //Set a larger graphics mode
 fn set_graphics_mode(gop: &mut GraphicsOutput) {
-    // We know for sure QEMU has a 1024x768 mode.
-    let mode = gop
-        .modes()
-        .map(|mode| mode.expect("Warnings encountered while querying mode"))
-        .find(|mode| {
+    let mode:Mode = gop.modes().map(|mode| mode.expect("Graphics Output Protocol query of available modes failed.")).find(|mode| {
             let info = mode.info();
             info.resolution() == (PIXL_SCRN_X_DIM, PIXL_SCRN_Y_DIM)
-        })
-        .unwrap();
-
-    gop.set_mode(&mode)
-        .expect_success("Failed to set graphics mode");
+        }).unwrap();
+    gop.set_mode(&mode).expect_success("Graphics Output Protocol set mode failed.");
 }
 
 
 // COMMAND PROCESSOR
-//Evaluates and executes a bootloader command and returns a return code and associated string
+//Evaluates and executes a bootloader command and returns a code
 fn command_processor(screen: &mut Screen, system_table: &SystemTable<Boot>, command: &str) -> u8 {
+    //Print command
     writeln!(screen, ">{}", command);
+    //Assess command
     if command.eq_ignore_ascii_case("time"){
-        //Display Time
+        //Time
         writeln!(screen, ">{}", match system_table.runtime_services().get_time(){
             Ok(v) => {let v = v.log(); format!{"{}-{:02}-{:02} {:02}:{:02}:{:02} UTC", v.year(), v.month(), v.day(), v.hour(), v.minute(), v.second()}},
             Err(e) => format!("Command failed: {:?}", e)});
@@ -306,13 +346,13 @@ fn command_processor(screen: &mut Screen, system_table: &SystemTable<Boot>, comm
         command_mem(screen, system_table.boot_services());
     }
     else if command.eq_ignore_ascii_case("shutdown"){
-        writeln!(screen, "Shutdown sequence started.");
         //Shutdown
+        writeln!(screen, "Shutdown sequence started.");
         return 0x02;
     }
     else if command.eq_ignore_ascii_case("boot"){
-        writeln!(screen, "Boot sequence started.");
         //Boot
+        writeln!(screen, "Boot sequence started.");
         return 0x01;
     }
     else if command.eq_ignore_ascii_case("crd"){
@@ -329,7 +369,7 @@ fn command_processor(screen: &mut Screen, system_table: &SystemTable<Boot>, comm
         command_peek(screen, command);
     }
     else{
-        //No result
+        //No Result
         writeln!(screen, "Command not entered properly.");
     }
     //Return to Command Line
@@ -338,33 +378,25 @@ fn command_processor(screen: &mut Screen, system_table: &SystemTable<Boot>, comm
 
 //Display memory map contents to console
 fn command_mem(screen: &mut Screen, boot_service: &BootServices){
-    // Get the estimated map size
+    //Estimated map size
     let map_size = boot_service.memory_map_size();
-
     writeln!(screen, "Map size: {}", map_size);
-
-    // Build a buffer big enough to handle the memory map
+    //Build a buffer big enough to handle the memory map
     let mut buffer = vec![0;map_size+512];
     writeln!(screen, "Buffer len: {}", buffer.len());
     writeln!(screen, "Buffer cap: {}", buffer.capacity());
-
+    //Read memory map into buffer
     let (_k, description_iterator) = boot_service
         .memory_map(&mut buffer)
         .expect_success("UEFI Memory Map retrieval failed.");
-
     let descriptors = description_iterator.copied().collect::<Vec<_>>();
-
+    //Handle if memory map appears empty
     if descriptors.is_empty() {
         writeln!(screen, "UEFI Memory Map is empty.");
         return;
     }
-
-    // Print out a list of all the usable memory we see in the memory map.
-    // Don't print out everything, the memory map is probably pretty big
-    // (e.g. OVMF under QEMU returns a map with nearly 50 entries here).
-
+    //Print memory map
     writeln!(screen, "Usable ranges: {}", descriptors.len());
-
     for descriptor in descriptors{
         let size_pages = descriptor.page_count;
         let size = size_pages * EFI_PAGE_SIZE;
@@ -393,17 +425,18 @@ fn command_mem(screen: &mut Screen, boot_service: &BootServices){
 
 //Display the raw contents of a part of memory
 fn command_peek(screen: &mut Screen, command: &str) {
-    let mut result = "".to_string();
+    //Read subcommand from arguments
     let split:Vec<&str> = command.split(" ").collect();
+    //Handle if number of arguments is incorrect
     if split.len() != 4 {
         writeln!(screen, "Incorrect number of arguments: {} (requires 3).", split.len());
         return;
     }
-    //Read subcommand from arguments
     //Read numbers from argument
     let address = match usize::from_str_radix(split[2], 16){
         Ok(i) => {i},
         Err(_) => {
+            //Handle if address is not a valid number
             writeln!(screen, "2nd argument not valid: {}", split[2]);
             return;
         }
@@ -411,6 +444,7 @@ fn command_peek(screen: &mut Screen, command: &str) {
     let size = match split[3].to_string().parse::<usize>(){
         Ok(i) => {i},
         Err(_) => {
+            //Handle if length is not a valid number
             writeln!(screen, "3rd argument not valid: {}", split[3]);
             return;
         }
@@ -456,13 +490,12 @@ fn command_peek(screen: &mut Screen, command: &str) {
 
 
 // MEMORY FUNCTIONS
-//Allocate system memory
-unsafe fn reserve_code_space(boot_services: &BootServices, size: usize, align: usize) -> *mut u8 {
+//Allocate memory
+unsafe fn allocate_memory(boot_services: &BootServices, size: usize, align: usize) -> *mut u8 {
     let mem_ty = MemoryType::LOADER_CODE;
-
     if align > 8 {
         let pointer =
-            if let Ok(pointer_from_services) = boot_services.allocate_pool(mem_ty, size + align).warning_as_error(){
+            if let Ok(pointer_from_services) = boot_services.allocate_pool(mem_ty, size + align).warning_as_error() {
                 pointer_from_services
             }
             else {
@@ -482,7 +515,7 @@ unsafe fn reserve_code_space(boot_services: &BootServices, size: usize, align: u
 }
 
 //Write page table entry
-unsafe fn write_pte(entry_location: *mut u8, address: u64) -> bool{
+unsafe fn write_pte(entry_location: *mut u8, address: u64) -> bool {
     //Return if invalid address
     if address | 0o7777 != 0 {return false;}
     //Convert to bytes
@@ -496,10 +529,10 @@ unsafe fn write_pte(entry_location: *mut u8, address: u64) -> bool{
     return true;
 }
 
-//Reserve memory area as offset level 3 page table
+//Reserve memory area as page directory pointer table mapped to an offset region of physical memory
 unsafe fn create_pdpte_offset(boot_services:&BootServices, offset: u64, size: usize) -> *mut u8{
     //New level 3 table
-    let pdpte = reserve_code_space(boot_services, EFI_PAGE_SIZE as usize, EFI_PAGE_SIZE as usize);
+    let pdpte = allocate_memory(boot_services, EFI_PAGE_SIZE as usize, EFI_PAGE_SIZE as usize);
     let mut pde: *mut u8 = 0 as *mut u8;
     let mut pte: *mut u8 = 0 as *mut u8;
     let pages = size/0b0000000000000000001000000000000 + if size%0b0000000000000000001000000000000 != 0 {1} else {0};
@@ -507,11 +540,11 @@ unsafe fn create_pdpte_offset(boot_services:&BootServices, offset: u64, size: us
         if i%0x100 == 0 {
             if i%0x20000 == 0 {
                 //New level 2 table
-                pde = reserve_code_space(boot_services, EFI_PAGE_SIZE as usize, EFI_PAGE_SIZE as usize);
+                pde = allocate_memory(boot_services, EFI_PAGE_SIZE as usize, EFI_PAGE_SIZE as usize);
                 write_pte(pdpte.add(i/0x20000), pde as u64);
             }
             //New level 1 table
-            pte = reserve_code_space(boot_services, EFI_PAGE_SIZE as usize, EFI_PAGE_SIZE as usize);
+            pte = allocate_memory(boot_services, EFI_PAGE_SIZE as usize, EFI_PAGE_SIZE as usize);
             write_pte(pde.add(i/0x100), pte as u64);
         }
         //New page
@@ -525,28 +558,29 @@ unsafe fn create_pdpte_offset(boot_services:&BootServices, offset: u64, size: us
 //64-bit ELF File Header
 #[derive(Debug)]
 struct ELFFileHeader64 {
-    ei_magic:      [ u8;4],
-    ei_class:        u8,
-    ei_data:         u8,
-    ei_version:      u8,
-    ei_osabi:        u8,
-    ei_abiversion:   u8,
-    ei_pad:        [ u8;7],
-    e_type:         u16,
-    e_machine:      u16,
-    e_version:      u32,
-    e_entry:        u64,
-    e_phoff:        u64,
-    e_shoff:        u64,
-    e_flags:       [ u8;4],
-    e_ehsize:       u16,
-    e_phentsize:    u16,
-    e_phnum:        u16,
-    e_shentsize:    u16,
-    e_shnum:        u16,
-    e_shstrndx:     u16
+    ei_magic:      [u8;4],
+    ei_class:      u8,
+    ei_data:       u8,
+    ei_version:    u8,
+    ei_osabi:      u8,
+    ei_abiversion: u8,
+    ei_pad:        [u8;7],
+    e_type:        u16,
+    e_machine:     u16,
+    e_version:     u32,
+    e_entry:       u64,
+    e_phoff:       u64,
+    e_shoff:       u64,
+    e_flags:       [u8;4],
+    e_ehsize:      u16,
+    e_phentsize:   u16,
+    e_phnum:       u16,
+    e_shentsize:   u16,
+    e_shnum:       u16,
+    e_shstrndx:    u16
 }
 impl ELFFileHeader64 {
+    // CONSTRUCTOR
     pub fn new(head: &[u8;0x40]) -> Result<ELFFileHeader64, &str> {
         //Check ei_magic
         if head[0x00..0x04] != [0x7Fu8, 0x45u8, 0x4cu8, 0x46u8]{return Result::Err("ELFHeader64: Invalid ei_magic (magic number).")}
@@ -603,18 +637,19 @@ impl ELFFileHeader64 {
 //64-bit ELF Program Header
 #[derive(Debug)]
 struct ELFProgramHeader64 {
-    p_type:    u32,
-    p_flags:  [ u8;4],
-    p_offset:  u64,
-    p_vaddr:   u64,
-    p_paddr:   u64,
-    p_filesz:  u64,
-    p_memsz:   u64,
-    p_align:   u64
+    p_type:   u32,
+    p_flags:  [u8;4],
+    p_offset: u64,
+    p_vaddr:  u64,
+    p_paddr:  u64,
+    p_filesz: u64,
+    p_memsz:  u64,
+    p_align:  u64
 }
 impl ELFProgramHeader64 {
+    // CONSTRUCTOR
     pub fn new(head: &[u8;0x38], endianness: u8) -> Result<ELFProgramHeader64, &str>{
-        let (u16_fb, u32_fb, u64_fb):(fn([u8;2]) -> u16, fn([u8;4]) -> u32, fn([u8;8]) -> u64) = match endianness{
+        let (_u16_fb, u32_fb, u64_fb):(fn([u8;2]) -> u16, fn([u8;4]) -> u32, fn([u8;8]) -> u64) = match endianness{
             0x01 => (u16::from_le_bytes, u32::from_le_bytes, u64::from_le_bytes),
             0x02 => (u16::from_be_bytes, u32::from_be_bytes, u64::from_be_bytes),
             _ => {return Result::Err("ELFHeader64: Invalid endianness.")}
