@@ -81,12 +81,12 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     // NEW GRAPHICS SETUP
     //Screen Variables
     //let mut screen_physical; unsafe{screen_physical = *(graphics_frame_pointer as *mut [u8; PIXL_SCRN_X_DIM*PIXL_SCRN_Y_DIM*PIXL_SCRN_B_DEP]);}
-    let mut screen_charframe = [Character::new(' ', COLR_FORE, COLR_BACK); CHAR_SCRN_X_DIM*CHAR_SCRN_Y_DIM];
+    let mut screen_charframe = [Character::new(' ', COLR_WHITE, COLR_BLACK); CHAR_SCRN_X_DIM*CHAR_SCRN_Y_DIM];
     //Input Window Variables
-    let mut input_stack = [Character::new(' ', COLR_FORE, COLR_BACK); CHAR_INPT_X_DIM * CHAR_INPT_Y_DIM_MEM];
+    let mut input_stack = [Character::new(' ', COLR_WHITE, COLR_BLACK); CHAR_INPT_X_DIM * CHAR_INPT_Y_DIM_MEM];
     let mut input_p:usize = 0;
     //Print Result Window Variables
-    let mut print_buffer = [Character::new(' ', COLR_FORE, COLR_BACK); CHAR_PRNT_X_DIM * CHAR_PRNT_Y_DIM_MEM];
+    let mut print_buffer = [Character::new(' ', COLR_WHITE, COLR_BLACK); CHAR_PRNT_X_DIM * CHAR_PRNT_Y_DIM_MEM];
     let mut print_y:usize = CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP;
     let mut print_x:usize = 0;
     //Screen
@@ -103,14 +103,14 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     system_table_boot.boot_services().stall(2_000_000);
 
     //Print Startup
-    screen.draw_hline( CHAR_PRNT_Y_POS-1, 0,                 CHAR_SCRN_X_DIM-1,  COLR_FORE, COLR_BACK);
-    screen.draw_hline( CHAR_INPT_Y_POS-1, 0,                 CHAR_SCRN_X_DIM-1,  COLR_FORE, COLR_BACK);
-    screen.draw_hline( CHAR_INPT_Y_POS+1, 0,                 CHAR_SCRN_X_DIM-1,  COLR_FORE, COLR_BACK);
-    screen.draw_vline( 0,                 CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1,  COLR_FORE, COLR_BACK);
-    screen.draw_vline( CHAR_SCRN_X_DIM-1, CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1,  COLR_FORE, COLR_BACK);
-    screen.draw_string("NOBLE OS", 0, 0, COLR_FORE, COLR_BACK);
-    screen.draw_string("HYDROGEN BOOTLOADER", 0, CHAR_SCRN_X_DIM - 20 - CURRENT_VERSION.len(), COLR_FORE, COLR_BACK);
-    screen.draw_string(CURRENT_VERSION, 0, CHAR_SCRN_X_DIM - CURRENT_VERSION.len(), COLR_FORE, COLR_BACK);
+    screen.draw_hline( CHAR_PRNT_Y_POS-1, 0,                 CHAR_SCRN_X_DIM-1,  COLR_PRRED, COLR_BLACK);
+    screen.draw_hline( CHAR_INPT_Y_POS-1, 0,                 CHAR_SCRN_X_DIM-1,  COLR_PRRED, COLR_BLACK);
+    screen.draw_hline( CHAR_INPT_Y_POS+1, 0,                 CHAR_SCRN_X_DIM-1,  COLR_PRRED, COLR_BLACK);
+    screen.draw_vline( 0,                 CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1,  COLR_PRRED, COLR_BLACK);
+    screen.draw_vline( CHAR_SCRN_X_DIM-1, CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1,  COLR_PRRED, COLR_BLACK);
+    screen.draw_string("NOBLE OS", 0, 0, COLR_WHITE, COLR_BLACK);
+    screen.draw_string("HYDROGEN BOOTLOADER", 0, CHAR_SCRN_X_DIM - 20 - CURRENT_VERSION.len(), COLR_WHITE, COLR_BLACK);
+    screen.draw_string(CURRENT_VERSION, 0, CHAR_SCRN_X_DIM - CURRENT_VERSION.len(), COLR_WHITE, COLR_BLACK);
     screen.characterframe_render();
     writeln!(screen, "Welcome to Noble!");
 
@@ -133,7 +133,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                     //Execute command and get return value
                     let command = &screen.input_as_chararray()[0..*screen.input_p].iter().collect::<String>();
                     let boot_command_return = command_processor(&mut screen, &system_table_boot, command);
-                    screen.input_flush(Character::new(' ', COLR_FORE, COLR_BACK));
+                    screen.input_flush(Character::new(' ', COLR_WHITE, COLR_BLACK));
                     //Check Return Code
                     if boot_command_return != 0 {
                         //Boot Sequence
@@ -152,7 +152,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                 }
                 //User has typed a character
                 else {
-                    screen.character_input_draw_render(Character::new(input_char, COLR_FORE, COLR_BACK));
+                    screen.character_input_draw_render(Character::new(input_char, COLR_WHITE, COLR_BLACK));
                 }
             }
             //Modifier or Control Key
