@@ -6,21 +6,11 @@
 pub mod font_handler;
 
 //Imports
-use core::{
-    fmt::{
-        Write, 
-        Result, 
-        Arguments
-    }, 
-    ptr::{
-        write_volatile
-    }
-};
-use crate::{
-    font_handler::{
-        retrieve_font_bitmap
-    }
-};
+use core::fmt::Write;
+use core::fmt::Result;
+use core::fmt::Arguments;
+use core::ptr::write_volatile;
+use crate::font_handler::retrieve_font_bitmap;
 
 //Constants
 pub const PIXL_SCRN_X_DIM: usize = 1920;                               //PIXEL WIDTH OF SCREEN
@@ -41,7 +31,7 @@ pub const CHAR_INPT_Y_POS: usize = 65;                                 //TEXT MO
 pub const CHAR_INPT_X_DIM: usize = 118;                                //TEXT MODE WIDTH OF INPUT WINDOW
 pub const CHAR_INPT_Y_DIM: usize = 1;                                  //TEXT MODE HEIGHT OF INPUT WINDOW
 pub const CHAR_INPT_Y_DIM_MEM: usize = 1;                              //TEXT MODE HEIGHT OF INPUT WINDOW IN MEMORY
-pub const PHOTON_VERSION: &str = "v2021-08-05";                        //CURRENT VERSION OF BOOTLOADER
+pub const PHOTON_VERSION: &str = "v2021-08-07";                        //CURRENT VERSION OF GRAPHICS LIBRARY
 
 
 // STRUCTS

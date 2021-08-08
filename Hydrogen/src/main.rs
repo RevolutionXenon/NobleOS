@@ -13,83 +13,41 @@ extern crate rlibc;
 extern crate alloc;
 
 //Imports
-use alloc::{
-    format, 
-    string::{
-        String, 
-        ToString
-    }, 
-    vec, 
-    vec::{
-        Vec
-    }
-};
-use core::{
-    convert::{
-        TryInto
-    }, 
-    fmt::{
-        Write
-    }, 
-    intrinsics::{
-        copy_nonoverlapping
-    },
-    mem::{
-        transmute
-    },
-    ptr,
-    ptr::{
-        write_volatile
-    }
-};
-use uefi::{
-    alloc::{
-        exit_boot_services
-    },
-    prelude::*,
-    proto::{
-        console::{
-            gop::{
-                GraphicsOutput, 
-                Mode
-            },
-            text::{
-                Input,
-                Key,
-                ScanCode
-            }
-        }, 
-        media::{
-            file::{
-                File, 
-                FileAttribute, 
-                FileMode, 
-                RegularFile
-            }, 
-            fs::{
-                SimpleFileSystem
-            }
-        }
-    },
-    table::{
-        boot::{
-            MemoryType
-        },
-        runtime::{
-            ResetType
-        }
-    }
-};
-use x86_64::{
-    registers::{
-        control::*
-    }
-};
+use alloc::format;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::convert::TryInto;
+use core::fmt::Write;
+use core::intrinsics::copy_nonoverlapping;
+use core::mem::transmute;
+use core::ptr;
+use core::ptr::read_volatile;
+use core::ptr::write_volatile;
+use uefi::alloc::exit_boot_services;
+use uefi::prelude::*;
+use uefi::proto::console::gop::GraphicsOutput;
+use uefi::proto::console::gop::Mode;
+use uefi::proto::console::text::Input;
+use uefi::proto::console::text::Key;
+use uefi::proto::console::text::ScanCode;
+use uefi::proto::media::file::File;
+use uefi::proto::media::file::FileAttribute;
+use uefi::proto::media::file::FileMode;
+use uefi::proto::media::file::RegularFile;
+use uefi::proto::media::fs::SimpleFileSystem;
+use uefi::table::boot::MemoryType;
+use uefi::table::runtime::ResetType;
+use x86_64::PhysAddr;
+use x86_64::registers::control::*;
+use x86_64::structures::paging::PhysFrame;
+use x86_64::structures::paging::Size4KiB;
 use photon::*;
 
 //Constants
-const EFI_PAGE_SIZE: u64 = 0x1000;            //MEMORY PAGE SIZE (4KiB)
-const HYDROGEN_VERSION: &str = "v2021-08-05"; //CURRENT VERSION OF BOOTLOADER
+const PAGE_SIZE: usize = 0x1000;              //MEMORY PAGE SIZE (4KiB)
+const HYDROGEN_VERSION: &str = "v2021-08-07"; //CURRENT VERSION OF BOOTLOADER
 
 
 // MAIN
@@ -168,6 +126,108 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     writeln!(screen, "Welcome to Noble OS");
     writeln!(screen, "Hydrogen Bootloader     {}", HYDROGEN_VERSION);
     writeln!(screen, "Photon Graphics Library {}", PHOTON_VERSION);
+    writeln!(screen, "Frame Buffer Location:  {:p}", graphics_frame_pointer);
+
+    // LOAD KERNEL
+    //Find kernel on disk
+    let mut fs_root = simple_file_system.open_volume().expect_success("File system root failed to open.");
+    let fs_kernel_handle = fs_root.open("noble", FileMode::Read, FileAttribute::DIRECTORY).expect_success("File system kernel open failed at \"noble\".").
+        open("helium", FileMode::Read, FileAttribute::DIRECTORY).expect_success("File system kernel open failed at \"helium\".").
+        open("x86-64.elf", FileMode::Read, FileAttribute::empty()).expect_success("File system kernel open failed at \"x86-64.elf\".");
+    let mut fs_kernel = unsafe { RegularFile::new(fs_kernel_handle) };
+    writeln!(screen, "Found kernel on file system.");
+    //Read ELF header
+    let k_eheader = match ELFFileHeader64::new(&{let mut buf = [0u8;0x40]; fs_kernel.read(&mut buf).expect_success("Kernel file read failed at ELF header."); buf}){
+        Ok(result) => result,
+        Err(error) => panic!("{}", error)
+    };
+    //Check ELF header validity
+    if k_eheader.ei_osabi != 0x00 {writeln!(screen, "Kernel load: Incorrect ei_osapi."); panic!();}
+    if k_eheader.ei_abiversion != 0x00 {writeln!(screen, "Kernel load: Incorrect ei_abiversion."); panic!();}
+    if k_eheader.e_machine != 0x3E {writeln!(screen, "Kernel load: Incorrect e_machine."); panic!();}
+    //Print ELF header info
+    writeln!(screen, "Kernel Entry Point:                 0x{:04X}", k_eheader.e_entry);
+    writeln!(screen, "Kernel Program Header Offset:       0x{:04X}", k_eheader.e_phoff);
+    writeln!(screen, "Kernel Section Header Offset:       0x{:04X}", k_eheader.e_shoff);
+    writeln!(screen, "Kernel ELF Header Size:             0x{:04X}", k_eheader.e_ehsize);
+    writeln!(screen, "Kernel Program Header Entry Size:   0x{:04X}", k_eheader.e_phentsize);
+    writeln!(screen, "Kernel Program Header Number:       0x{:04X}", k_eheader.e_phnum);
+    writeln!(screen, "Kernel Section Header Entry Size:   0x{:04X}", k_eheader.e_shentsize);
+    writeln!(screen, "Kernel Section Header Number:       0x{:04X}", k_eheader.e_shnum);
+    writeln!(screen, "Kernel Section Header String Index: 0x{:04X}", k_eheader.e_shstrndx);
+    //Read program headers
+    let mut code_list:Vec<(u64,u64,u64,u64)> = vec![(0,0,0,0);5];
+    let mut code_num = 0;
+    let mut kernel_size = 0;
+    for _ in 0..k_eheader.e_phnum{
+        let pheader = match ELFProgramHeader64::new(&{let mut buf = [0u8;0x38]; fs_kernel.read(&mut buf).expect_success("Kernel file read failed at program header."); buf}, k_eheader.ei_data){
+            Ok(result) => result,
+            Err(error) => panic!("{}", error)
+        };
+        if pheader.p_type == 0x01 {
+            code_list[code_num] = (pheader.p_offset, pheader.p_filesz, pheader.p_vaddr, pheader.p_memsz);
+            code_num = code_num + 1;
+            if pheader.p_vaddr + pheader.p_memsz > kernel_size {
+                kernel_size = pheader.p_vaddr + pheader.p_memsz;
+            }
+        }
+    }
+    writeln!(screen, "Kernel Code Size: 0x{:X}", kernel_size);
+    //Allocate memory for code
+    let kernel_physical_pointer = unsafe { allocate_memory(boot_services, MemoryType::LOADER_CODE, kernel_size as usize, PAGE_SIZE as usize) };
+    for i in 0..code_num{
+        fs_kernel.set_position(code_list[i].0).expect_success("Kernel file read failed at seeking code.");
+        let mut buf:Vec<u8> = vec![0; code_list[i].1 as usize];
+        fs_kernel.read(&mut buf).expect_success("Kernel file read failed at loading code.");
+        unsafe { copy_nonoverlapping(buf.as_ptr(), kernel_physical_pointer.add(code_list[i].2 as usize), code_list[i].3 as usize); }
+    }
+
+    // POINTERS
+    //Physical Memory
+    let physm_oct_phys:      usize = 0o000;
+    let physm_ptr_phys: *mut u8    = 0o000_000_000_000_0000 as *mut u8;
+    let physm_oct_virt:      usize = 0o600;
+    let physm_ptr_virt: *mut u8    = 0o600_000_000_000_0000 as *mut u8;
+    //Kernel
+    let kernl_oct_virt:      usize = 0o400;
+    let kernl_ptr_virt: *mut u8    = 0o400_000_000_000_0000 as *mut u8;
+    //Frame Buffer
+    let frame_ptr_phys: *mut u8    = 0o000_002_000_000_0000 as *mut u8;
+    let frame_oct_virt:      usize = 0o577;
+    let frame_ptr_virt: *mut u8    = 0o577_000_000_000_0000 as *mut u8;
+    //Page Map
+    let pgmap_oct_virt:      usize = 0o777;
+    let pgmap_ptr_virt: *mut u8    = 0o777_000_000_000_0000 as *mut u8;
+
+    // BOOT LOAD
+    let  kernl_efn:      extern "sysv64" fn() -> !;
+    let pml4_knenv: *mut u8;
+    unsafe{
+        // PAGE TABLES
+        //Page Map Level 4: Kernel Environment
+        pml4_knenv = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
+        writeln!(screen, "PML4 KNENV: {:p}", pml4_knenv);
+        write_pte(pml4_knenv, pml4_knenv, pgmap_oct_virt);
+        //Page Map Level 4: EFI Boot
+        let pml4_efibt:*mut u8 = Cr3::read().0.start_address().as_u64() as *mut u8;
+        writeln!(screen, "PML4 EFIBT: {:p}", pml4_efibt);
+        //Page Map Level 3: Physical Memory
+        let pml3_efiph:*mut u8 = read_pte(pml4_efibt, 0);
+        writeln!(screen, "PML3 EFIPH: {:p}", pml3_efiph);
+        write_pte(pml4_knenv, pml3_efiph, physm_oct_phys);
+        write_pte(pml4_knenv, pml3_efiph, physm_oct_virt);
+        //Page Map Level 3: Kernel
+        let pml3_kernl = create_pml3_offset(boot_services, kernel_physical_pointer, kernel_size as usize);
+        writeln!(screen, "PML3 KERNL: {:p}", pml3_kernl);
+        write_pte(pml4_knenv, pml3_kernl, kernl_oct_virt);
+        //Page Map Level 3: Frame Buffer
+        let pml3_frame = create_pml3_offset(boot_services, graphics_frame_pointer, PIXL_SCRN_Y_DIM*PIXL_SCRN_X_DIM*PIXL_SCRN_B_DEP);
+        writeln!(screen, "PML3 FRAME: {:p}", pml3_frame);
+        write_pte(pml4_knenv, pml3_frame, frame_oct_virt);
+
+        // FIND KERNEL ENTRY POINT
+        kernl_efn = transmute::<*mut u8, extern "sysv64" fn() -> !>(kernel_physical_pointer.add(k_eheader.e_entry as usize));
+    }
 
     // COMMAND LINE
     //Enter Read-Evaluate-Print Loop
@@ -234,91 +294,21 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     }
     writeln!(screen, "Simple REPL exited.");
 
-    // LOAD KERNEL
-    //Find kernel on disk
-    let mut fs_root = simple_file_system.open_volume().expect_success("File system root failed to open.");
-    let fs_kernel_handle = fs_root.open("noble", FileMode::Read, FileAttribute::DIRECTORY).expect_success("File system kernel open failed at \"noble\".").
-        open("helium", FileMode::Read, FileAttribute::DIRECTORY).expect_success("File system kernel open failed at \"helium\".").
-        open("x86-64.elf", FileMode::Read, FileAttribute::empty()).expect_success("File system kernel open failed at \"x86-64.elf\".");
-    let mut fs_kernel = unsafe { RegularFile::new(fs_kernel_handle) };
-    writeln!(screen, "Found kernel on file system.");
-    //Read ELF header
-    let k_eheader = match ELFFileHeader64::new(&{let mut buf = [0u8;0x40]; fs_kernel.read(&mut buf).expect_success("Kernel file read failed at ELF header."); buf}){
-        Ok(result) => result,
-        Err(error) => panic!("{}", error)
-    };
-    //Check ELF header validity
-    if k_eheader.ei_osabi != 0x00 {writeln!(screen, "Kernel load: Incorrect ei_osapi."); panic!();}
-    if k_eheader.ei_abiversion != 0x00 {writeln!(screen, "Kernel load: Incorrect ei_abiversion."); panic!();}
-    if k_eheader.e_machine != 0x3E {writeln!(screen, "Kernel load: Incorrect e_machine."); panic!();}
-    //Print ELF header info
-    writeln!(screen, "Kernel Entry Point:                 0x{:04X}", k_eheader.e_entry);
-    writeln!(screen, "Kernel Program Header Offset:       0x{:04X}", k_eheader.e_phoff);
-    writeln!(screen, "Kernel Section Header Offset:       0x{:04X}", k_eheader.e_shoff);
-    writeln!(screen, "Kernel ELF Header Size:             0x{:04X}", k_eheader.e_ehsize);
-    writeln!(screen, "Kernel Program Header Entry Size:   0x{:04X}", k_eheader.e_phentsize);
-    writeln!(screen, "Kernel Program Header Number:       0x{:04X}", k_eheader.e_phnum);
-    writeln!(screen, "Kernel Section Header Entry Size:   0x{:04X}", k_eheader.e_shentsize);
-    writeln!(screen, "Kernel Section Header Number:       0x{:04X}", k_eheader.e_shnum);
-    writeln!(screen, "Kernel Section Header String Index: 0x{:04X}", k_eheader.e_shstrndx);
-    //Read program headers
-    let mut code_list:Vec<(u64,u64,u64,u64)> = vec![(0,0,0,0);5];
-    let mut code_num = 0;
-    let mut kernel_size = 0;
-    for _ in 0..k_eheader.e_phnum{
-        let pheader = match ELFProgramHeader64::new(&{let mut buf = [0u8;0x38]; fs_kernel.read(&mut buf).expect_success("Kernel file read failed at program header."); buf}, k_eheader.ei_data){
-            Ok(result) => result,
-            Err(error) => panic!("{}", error)
-        };
-        if pheader.p_type == 0x01 {
-            code_list[code_num] = (pheader.p_offset, pheader.p_filesz, pheader.p_vaddr, pheader.p_memsz);
-            code_num = code_num + 1;
-            if pheader.p_vaddr + pheader.p_memsz > kernel_size {
-                kernel_size = pheader.p_vaddr + pheader.p_memsz;
-            }
-        }
-    }
-    writeln!(screen, "Kernel Code Size: 0x{:X}", kernel_size);
-    //Allocate memory for code
-    let code_pointer = unsafe { allocate_memory(boot_services, kernel_size as usize, EFI_PAGE_SIZE as usize) };
-    for i in 0..code_num{
-        fs_kernel.set_position(code_list[i].0).expect_success("Kernel file read failed at seeking code.");
-        let mut buf:Vec<u8> = vec![0; code_list[i].1 as usize];
-        fs_kernel.read(&mut buf).expect_success("Kernel file read failed at loading code.");
-        unsafe { copy_nonoverlapping(buf.as_ptr(), code_pointer.add(code_list[i].2 as usize), code_list[i].3 as usize); }
-    }
-
-    // TODO SWITCH MEMORY MAPS
-    //Top level locations
-    let frame_oct = 0o775;
-    let _kernel_oct = 0o776;
-    let table_oct = 0o777;
-    unsafe{
-        //4th level page table to be placed into CR3
-        let pml4:*mut u8 = allocate_memory(boot_services, EFI_PAGE_SIZE as usize, EFI_PAGE_SIZE as usize);
-        write_pte(pml4.add(table_oct), pml4 as u64);
-        //TODO Kernel Page Table
-        //TODO Frame Buffer Page Table
-        let pdpte_frame = create_pdpte_offset(boot_services, graphics_frame_pointer as u64, PIXL_SCRN_Y_DIM*PIXL_SCRN_X_DIM*PIXL_SCRN_B_DEP);
-        write_pte(pml4.add(frame_oct), pdpte_frame as u64);
-        writeln!(screen, "Frame Buffer PDPTE Location: {:p}", pdpte_frame);
-    }
-
-    // BOOT SEQUENCE
-    //Exit Boot Services
+    // EXIT BOOT SERVICES
     let mut memory_map_buffer = [0; 10000];
     let (_table_runtime, _esi) = system_table_boot.exit_boot_services(_handle, &mut memory_map_buffer).expect_success("Boot services exit failed");
     exit_boot_services();
-    //Declare boot services exited
     writeln!(screen, "Boot Services exited.");
-    //Kernel entry
-    let kernel_entry_fn = unsafe { transmute::<*mut u8, extern "sysv64" fn(*mut u8) -> !>(code_pointer.add(k_eheader.e_entry as usize)) };
-    kernel_entry_fn(graphics_frame_pointer);
+
+    // ENTER KERNEL
+    unsafe { asm!("MOV CR3, {0}", in(reg) pml4_knenv as u64, options(nostack)); }
+    writeln!(screen, "Page map swapped.");
+    kernl_efn();
 
     // HALT COMPUTER
-    //writeln!(screen, "Halt reached.");
-    //unsafe { asm!("HLT"); }
-    //loop{}
+    writeln!(screen, "Halt reached.");
+    unsafe { asm!("HLT"); }
+    loop{}
 }
 
 //Set a larger graphics mode
@@ -401,7 +391,7 @@ fn command_mem(screen: &mut Screen, boot_service: &BootServices){
     writeln!(screen, "Usable ranges: {}", descriptors.len());
     for descriptor in descriptors{
         let size_pages = descriptor.page_count;
-        let size = size_pages * EFI_PAGE_SIZE;
+        let size = size_pages * PAGE_SIZE as u64;
         let end_address = descriptor.phys_start + size;
         let mut memory_type_text:&str =                              "RESERVED             ";
         match descriptor.ty {
@@ -493,11 +483,10 @@ fn command_peek(screen: &mut Screen, command: &str) {
 
 // MEMORY FUNCTIONS
 //Allocate memory
-unsafe fn allocate_memory(boot_services: &BootServices, size: usize, align: usize) -> *mut u8 {
-    let mem_ty = MemoryType::LOADER_CODE;
+unsafe fn allocate_memory(boot_services: &BootServices, memory_type: MemoryType, size: usize, align: usize) -> *mut u8 {
     if align > 8 {
         let pointer =
-            if let Ok(pointer_from_services) = boot_services.allocate_pool(mem_ty, size + align).warning_as_error() {
+            if let Ok(pointer_from_services) = boot_services.allocate_pool(memory_type, size + align).warning_as_error() {
                 pointer_from_services
             }
             else {
@@ -512,47 +501,65 @@ unsafe fn allocate_memory(boot_services: &BootServices, size: usize, align: usiz
         return pointer_return
     }
     else {
-        boot_services.allocate_pool(mem_ty, size).warning_as_error().unwrap_or(ptr::null_mut())
+        boot_services.allocate_pool(memory_type, size).warning_as_error().unwrap_or(ptr::null_mut())
     }
+}
+
+unsafe fn allocate_page_zeroed(boot_services: &BootServices, memory_type: MemoryType) -> *mut u8 {
+    let pointer = allocate_memory(boot_services, memory_type, PAGE_SIZE, PAGE_SIZE);
+    for i in 0..PAGE_SIZE{
+        write_volatile(pointer.add(i), 0x00);
+    }
+    return pointer;
 }
 
 //Write page table entry
-unsafe fn write_pte(entry_location: *mut u8, address: u64) -> bool {
-    //Return if invalid address
-    if address | 0o7777 != 0 {return false;}
+unsafe fn write_pte(pt_address: *mut u8, pte_address: *mut u8, offset: usize) -> bool {
+    //Return if invalid addresses
+    if pt_address  as usize % PAGE_SIZE != 0   {return false;}
+    if pte_address as usize % PAGE_SIZE != 0   {return false;}
+    if offset                           >= 512 {return false;}
     //Convert to bytes
-    let bytes = u64::to_le_bytes(address);
-    //Write address
-    for i in 0..8{
-        write_volatile(entry_location.add(i), bytes[i]);
+    let bytes = usize::to_le_bytes(pte_address as usize | 0x003);
+    //Write entry
+    for i in 0..bytes.len(){
+        write_volatile(pt_address.add(offset*8 + i), bytes[i]);
     }
-    //Write flags
-    write_volatile(entry_location, 0b00000001);
     return true;
 }
 
+//Read page table entry
+unsafe fn read_pte(pt_address: *mut u8, offset: usize) -> *mut u8 {
+    let mut bytes: [u8;8] = [0;8];
+    for i in 0..8{
+        bytes[i] = read_volatile(pt_address.add(offset+i));
+    }
+    let num = usize::from_le_bytes(bytes);
+    return ((num/PAGE_SIZE) * PAGE_SIZE) as *mut u8;
+}
+
 //Reserve memory area as page directory pointer table mapped to an offset region of physical memory
-unsafe fn create_pdpte_offset(boot_services:&BootServices, offset: u64, size: usize) -> *mut u8{
+unsafe fn create_pml3_offset(boot_services:&BootServices, start_address: *mut u8, size: usize) -> *mut u8{
     //New level 3 table
-    let pdpte = allocate_memory(boot_services, EFI_PAGE_SIZE as usize, EFI_PAGE_SIZE as usize);
-    let mut pde: *mut u8 = 0 as *mut u8;
-    let mut pte: *mut u8 = 0 as *mut u8;
-    let pages = size/0b0000000000000000001000000000000 + if size%0b0000000000000000001000000000000 != 0 {1} else {0};
+    let pdpt = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
+    let mut pd: *mut u8 = 0 as *mut u8;
+    let mut pt: *mut u8 = 0 as *mut u8;
+    let pages = size/PAGE_SIZE + if size%PAGE_SIZE != 0 {1} else {0};
     for i in 0..pages{
-        if i%0x100 == 0 {
-            if i%0x20000 == 0 {
+        if i%0x200 == 0 {
+            if i%0x40000 == 0 {
                 //New level 2 table
-                pde = allocate_memory(boot_services, EFI_PAGE_SIZE as usize, EFI_PAGE_SIZE as usize);
-                write_pte(pdpte.add(i/0x20000), pde as u64);
+                pd = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
+                write_pte(pdpt, pd, i/0x40000);
             }
             //New level 1 table
-            pte = allocate_memory(boot_services, EFI_PAGE_SIZE as usize, EFI_PAGE_SIZE as usize);
-            write_pte(pde.add(i/0x100), pte as u64);
+            pt = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
+            write_pte(pd, pt, i/0x200);
         }
         //New page
-        write_pte(pte.add(i%0x100), offset + (i*0x100) as u64);
+        write_pte(pt, start_address.add(i*PAGE_SIZE), i%0x200);
     }
-    return pdpte;
+    return pdpt;
 }
 
 
