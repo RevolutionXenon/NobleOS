@@ -19,25 +19,25 @@ use core::ptr::write_volatile;
 use crate::font_handler::retrieve_font_bitmap;
 
 //Constants
-pub const PIXL_SCRN_X_DIM: usize = 1920;                               //PIXEL WIDTH OF SCREEN
-pub const PIXL_SCRN_Y_DIM: usize = 1080;                               //PIXEL HEIGHT OF SCREEN
-pub const PIXL_SCRN_B_DEP: usize = 4;                                  //PIXEL BIT DEPTH
-pub const COLR_WHITE:[u8; PIXL_SCRN_B_DEP] = [0xFF, 0xFF, 0xFF, 0x00]; //COLOR WHITE
-pub const COLR_BLACK:[u8; PIXL_SCRN_B_DEP] = [0x00, 0x00, 0x00, 0x00]; //COLOR BLACK
-pub const COLR_PRRED:[u8; PIXL_SCRN_B_DEP] = [0x00, 0x00, 0xFF, 0x00]; //COLOR PURE RED
-pub const CHAR_SCRN_X_DIM: usize = 120;                                //TEXT MODE WIDTH OF ENTIRE SCREEN
-pub const CHAR_SCRN_Y_DIM: usize = 67;                                 //TEXT MODE HEIGHT OF ENTIRE SCREEN
-pub const CHAR_PRNT_X_POS: usize = 1;                                  //TEXT MODE HORIZONTAL POSITION OF PRINT RESULT WINDOW
-pub const CHAR_PRNT_Y_POS: usize = 2;                                  //TEXT MODE VERTICAL POSITION OF PRINT RESULT WINDOW
-pub const CHAR_PRNT_X_DIM: usize = 118;                                //TEXT MODE WIDTH OF PRINT RESULT WINDOW
-pub const CHAR_PRNT_Y_DIM_DSP: usize = 62;                             //TEXT MODE HEIGHT OF PRINT RESULT WINDOW ON SCREEN
-pub const CHAR_PRNT_Y_DIM_MEM: usize = 400;                            //TEXT MODE HEIGHT OF PRINT RESULT WINDOW IN MEMORY
-pub const CHAR_INPT_X_POS: usize = 1;                                  //TEXT MODE HORIZONTAL POSITION OF INPUT WINDOW
-pub const CHAR_INPT_Y_POS: usize = 65;                                 //TEXT MODE VERTICAL POSITION OF INPUT WINDOW
-pub const CHAR_INPT_X_DIM: usize = 118;                                //TEXT MODE WIDTH OF INPUT WINDOW
-pub const CHAR_INPT_Y_DIM: usize = 1;                                  //TEXT MODE HEIGHT OF INPUT WINDOW
-pub const CHAR_INPT_Y_DIM_MEM: usize = 1;                              //TEXT MODE HEIGHT OF INPUT WINDOW IN MEMORY
-pub const PHOTON_VERSION: &str = "v2021-08-07";                        //CURRENT VERSION OF GRAPHICS LIBRARY
+pub const PHOTON_VERSION:      & str                   = "v2021-08-08";            //CURRENT VERSION OF GRAPHICS LIBRARY
+pub const PIXL_SCRN_X_DIM:       usize                 = 1920;                     //PIXEL WIDTH OF SCREEN
+pub const PIXL_SCRN_Y_DIM:       usize                 = 1080;                     //PIXEL HEIGHT OF SCREEN
+pub const PIXL_SCRN_B_DEP:       usize                 = 4;                        //PIXEL BIT DEPTH
+pub const COLR_WHITE:            [u8; PIXL_SCRN_B_DEP] = [0xFF, 0xFF, 0xFF, 0x00]; //COLOR WHITE
+pub const COLR_BLACK:            [u8; PIXL_SCRN_B_DEP] = [0x00, 0x00, 0x00, 0x00]; //COLOR BLACK
+pub const COLR_PRRED:            [u8; PIXL_SCRN_B_DEP] = [0x00, 0x00, 0xFF, 0x00]; //COLOR PURE RED
+pub const CHAR_SCRN_X_DIM:       usize                 = 120;                      //TEXT MODE WIDTH OF ENTIRE SCREEN
+pub const CHAR_SCRN_Y_DIM:       usize                 = 67;                       //TEXT MODE HEIGHT OF ENTIRE SCREEN
+pub const CHAR_PRNT_X_POS:       usize                 = 1;                        //TEXT MODE HORIZONTAL POSITION OF PRINT RESULT WINDOW
+pub const CHAR_PRNT_Y_POS:       usize                 = 2;                        //TEXT MODE VERTICAL POSITION OF PRINT RESULT WINDOW
+pub const CHAR_PRNT_X_DIM:       usize                 = 118;                      //TEXT MODE WIDTH OF PRINT RESULT WINDOW
+pub const CHAR_PRNT_Y_DIM_DSP:   usize                 = 62;                       //TEXT MODE HEIGHT OF PRINT RESULT WINDOW ON SCREEN
+pub const CHAR_PRNT_Y_DIM_MEM:   usize                 = 400;                      //TEXT MODE HEIGHT OF PRINT RESULT WINDOW IN MEMORY
+pub const CHAR_INPT_X_POS:       usize                 = 1;                        //TEXT MODE HORIZONTAL POSITION OF INPUT WINDOW
+pub const CHAR_INPT_Y_POS:       usize                 = 65;                       //TEXT MODE VERTICAL POSITION OF INPUT WINDOW
+pub const CHAR_INPT_X_DIM:       usize                 = 118;                      //TEXT MODE WIDTH OF INPUT WINDOW
+pub const CHAR_INPT_Y_DIM:       usize                 = 1;                        //TEXT MODE HEIGHT OF INPUT WINDOW
+pub const CHAR_INPT_Y_DIM_MEM:   usize                 = 1;                        //TEXT MODE HEIGHT OF INPUT WINDOW IN MEMORY
 
 
 // STRUCTS
@@ -320,22 +320,22 @@ impl<'a> Screen<'a>{
             let pos: usize = y*CHAR_SCRN_X_DIM + x2;
             let draw: &mut Character = &mut self.screen_charframe[pos];
             let check: char = (*draw).codepoint;
-            if      check == '═' {*draw = Character::new('═',foreground, background);}
-            else if check == '║' {*draw = Character::new('╣',foreground, background);}
-            else if check == '╔' {*draw = Character::new('╦',foreground, background);}
-            else if check == '╗' {*draw = Character::new('╗',foreground, background);}
-            else if check == '╚' {*draw = Character::new('╩',foreground, background);}
-            else if check == '╝' {*draw = Character::new('╝',foreground, background);}
-            else if check == '╞' {*draw = Character::new('═',foreground, background);}
-            else if check == '╠' {*draw = Character::new('╬',foreground, background);}
-            else if check == '╡' {*draw = Character::new('╡',foreground, background);}
-            else if check == '╣' {*draw = Character::new('╣',foreground, background);}
-            else if check == '╥' {*draw = Character::new('╗',foreground, background);}
-            else if check == '╦' {*draw = Character::new('╦',foreground, background);}
-            else if check == '╨' {*draw = Character::new('╝',foreground, background);}
-            else if check == '╩' {*draw = Character::new('╩',foreground, background);}
-            else if check == '╬' {*draw = Character::new('╬',foreground, background);}
-            else                 {*draw = Character::new('╡',foreground, background);}
+            if      check == '═' {*draw = Character::new('═', foreground, background);}
+            else if check == '║' {*draw = Character::new('╣', foreground, background);}
+            else if check == '╔' {*draw = Character::new('╦', foreground, background);}
+            else if check == '╗' {*draw = Character::new('╗', foreground, background);}
+            else if check == '╚' {*draw = Character::new('╩', foreground, background);}
+            else if check == '╝' {*draw = Character::new('╝', foreground, background);}
+            else if check == '╞' {*draw = Character::new('═', foreground, background);}
+            else if check == '╠' {*draw = Character::new('╬', foreground, background);}
+            else if check == '╡' {*draw = Character::new('╡', foreground, background);}
+            else if check == '╣' {*draw = Character::new('╣', foreground, background);}
+            else if check == '╥' {*draw = Character::new('╗', foreground, background);}
+            else if check == '╦' {*draw = Character::new('╦', foreground, background);}
+            else if check == '╨' {*draw = Character::new('╝', foreground, background);}
+            else if check == '╩' {*draw = Character::new('╩', foreground, background);}
+            else if check == '╬' {*draw = Character::new('╬', foreground, background);}
+            else                 {*draw = Character::new('╡', foreground, background);}
         }
     }
 

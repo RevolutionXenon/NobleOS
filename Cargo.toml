@@ -1,5 +1,5 @@
 [workspace]
-members = ["Photon","Hydrogen", "Helium"]
+members = ["Photon", "Gluon", "Hydrogen", "Helium"]
 exclude = []
 
 [profile.dev]

@@ -27,13 +27,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
+name = "gluon"
+version = "0.1.0"
+
+[[package]]
 name = "helium"
 version = "0.1.0"
+dependencies = [
+ "gluon",
+]
 
 [[package]]
 name = "hydrogen"
 version = "0.1.0"
 dependencies = [
+ "gluon",
  "log",
  "photon",
  "rlibc",

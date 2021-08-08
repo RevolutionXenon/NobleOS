@@ -20,6 +20,8 @@ extern crate rlibc;
 extern crate alloc;
 
 //Imports
+use photon::*;
+use gluon::*;
 use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
@@ -47,15 +49,10 @@ use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::table::boot::MemoryType;
 use uefi::table::runtime::ResetType;
 use x86_64::instructions::tlb;
-use x86_64::PhysAddr;
 use x86_64::registers::control::*;
-use x86_64::structures::paging::PhysFrame;
-use x86_64::structures::paging::Size4KiB;
-use photon::*;
 
 //Constants
-const PAGE_SIZE: usize = 0x1000;              //MEMORY PAGE SIZE (4KiB)
-const HYDROGEN_VERSION: &str = "v2021-08-07"; //CURRENT VERSION OF BOOTLOADER
+const HYDROGEN_VERSION: & str = "v2021-08-08"; //CURRENT VERSION OF BOOTLOADER
 
 
 // MAIN
@@ -120,7 +117,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         print_x:          &mut print_x,
     };
     //Wait 2 seconds
-    system_table_boot.boot_services().stall(2_000_000);
+    //system_table_boot.boot_services().stall(2_000_000);
     //User Interface initialization
     screen.draw_hline( CHAR_PRNT_Y_POS-1, 0,                 CHAR_SCRN_X_DIM-1,  COLR_PRRED, COLR_BLACK);
     screen.draw_hline( CHAR_INPT_Y_POS-1, 0,                 CHAR_SCRN_X_DIM-1,  COLR_PRRED, COLR_BLACK);
@@ -182,30 +179,13 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     writeln!(screen, "Kernel Section Header String Index: 0x{:04X}", k_eheader.e_shstrndx);
     writeln!(screen, "Kernel Code Size:                   0x{:04X}", kernel_size);
     //Allocate memory for code
-    let kernl_ptr_phys = unsafe { allocate_memory(boot_services, MemoryType::LOADER_CODE, kernel_size as usize, PAGE_SIZE as usize) };
+    let kernl_ptr_phys = unsafe { allocate_memory(boot_services, MemoryType::LOADER_CODE, kernel_size as usize, PAGE_SIZE_4KIB as usize) };
     for i in 0..code_num{
         fs_kernel.set_position(code_list[i].0).expect_success("Kernel file read failed at seeking code.");
         let mut buf:Vec<u8> = vec![0; code_list[i].1 as usize];
         fs_kernel.read(&mut buf).expect_success("Kernel file read failed at loading code.");
         unsafe { copy_nonoverlapping(buf.as_ptr(), kernl_ptr_phys.add(code_list[i].2 as usize), code_list[i].3 as usize); }
     }
-
-    // POINTERS
-    //Physical Memory
-    let physm_oct_phys:      usize =        0o000;
-    let physm_ptr_phys: *mut u8    = 0o000000_000_000_000_000_0000u64 as *mut u8;
-    let physm_oct_virt:      usize =        0o600;
-    let physm_ptr_virt: *mut u8    = 0o177777_600_000_000_000_0000u64 as *mut u8;
-    //Kernel
-    let kernl_oct_virt:      usize =        0o400;
-    let kernl_ptr_virt: *mut u8    = 0o177777_400_000_000_000_0000u64 as *mut u8;
-    //Frame Buffer
-    let frame_ptr_phys: *mut u8    = 0o000_002_000_000_0000 as *mut u8; //POSSIBLY ONLY QEMU
-    let frame_oct_virt:      usize =        0o577;
-    let frame_ptr_virt: *mut u8    = 0o177777_577_000_000_000_0000u64 as *mut u8;
-    //Page Map
-    let pgmap_oct_virt:      usize =        0o777;
-    let pgmap_ptr_virt: *mut u8    = 0o177777_777_000_000_000_0000u64 as *mut u8;
 
     // BOOT LOAD
     let kernl_efn: extern "sysv64" fn() -> !;
@@ -215,26 +195,27 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         //Page Map Level 4: Kernel Environment
         pml4_knenv = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
         writeln!(screen, "PML4 KNENV: 0o{0:016o} 0x{0:016X}", pml4_knenv as usize);
-        write_pte(pml4_knenv, pml4_knenv, pgmap_oct_virt);
         //Page Map Level 4: EFI Boot
         let pml4_efibt:*mut u8 = Cr3::read().0.start_address().as_u64() as *mut u8;
         writeln!(screen, "PML4 EFIBT: 0o{0:016o} 0x{0:016X}", pml4_efibt as usize);
         //Page Map Level 3: Physical Memory
         let pml3_efiph:*mut u8 = read_pte(pml4_efibt, 0);
         writeln!(screen, "PML3 EFIPH: 0o{0:016o} 0x{0:016X}", pml3_efiph as usize);
-        write_pte(pml4_knenv, pml3_efiph, physm_oct_phys);
-        write_pte(pml4_knenv, pml3_efiph, physm_oct_virt);
         //Page Map Level 3: Kernel
-        let pml3_kernl = create_pml3_offset(boot_services, kernl_ptr_phys, kernel_size as usize);
+        let pml3_kernl = create_pml3_offset_4kib(boot_services, kernl_ptr_phys, kernel_size as usize);
         writeln!(screen, "PML3 KERNL: 0o{0:016o} 0x{0:016X}", pml3_kernl as usize);
-        write_pte(pml4_knenv, pml3_kernl, kernl_oct_virt);
         //Page Map Level 3: Frame Buffer
-        let pml3_frame = create_pml3_offset(boot_services, graphics_frame_pointer, PIXL_SCRN_Y_DIM*PIXL_SCRN_X_DIM*PIXL_SCRN_B_DEP);
+        let pml3_frame = create_pml3_offset_4kib(boot_services, graphics_frame_pointer, PIXL_SCRN_Y_DIM*PIXL_SCRN_X_DIM*PIXL_SCRN_B_DEP);
         writeln!(screen, "PML3 FRAME: 0o{0:016o} 0x{0:016X}", pml3_frame as usize);
-        assert!(write_pte(pml4_knenv, pml3_frame, frame_oct_virt));
+        //Write PML4 Entries
+        write_pte(pml4_knenv, pml4_knenv, PGMAP_VIRT_OCT, PAGE_SIZE_4KIB, false, false, false, false, false, true);
+        write_pte(pml4_knenv, pml3_efiph, PHYSM_PHYS_OCT, PAGE_SIZE_4KIB, false, false, false, false, false, true);
+        write_pte(pml4_knenv, pml3_efiph, PHYSM_VIRT_OCT, PAGE_SIZE_4KIB, false, false, false, false, false, true);
+        write_pte(pml4_knenv, pml3_kernl, KERNL_VIRT_OCT, PAGE_SIZE_4KIB, false, false, false, false, false, true);
+        write_pte(pml4_knenv, pml3_frame, FRAME_VIRT_OCT, PAGE_SIZE_4KIB, false, false, false, false, false, true);
 
         // FIND KERNEL ENTRY POINT
-        kernl_efn = transmute::<*mut u8, extern "sysv64" fn() -> !>(kernl_ptr_virt.add(k_eheader.e_entry as usize));
+        kernl_efn = transmute::<*mut u8, extern "sysv64" fn() -> !>(KERNL_VIRT_PTR.add(k_eheader.e_entry as usize));
     }
 
     // COMMAND LINE
@@ -400,7 +381,7 @@ fn command_mem(screen: &mut Screen, boot_service: &BootServices){
     writeln!(screen, "Usable ranges: {}", descriptors.len());
     for descriptor in descriptors{
         let size_pages = descriptor.page_count;
-        let size = size_pages * PAGE_SIZE as u64;
+        let size = size_pages * PAGE_SIZE_4KIB as u64;
         let end_address = descriptor.phys_start + size;
         let mut memory_type_text:&str =                              "RESERVED             ";
         match descriptor.ty {
@@ -502,22 +483,32 @@ unsafe fn allocate_memory(boot_services: &BootServices, memory_type: MemoryType,
     }
 }
 
+//Allocate memory which has been zeroed
 unsafe fn allocate_page_zeroed(boot_services: &BootServices, memory_type: MemoryType) -> *mut u8 {
-    let pointer = allocate_memory(boot_services, memory_type, PAGE_SIZE, PAGE_SIZE);
-    for i in 0..PAGE_SIZE{
+    let pointer = allocate_memory(boot_services, memory_type, PAGE_SIZE_4KIB, PAGE_SIZE_4KIB);
+    for i in 0..PAGE_SIZE_4KIB{
         write_volatile(pointer.add(i), 0x00);
     }
     return pointer;
 }
 
 //Write page table entry
-unsafe fn write_pte(pt_address: *mut u8, pte_address: *mut u8, offset: usize) -> bool {
+unsafe fn write_pte(pt_address: *mut u8, pte_address: *mut u8, offset: usize, align: usize, global: bool, large_size: bool, cache_disable: bool, write_through: bool, supervisor: bool, read_write: bool) -> bool {
     //Return if invalid addresses
-    if pt_address  as usize % PAGE_SIZE != 0   {return false;}
-    if pte_address as usize % PAGE_SIZE != 0   {return false;}
+    if pt_address  as usize % align != 0   {return false;}
+    if pte_address as usize % align != 0   {return false;}
     if offset                           >= 512 {return false;}
+    //Set flags
+    let mut pte = pte_address as usize;
+    if global        {pte |= 0b0001_0000_0000;}
+    if large_size    {pte |= 0b0000_1000_0000;}
+    if cache_disable {pte |= 0b0000_0001_0000;}
+    if write_through {pte |= 0b0000_0000_1000;}
+    if supervisor    {pte |= 0b0000_0000_0100;}
+    if read_write    {pte |= 0b0000_0000_0010;}
+                      pte |= 0b0000_0000_0001;
     //Convert to bytes
-    let bytes = usize::to_le_bytes(pte_address as usize | 0x003);
+    let bytes = usize::to_le_bytes(pte | 0x001);
     //Write entry
     for i in 0..bytes.len(){
         write_volatile(pt_address.add(offset*8 + i), bytes[i]);
@@ -532,33 +523,63 @@ unsafe fn read_pte(pt_address: *mut u8, offset: usize) -> *mut u8 {
         bytes[i] = read_volatile(pt_address.add(offset+i));
     }
     let num = usize::from_le_bytes(bytes);
-    return ((num/PAGE_SIZE) * PAGE_SIZE) as *mut u8;
+    return ((num/PAGE_SIZE_4KIB) * PAGE_SIZE_4KIB) as *mut u8;
 }
 
-//Reserve memory area as page directory pointer table mapped to an offset region of physical memory
-unsafe fn create_pml3_offset(boot_services:&BootServices, start_address: *mut u8, size: usize) -> *mut u8{
-    //New level 3 table
-    let pdpt = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
-    let mut pd: *mut u8 = 0 as *mut u8;
-    let mut pt: *mut u8 = 0 as *mut u8;
-    let pages = size/PAGE_SIZE + if size%PAGE_SIZE != 0 {1} else {0};
-    for i in 0..pages{
-        if i%0x200 == 0 {
-            if i%0x40000 == 0 {
-                //New level 2 table
-                pd = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
-                write_pte(pdpt, pd, i/0x40000);
+//Create a Level 3 PAge Map From a Physical Offset Using 4KiB Pages
+unsafe fn create_pml3_offset_4kib(boot_services:&BootServices, start_address: *mut u8, size: usize) -> *mut u8 {
+    //Check Alignment
+    if start_address as usize % PAGE_SIZE_4KIB !=0 {return 0 as *mut u8;}
+    //New PML3
+    let pml3 = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
+    //Lower Page Maps
+    let mut pml2: *mut u8 = 0 as *mut u8;
+    let mut pml1: *mut u8 = 0 as *mut u8;
+    //Number of 4KiB pages
+    let pages = size/PAGE_SIZE_4KIB + if size%PAGE_SIZE_4KIB != 0 {1} else {0};
+    //Allocation Loop
+    for i in 0..pages {
+        if i%PAGE_NMBR_LVL1 == 0 {
+            if i%PAGE_NMBR_LVL2 == 0 {
+                //New PML2
+                pml2 = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
+                write_pte(pml3, pml2, i/PAGE_NMBR_LVL2, PAGE_SIZE_4KIB, false, false, false, false, false, true);
             }
-            //New level 1 table
-            pt = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
-            write_pte(pd, pt, i/0x200);
+            //New PML1
+            pml1 = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
+            write_pte(pml2, pml1, i/PAGE_NMBR_LVL1, PAGE_SIZE_4KIB, false, false, false, false, false, true);
         }
-        //New page
-        write_pte(pt, start_address.add(i*PAGE_SIZE), i%0x200);
+        //New 4KiB Page
+        write_pte(pml1, start_address.add(i*PAGE_SIZE_4KIB), i%PAGE_NMBR_LVL1, PAGE_SIZE_4KIB, false, false, false, false, false, true);
     }
-    return pdpt;
+    //Finish
+    return pml3;
 }
 
+//Create a Level 3 PAge Map From a Physical Offset Using 2MiB Pages (FUNCTION DOES NOT WORK YET)
+unsafe fn create_pml3_offset_2mib(boot_services: &BootServices, start_address: *mut u8, size: usize) -> *mut u8 {
+    //Check Alignment
+    if start_address as usize % PAGE_SIZE_2MIB !=0 {return 0 as *mut u8;}
+    //New PML3
+    let pml3 = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
+    //Lower Page Maps
+    let mut pml2: *mut u8 = 0 as *mut u8;
+    //Number of 2MiB Pages
+    let pages = size/PAGE_SIZE_2MIB + if size%PAGE_SIZE_2MIB != 0 {1} else {0};
+    //Allocation Loop
+    for i in 0..pages {
+        if i%PAGE_NMBR_LVL1 == 0 {
+            //New PML2
+            pml2 = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
+            write_pte(pml3, pml2, i/PAGE_NMBR_LVL1, PAGE_SIZE_4KIB, false, false, false, false, false, true);
+        }
+        //New 2MiB Page
+        let b = write_pte(pml2, start_address.add(i*PAGE_SIZE_2MIB), i%PAGE_NMBR_LVL1, PAGE_SIZE_2MIB, false, true, false, false, false, true);
+        if !b {panic!("2MIB")};
+    }
+    //Finish
+    return pml3;
+}
 
 // STRUCTS
 //64-bit ELF File Header
