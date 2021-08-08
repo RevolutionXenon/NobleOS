@@ -46,6 +46,7 @@ use uefi::proto::media::file::RegularFile;
 use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::table::boot::MemoryType;
 use uefi::table::runtime::ResetType;
+use x86_64::instructions::tlb;
 use x86_64::PhysAddr;
 use x86_64::registers::control::*;
 use x86_64::structures::paging::PhysFrame;
@@ -181,33 +182,33 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     writeln!(screen, "Kernel Section Header String Index: 0x{:04X}", k_eheader.e_shstrndx);
     writeln!(screen, "Kernel Code Size:                   0x{:04X}", kernel_size);
     //Allocate memory for code
-    let kernel_physical_pointer = unsafe { allocate_memory(boot_services, MemoryType::LOADER_CODE, kernel_size as usize, PAGE_SIZE as usize) };
+    let kernl_ptr_phys = unsafe { allocate_memory(boot_services, MemoryType::LOADER_CODE, kernel_size as usize, PAGE_SIZE as usize) };
     for i in 0..code_num{
         fs_kernel.set_position(code_list[i].0).expect_success("Kernel file read failed at seeking code.");
         let mut buf:Vec<u8> = vec![0; code_list[i].1 as usize];
         fs_kernel.read(&mut buf).expect_success("Kernel file read failed at loading code.");
-        unsafe { copy_nonoverlapping(buf.as_ptr(), kernel_physical_pointer.add(code_list[i].2 as usize), code_list[i].3 as usize); }
+        unsafe { copy_nonoverlapping(buf.as_ptr(), kernl_ptr_phys.add(code_list[i].2 as usize), code_list[i].3 as usize); }
     }
 
     // POINTERS
     //Physical Memory
-    let physm_oct_phys:      usize = 0o000; // 000 // 0x000
-    let physm_ptr_phys: *mut u8    = 0o000_000_000_000_0000 as *mut u8;
-    let physm_oct_virt:      usize = 0o600; // 384 // 0xC00
-    let physm_ptr_virt: *mut u8    = 0o600_000_000_000_0000 as *mut u8;
+    let physm_oct_phys:      usize =        0o000;
+    let physm_ptr_phys: *mut u8    = 0o000000_000_000_000_000_0000u64 as *mut u8;
+    let physm_oct_virt:      usize =        0o600;
+    let physm_ptr_virt: *mut u8    = 0o177777_600_000_000_000_0000u64 as *mut u8;
     //Kernel
-    let kernl_oct_virt:      usize = 0o400; // 256 // 0x800
-    let kernl_ptr_virt: *mut u8    = 0o400_000_000_000_0000 as *mut u8;
+    let kernl_oct_virt:      usize =        0o400;
+    let kernl_ptr_virt: *mut u8    = 0o177777_400_000_000_000_0000u64 as *mut u8;
     //Frame Buffer
-    let frame_ptr_phys: *mut u8    = 0o000_002_000_000_0000 as *mut u8;
-    let frame_oct_virt:      usize = 0o577; // 383 // 0xBF8
-    let frame_ptr_virt: *mut u8    = 0o577_000_000_000_0000 as *mut u8;
+    let frame_ptr_phys: *mut u8    = 0o000_002_000_000_0000 as *mut u8; //POSSIBLY ONLY QEMU
+    let frame_oct_virt:      usize =        0o577;
+    let frame_ptr_virt: *mut u8    = 0o177777_577_000_000_000_0000u64 as *mut u8;
     //Page Map
-    let pgmap_oct_virt:      usize = 0o777; // 511 // 0xFF8
-    let pgmap_ptr_virt: *mut u8    = 0o777_000_000_000_0000 as *mut u8;
+    let pgmap_oct_virt:      usize =        0o777;
+    let pgmap_ptr_virt: *mut u8    = 0o177777_777_000_000_000_0000u64 as *mut u8;
 
     // BOOT LOAD
-    let  kernl_efn:      extern "sysv64" fn() -> !;
+    let kernl_efn: extern "sysv64" fn() -> !;
     let pml4_knenv: *mut u8;
     unsafe{
         // PAGE TABLES
@@ -224,16 +225,16 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         write_pte(pml4_knenv, pml3_efiph, physm_oct_phys);
         write_pte(pml4_knenv, pml3_efiph, physm_oct_virt);
         //Page Map Level 3: Kernel
-        let pml3_kernl = create_pml3_offset(boot_services, kernel_physical_pointer, kernel_size as usize);
+        let pml3_kernl = create_pml3_offset(boot_services, kernl_ptr_phys, kernel_size as usize);
         writeln!(screen, "PML3 KERNL: 0o{0:016o} 0x{0:016X}", pml3_kernl as usize);
         write_pte(pml4_knenv, pml3_kernl, kernl_oct_virt);
         //Page Map Level 3: Frame Buffer
         let pml3_frame = create_pml3_offset(boot_services, graphics_frame_pointer, PIXL_SCRN_Y_DIM*PIXL_SCRN_X_DIM*PIXL_SCRN_B_DEP);
         writeln!(screen, "PML3 FRAME: 0o{0:016o} 0x{0:016X}", pml3_frame as usize);
-        write_pte(pml4_knenv, pml3_frame, frame_oct_virt);
+        assert!(write_pte(pml4_knenv, pml3_frame, frame_oct_virt));
 
         // FIND KERNEL ENTRY POINT
-        kernl_efn = transmute::<*mut u8, extern "sysv64" fn() -> !>(kernel_physical_pointer.add(k_eheader.e_entry as usize));
+        kernl_efn = transmute::<*mut u8, extern "sysv64" fn() -> !>(kernl_ptr_virt.add(k_eheader.e_entry as usize));
     }
 
     // COMMAND LINE
@@ -309,6 +310,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
 
     // ENTER KERNEL
     unsafe { asm!("MOV CR3, {0}", in(reg) pml4_knenv as u64, options(nostack)); }
+    tlb::flush_all();
     writeln!(screen, "Page map swapped.");
     kernl_efn();
 

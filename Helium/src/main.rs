@@ -26,23 +26,20 @@ const HELIUM_VERSION: &str = "v2021-08-07"; //CURRENT VERSION OF KERNEL
 pub extern "sysv64" fn _start() -> ! {
     // POINTERS
     //Physical Memory
-    let physm_oct_phys:      usize = 0o000;
-    let physm_ptr_phys: *mut u8    = 0o000_000_000_000_0000 as *mut u8;
-    let physm_oct_virt:      usize = 0o600;
-    let physm_ptr_virt: *mut u8    = 0o600_000_000_000_0000 as *mut u8;
+    let physm_oct_phys:      usize =        0o000;
+    let physm_ptr_phys: *mut u8    = 0o000000_000_000_000_000_0000u64 as *mut u8;
+    let physm_oct_virt:      usize =        0o600;
+    let physm_ptr_virt: *mut u8    = 0o177777_600_000_000_000_0000u64 as *mut u8;
     //Kernel
-    let kernl_oct_virt:      usize = 0o400;
-    let kernl_ptr_virt: *mut u8    = 0o400_000_000_000_0000 as *mut u8;
+    let kernl_oct_virt:      usize =        0o400;
+    let kernl_ptr_virt: *mut u8    = 0o000000_400_000_000_000_0000u64 as *mut u8;
     //Frame Buffer
     let frame_ptr_phys: *mut u8    = 0o000_002_000_000_0000 as *mut u8; //POSSIBLY ONLY QEMU
-    let frame_oct_virt:      usize = 0o577;
-    let frame_ptr_virt: *mut u8    = 0o577_000_000_000_0000 as *mut u8;
+    let frame_oct_virt:      usize =        0o577;
+    let frame_ptr_virt: *mut u8    = 0o177777_577_000_000_000_0000u64 as *mut u8;
     //Page Map
-    let pgmap_oct_virt:      usize = 0o777;
-    let pgmap_ptr_virt: *mut u8    = 0o777_000_000_000_0000 as *mut u8;
-
-    // OPTIONAL PANIC
-    panic!();
+    let pgmap_oct_virt:      usize =        0o777;
+    let pgmap_ptr_virt: *mut u8    = 0o177777_777_000_000_000_0000u64 as *mut u8;
 
     // DIAGNOSTIC DISPLAY
     //Write grey to screen
@@ -55,6 +52,9 @@ pub extern "sysv64" fn _start() -> ! {
             }
         }
     }
+
+    // OPTIONAL PANIC
+    //panic!();
     
     // HALT COMPUTER
     loop{}
