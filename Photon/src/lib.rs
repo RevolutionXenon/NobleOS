@@ -1,3 +1,9 @@
+// PHOTON
+// Photon is the Noble text graphics library:
+// Draw to a frame buffer who's size decided at compile-time
+// Character struct which holds a codepoint and color
+// Screen struct which holds a frame buffer location and backlogs of text
+
 // HEADER
 //Flags
 #![no_std]

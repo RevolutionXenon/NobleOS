@@ -1,3 +1,10 @@
+// HYDROGEN
+// Hydrogen is the Noble bootloader:
+// Memory and control register diagnostics
+// Kernel space binary loading
+// Virtual memory initialization
+// Kernel booting
+
 // HEADER
 //Flags
 #![no_std]
@@ -126,7 +133,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     writeln!(screen, "Welcome to Noble OS");
     writeln!(screen, "Hydrogen Bootloader     {}", HYDROGEN_VERSION);
     writeln!(screen, "Photon Graphics Library {}", PHOTON_VERSION);
-    writeln!(screen, "Frame Buffer Location:  {:p}", graphics_frame_pointer);
+    writeln!(screen, "Frame Buffer Location:  0o{0:016o} 0x{0:016X}", graphics_frame_pointer as usize);
 
     // LOAD KERNEL
     //Find kernel on disk
@@ -145,16 +152,6 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     if k_eheader.ei_osabi != 0x00 {writeln!(screen, "Kernel load: Incorrect ei_osapi."); panic!();}
     if k_eheader.ei_abiversion != 0x00 {writeln!(screen, "Kernel load: Incorrect ei_abiversion."); panic!();}
     if k_eheader.e_machine != 0x3E {writeln!(screen, "Kernel load: Incorrect e_machine."); panic!();}
-    //Print ELF header info
-    writeln!(screen, "Kernel Entry Point:                 0x{:04X}", k_eheader.e_entry);
-    writeln!(screen, "Kernel Program Header Offset:       0x{:04X}", k_eheader.e_phoff);
-    writeln!(screen, "Kernel Section Header Offset:       0x{:04X}", k_eheader.e_shoff);
-    writeln!(screen, "Kernel ELF Header Size:             0x{:04X}", k_eheader.e_ehsize);
-    writeln!(screen, "Kernel Program Header Entry Size:   0x{:04X}", k_eheader.e_phentsize);
-    writeln!(screen, "Kernel Program Header Number:       0x{:04X}", k_eheader.e_phnum);
-    writeln!(screen, "Kernel Section Header Entry Size:   0x{:04X}", k_eheader.e_shentsize);
-    writeln!(screen, "Kernel Section Header Number:       0x{:04X}", k_eheader.e_shnum);
-    writeln!(screen, "Kernel Section Header String Index: 0x{:04X}", k_eheader.e_shstrndx);
     //Read program headers
     let mut code_list:Vec<(u64,u64,u64,u64)> = vec![(0,0,0,0);5];
     let mut code_num = 0;
@@ -172,7 +169,17 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
             }
         }
     }
-    writeln!(screen, "Kernel Code Size: 0x{:X}", kernel_size);
+    //Print ELF header info
+    writeln!(screen, "Kernel Entry Point:                 0x{:04X}", k_eheader.e_entry);
+    writeln!(screen, "Kernel Program Header Offset:       0x{:04X}", k_eheader.e_phoff);
+    writeln!(screen, "Kernel Section Header Offset:       0x{:04X}", k_eheader.e_shoff);
+    writeln!(screen, "Kernel ELF Header Size:             0x{:04X}", k_eheader.e_ehsize);
+    writeln!(screen, "Kernel Program Header Entry Size:   0x{:04X}", k_eheader.e_phentsize);
+    writeln!(screen, "Kernel Program Header Number:       0x{:04X}", k_eheader.e_phnum);
+    writeln!(screen, "Kernel Section Header Entry Size:   0x{:04X}", k_eheader.e_shentsize);
+    writeln!(screen, "Kernel Section Header Number:       0x{:04X}", k_eheader.e_shnum);
+    writeln!(screen, "Kernel Section Header String Index: 0x{:04X}", k_eheader.e_shstrndx);
+    writeln!(screen, "Kernel Code Size:                   0x{:04X}", kernel_size);
     //Allocate memory for code
     let kernel_physical_pointer = unsafe { allocate_memory(boot_services, MemoryType::LOADER_CODE, kernel_size as usize, PAGE_SIZE as usize) };
     for i in 0..code_num{
@@ -184,19 +191,19 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
 
     // POINTERS
     //Physical Memory
-    let physm_oct_phys:      usize = 0o000;
+    let physm_oct_phys:      usize = 0o000; // 000 // 0x000
     let physm_ptr_phys: *mut u8    = 0o000_000_000_000_0000 as *mut u8;
-    let physm_oct_virt:      usize = 0o600;
+    let physm_oct_virt:      usize = 0o600; // 384 // 0xC00
     let physm_ptr_virt: *mut u8    = 0o600_000_000_000_0000 as *mut u8;
     //Kernel
-    let kernl_oct_virt:      usize = 0o400;
+    let kernl_oct_virt:      usize = 0o400; // 256 // 0x800
     let kernl_ptr_virt: *mut u8    = 0o400_000_000_000_0000 as *mut u8;
     //Frame Buffer
     let frame_ptr_phys: *mut u8    = 0o000_002_000_000_0000 as *mut u8;
-    let frame_oct_virt:      usize = 0o577;
+    let frame_oct_virt:      usize = 0o577; // 383 // 0xBF8
     let frame_ptr_virt: *mut u8    = 0o577_000_000_000_0000 as *mut u8;
     //Page Map
-    let pgmap_oct_virt:      usize = 0o777;
+    let pgmap_oct_virt:      usize = 0o777; // 511 // 0xFF8
     let pgmap_ptr_virt: *mut u8    = 0o777_000_000_000_0000 as *mut u8;
 
     // BOOT LOAD
@@ -206,23 +213,23 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         // PAGE TABLES
         //Page Map Level 4: Kernel Environment
         pml4_knenv = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
-        writeln!(screen, "PML4 KNENV: {:p}", pml4_knenv);
+        writeln!(screen, "PML4 KNENV: 0o{0:016o} 0x{0:016X}", pml4_knenv as usize);
         write_pte(pml4_knenv, pml4_knenv, pgmap_oct_virt);
         //Page Map Level 4: EFI Boot
         let pml4_efibt:*mut u8 = Cr3::read().0.start_address().as_u64() as *mut u8;
-        writeln!(screen, "PML4 EFIBT: {:p}", pml4_efibt);
+        writeln!(screen, "PML4 EFIBT: 0o{0:016o} 0x{0:016X}", pml4_efibt as usize);
         //Page Map Level 3: Physical Memory
         let pml3_efiph:*mut u8 = read_pte(pml4_efibt, 0);
-        writeln!(screen, "PML3 EFIPH: {:p}", pml3_efiph);
+        writeln!(screen, "PML3 EFIPH: 0o{0:016o} 0x{0:016X}", pml3_efiph as usize);
         write_pte(pml4_knenv, pml3_efiph, physm_oct_phys);
         write_pte(pml4_knenv, pml3_efiph, physm_oct_virt);
         //Page Map Level 3: Kernel
         let pml3_kernl = create_pml3_offset(boot_services, kernel_physical_pointer, kernel_size as usize);
-        writeln!(screen, "PML3 KERNL: {:p}", pml3_kernl);
+        writeln!(screen, "PML3 KERNL: 0o{0:016o} 0x{0:016X}", pml3_kernl as usize);
         write_pte(pml4_knenv, pml3_kernl, kernl_oct_virt);
         //Page Map Level 3: Frame Buffer
         let pml3_frame = create_pml3_offset(boot_services, graphics_frame_pointer, PIXL_SCRN_Y_DIM*PIXL_SCRN_X_DIM*PIXL_SCRN_B_DEP);
-        writeln!(screen, "PML3 FRAME: {:p}", pml3_frame);
+        writeln!(screen, "PML3 FRAME: 0o{0:016o} 0x{0:016X}", pml3_frame as usize);
         write_pte(pml4_knenv, pml3_frame, frame_oct_virt);
 
         // FIND KERNEL ENTRY POINT
@@ -425,24 +432,10 @@ fn command_peek(screen: &mut Screen, command: &str) {
         return;
     }
     //Read numbers from argument
-    let address = match usize::from_str_radix(split[2], 16){
-        Ok(i) => {i},
-        Err(_) => {
-            //Handle if address is not a valid number
-            writeln!(screen, "2nd argument not valid: {}", split[2]);
-            return;
-        }
-    } as *mut u8;
-    let size = match split[3].to_string().parse::<usize>(){
-        Ok(i) => {i},
-        Err(_) => {
-            //Handle if length is not a valid number
-            writeln!(screen, "3rd argument not valid: {}", split[3]);
-            return;
-        }
-    };
+    let size = match split[3].to_string().parse::<usize>(){Ok(i) => {i}, Err(_) => {writeln!(screen, "3rd argument not valid: {}", split[3]); return;}};
     //Read memory
     if split[1].eq_ignore_ascii_case("u64b"){
+        let address = match usize::from_str_radix(split[2], 16){Ok(i) => {i}, Err(_) => {writeln!(screen, "2nd argument not valid: {}", split[2]); return;}} as *mut u8;
         unsafe{
             for i in 0..size {
                 let mut le_bytes:[u8;8] = [0;8];
@@ -454,6 +447,7 @@ fn command_peek(screen: &mut Screen, command: &str) {
         writeln!(screen, "{:p} {}", address, size);
     }
     else if split[1].eq_ignore_ascii_case("u64x"){
+        let address = match usize::from_str_radix(split[2], 16){Ok(i) => {i}, Err(_) => {writeln!(screen, "2nd argument not valid: {}", split[2]); return;}} as *mut u8;
         unsafe {
             for i in 0..size {
                 let mut le_bytes:[u8;8] = [0;8];
@@ -465,12 +459,13 @@ fn command_peek(screen: &mut Screen, command: &str) {
         writeln!(screen, "{:p} {}", address, size);
     }
     else if split[1].eq_ignore_ascii_case("u64o"){
+        let address = match usize::from_str_radix(split[2], 8){Ok(i) => {i}, Err(_) => {writeln!(screen, "2nd argument not valid: {}", split[2]); return;}} as *mut u8;
         unsafe {
             for i in 0..size {
                 let mut le_bytes:[u8;8] = [0;8];
                 for j in 0..8{asm!("mov {0}, [{1}]", out(reg_byte) le_bytes[j], in(reg) address.add(i*8 + j), options(readonly, nostack))}
                 let num = u64::from_le_bytes(le_bytes);
-                writeln!(screen, "0x{:016X}: 0o{:022o}", address as usize + i*8, num);
+                writeln!(screen, "0o{:016o}: 0o{:022o}", address as usize + i*8, num);
             }
         }
         writeln!(screen, "{:p} {}", address, size);

@@ -3,12 +3,6 @@ name = "hydrogen"
 version = "0.1.0"
 edition = "2018"
 
-#Hydrogen is the Noble bootloader:
-# Frame buffer initialization
-# Kernel space binary loading
-# Virtual memory initialization
-# Kernel entry
-
 [features]
 qemu = []
 
