@@ -4,6 +4,7 @@
 // Character struct which holds a codepoint and color
 // Screen struct which holds a frame buffer location and backlogs of text
 
+
 // HEADER
 //Flags
 #![no_std]

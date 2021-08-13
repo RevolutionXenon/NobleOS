@@ -5,6 +5,7 @@
 // Virtual memory initialization
 // Kernel booting
 
+
 // HEADER
 //Flags
 #![no_std]
@@ -20,6 +21,11 @@ extern crate rlibc;
 extern crate alloc;
 
 //Imports
+use gluon::elf_file_header::ApplicationBinaryInterface;
+use gluon::elf_file_header::InstructionSetArchitecture;
+use gluon::elf_file_header::ObjectType;
+use gluon::elf_program_header::ELFProgramHeader;
+use gluon::elf_program_header::ProgramType;
 use photon::*;
 use gluon::*;
 use alloc::format;
@@ -27,7 +33,6 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::convert::TryInto;
 use core::fmt::Write;
 use core::intrinsics::copy_nonoverlapping;
 use core::mem::transmute;
@@ -51,7 +56,7 @@ use uefi::table::runtime::ResetType;
 use x86_64::registers::control::*;
 
 //Constants
-const HYDROGEN_VERSION: & str = "vDEV-2021-08-09"; //CURRENT VERSION OF BOOTLOADER
+const HYDROGEN_VERSION: & str = "vDEV-2021-08-13"; //CURRENT VERSION OF BOOTLOADER
 
 
 // MAIN
@@ -60,16 +65,16 @@ const HYDROGEN_VERSION: & str = "vDEV-2021-08-09"; //CURRENT VERSION OF BOOTLOAD
 fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     // UEFI INITILIZATION
     //Utilities initialization (Alloc & Logger)
-    uefi_services::init(&system_table_boot).expect_success("Utilities initialization failed");
+    uefi_services::init(&system_table_boot).expect_success("UEFI Initialization: Utilities initialization failed.");
     let boot_services = system_table_boot.boot_services();
     //Console reset
     system_table_boot.stdout().reset(false).expect_success("Console reset failed");
     //Watchdog Timer shutoff
-    boot_services.set_watchdog_timer(0, 0x10000, Some(&mut {&mut [0x0058u16, 0x0000u16]}[..])).expect_success("Watchdog Timer shutoff failed");
+    boot_services.set_watchdog_timer(0, 0x10000, Some(&mut {&mut [0x0058u16, 0x0000u16]}[..])).expect_success("UEFI Initialization: Watchdog Timer shutoff failed.");
     //Graphics Output Protocol initialization
     let graphics_output_protocol = match boot_services.locate_protocol::<GraphicsOutput>() {
         Ok(gop) => gop,
-        Err(_) => panic!("Graphics Output Protocol initialization failed at completion")
+        Err(error) => panic!("UEFI Initialization: Graphics Output Protocol not found.")
     };
     let graphics_output_protocol = graphics_output_protocol.expect("Graphics Output Protocol initialization failed at unsafe cell");
     let graphics_output_protocol = unsafe {&mut *graphics_output_protocol.get()};
@@ -93,6 +98,36 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     };
     let input = input.expect("Input initialization failed at unsafe cell");
     let input = unsafe {&mut *input.get()};
+
+    // FILE READ SYSTEM
+    //Wrapper Struct
+    struct FileWrapper<'a>{
+        file: &'a mut RegularFile,
+    }
+    //Locational Read Implementation
+    impl<'a> LocationalRead for FileWrapper<'a>{
+        fn read(&mut self, offset: u64, buffer: &mut [u8]) -> Result<(), &'static str> {
+            self.file.set_position(offset);
+            match self.file.read(buffer) {
+                Ok(completion) => {
+                    let size = completion.unwrap(); 
+                    if size == buffer.len(){
+                        Ok(())
+                    } 
+                    else {
+                        Err("UEFI File Read: Buffer exceeds end of file.")
+                    }
+                },
+                Err(error) => match error.status(){
+                    uefi::Status::NO_MEDIA         => Err("UEFI File Read: No Media."),
+                    uefi::Status::DEVICE_ERROR     => Err("UEFI File Read: Device Error."),
+                    uefi::Status::VOLUME_CORRUPTED => Err("UEFI File Read: Volume Corrupted."),
+                    uefi::Status::BUFFER_TOO_SMALL => Err("UEFI File Read: Buffer Too Small."),
+                    _                              => Err("EUFI File Read: Unexpected Error.")
+                }
+            }
+        }
+    }
 
     // GRAPHICS SETUP
     //Screen variables
@@ -123,9 +158,9 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     screen.draw_hline(CHAR_INPT_Y_POS+1, 0,                 CHAR_SCRN_X_DIM-1,  COLR_PRBLU, COLR_PRBLK);
     screen.draw_vline(0,                 CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1,  COLR_PRBLU, COLR_PRBLK);
     screen.draw_vline(CHAR_SCRN_X_DIM-1, CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1,  COLR_PRBLU, COLR_PRBLK);
-    screen.draw_string("NOBLE OS",            0, 0,                                             COLR_PRWHT, COLR_PRBLK);
-    screen.draw_string("HYDROGEN BOOTLOADER", 0, CHAR_SCRN_X_DIM - 20 - HYDROGEN_VERSION.len(), COLR_PRWHT, COLR_PRBLK);
-    screen.draw_string(HYDROGEN_VERSION,      0, CHAR_SCRN_X_DIM -      HYDROGEN_VERSION.len(), COLR_PRWHT, COLR_PRBLK);
+    screen.draw_string("NOBLE OS",            0, 0,                                             COLR_PRBLU, COLR_PRBLK);
+    screen.draw_string("HYDROGEN BOOTLOADER", 0, CHAR_SCRN_X_DIM - 20 - HYDROGEN_VERSION.len(), COLR_PRBLU, COLR_PRBLK);
+    screen.draw_string(HYDROGEN_VERSION,      0, CHAR_SCRN_X_DIM -      HYDROGEN_VERSION.len(), COLR_PRBLU, COLR_PRBLK);
     screen.characterframe_render();
     writeln!(screen, "Hydrogen Bootloader     {}", HYDROGEN_VERSION);
     writeln!(screen, "Photon Graphics Library {}", PHOTON_VERSION);
@@ -140,53 +175,45 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         open("x86-64.elf", FileMode::Read, FileAttribute::empty()).expect_success("File system kernel open failed at \"x86-64.elf\".");
     let mut sfs_kernel = unsafe { RegularFile::new(sfs_kernel_handle) };
     writeln!(screen, "Found kernel on file system.");
-    //Read ELF header
-    let elfh_kernel = match ELFFileHeader64::new(&{let mut buf = [0u8;0x40]; sfs_kernel.read(&mut buf).expect_success("Kernel file read failed at ELF header."); buf}){
-        Ok(result) => result,
-        Err(error) => panic!("{}", error)
+    //Read kernel file
+    let mut sfs_kernel_wrap = FileWrapper{file: &mut sfs_kernel};
+    let mut kernel_program_buffer = [ELFProgramHeader::default(); 10];
+    let kernel = match ELFFile::new(&mut sfs_kernel_wrap, &mut kernel_program_buffer) {
+        Ok(elffile) =>  {writeln!(screen, "New ELF Reader System Success."); elffile},
+        Err(error) => {writeln!(screen, "New ELF Reader System Failure: {}", error); panic!()},
     };
     //Check ELF header validity
-    if elfh_kernel.ei_osabi != 0x00 {writeln!(screen, "Kernel load: Incorrect ei_osapi."); panic!();}
-    if elfh_kernel.ei_abiversion != 0x00 {writeln!(screen, "Kernel load: Incorrect ei_abiversion."); panic!();}
-    if elfh_kernel.e_machine != 0x3E {writeln!(screen, "Kernel load: Incorrect e_machine."); panic!();}
-    //Read program headers
-    let mut kernel_programs_list:[(u64,u64,u64,u64);16] = [(0,0,0,0);16];
-    let mut kernel_programs_number:usize = 0;
-    let mut kernel_programs_size:u64 = 0;
-    for _ in 0..elfh_kernel.e_phnum{
-        let pheader = match ELFProgramHeader64::new(&{let mut buf = [0u8;0x38]; sfs_kernel.read(&mut buf).expect_success("Kernel file read failed at program header."); buf}, elfh_kernel.ei_data){
-            Ok(result) => result,
-            Err(error) => panic!("{}", error)
-        };
-        if pheader.p_type == 0x01 {
-            kernel_programs_list[kernel_programs_number] = (pheader.p_offset, pheader.p_filesz, pheader.p_vaddr, pheader.p_memsz);
-            kernel_programs_number += 1;
-            if pheader.p_vaddr + pheader.p_memsz > kernel_programs_size {
-                kernel_programs_size = pheader.p_vaddr + pheader.p_memsz;
-            }
-        }
-    }
+    if kernel.file_header.binary_interface         != ApplicationBinaryInterface::None     {writeln!(screen, "Kernel load: Incorrect Application Binary Interface (ei_osabi). Should be SystemV/None (0x00)."); panic!();}
+    if kernel.file_header.binary_interface_version != 0x00                                 {writeln!(screen, "Kernel load: Incorrect Application Binary Interface Version (ei_abiversion). Should be None (0x00)."); panic!();}
+    if kernel.file_header.architecture             != InstructionSetArchitecture::EmX86_64 {writeln!(screen, "Kernel load: Incorrect Instruction Set Architecture (e_machine). Should be x86-64 (0x3E)."); panic!();}
+    if kernel.file_header.object_type              != ObjectType::Shared                   {writeln!(screen, "Kernel Load: Incorrect Object Type (e_type). Should be Dynamic (0x03)."); panic!()}
     //Print ELF header info
-    writeln!(screen, "Kernel Entry Point:                 0x{:04X}", elfh_kernel.e_entry);
-    writeln!(screen, "Kernel Program Header Offset:       0x{:04X}", elfh_kernel.e_phoff);
-    writeln!(screen, "Kernel Section Header Offset:       0x{:04X}", elfh_kernel.e_shoff);
-    writeln!(screen, "Kernel ELF Header Size:             0x{:04X}", elfh_kernel.e_ehsize);
-    writeln!(screen, "Kernel Program Header Entry Size:   0x{:04X}", elfh_kernel.e_phentsize);
-    writeln!(screen, "Kernel Program Header Number:       0x{:04X}", elfh_kernel.e_phnum);
-    writeln!(screen, "Kernel Section Header Entry Size:   0x{:04X}", elfh_kernel.e_shentsize);
-    writeln!(screen, "Kernel Section Header Number:       0x{:04X}", elfh_kernel.e_shnum);
-    writeln!(screen, "Kernel Section Header String Index: 0x{:04X}", elfh_kernel.e_shstrndx);
-    writeln!(screen, "Kernel Code Size:                   0x{:04X}", kernel_programs_size);
+    {
+        writeln!(screen, "Kernel Entry Point:                 0x{:04X}", kernel.file_header.entry_point);
+        writeln!(screen, "Kernel Program Header Offset:       0x{:04X}", kernel.file_header.program_header_offset);
+        writeln!(screen, "Kernel Section Header Offset:       0x{:04X}", kernel.file_header.section_header_offset);
+        writeln!(screen, "Kernel ELF Header Size:             0x{:04X}", kernel.file_header.header_size);
+        writeln!(screen, "Kernel Program Header Entry Size:   0x{:04X}", kernel.file_header.program_header_entry_size);
+        writeln!(screen, "Kernel Program Header Number:       0x{:04X}", kernel.file_header.program_header_number);
+        writeln!(screen, "Kernel Section Header Entry Size:   0x{:04X}", kernel.file_header.section_header_entry_size);
+        writeln!(screen, "Kernel Section Header Number:       0x{:04X}", kernel.file_header.section_header_number);
+        writeln!(screen, "Kernel Section Header String Index: 0x{:04X}", kernel.file_header.string_section_index);
+        writeln!(screen, "Kernel Code Size:                   0x{:04X}", kernel.program_headers.len());
+    }
     //Allocate memory for code
     let kernel_stack_size = PAGE_SIZE_2MIB;
-    let kernel_total_size = kernel_programs_size as usize + kernel_stack_size;
+    writeln!(screen, "Kernel Memory Size (new): {}", kernel.memory_size());
+    let kernel_total_size = kernel.memory_size() as usize + kernel_stack_size;
     let kernl_ptr_phys = unsafe { allocate_memory(boot_services, MemoryType::LOADER_CODE, kernel_total_size, PAGE_SIZE_4KIB as usize) };
-    for i in 0..kernel_programs_number {
-        sfs_kernel.set_position(kernel_programs_list[i].0).expect_success("Kernel file read failed at seeking code.");
-        let mut buf:Vec<u8> = vec![0; kernel_programs_list[i].1 as usize];
-        sfs_kernel.read(&mut buf).expect_success("Kernel file read failed at loading code.");
-        unsafe { copy_nonoverlapping(buf.as_ptr(), kernl_ptr_phys.add(kernel_programs_list[i].2 as usize), kernel_programs_list[i].3 as usize); }
+    //Load code into memory
+    for program_header in kernel.program_headers {
+        if program_header.program_type == ProgramType::Loadable {
+            let mut buf:Vec<u8> = vec![0; program_header.file_size as usize];
+            kernel.file.read(program_header.file_offset, &mut buf);
+            unsafe {copy_nonoverlapping(buf.as_ptr(), kernl_ptr_phys.add(program_header.virtual_address as usize), program_header.memory_size as usize);}
+        }
     }
+    //Dynamic Relocation
 
     // BOOT LOAD
     let kernl_efn: extern "sysv64" fn() -> !;
@@ -217,9 +244,6 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         write_pte(pml4_knenv, pml3_frame, FRAME_VIRT_OCT, PAGE_SIZE_4KIB, false, false, false, false, false, true);
         write_pte(pml4_knenv, pml3_osiph, PHYSM_VIRT_OCT, PAGE_SIZE_4KIB, false, false, false, false, false, true);
         write_pte(pml4_knenv, pml4_knenv, PGMAP_VIRT_OCT, PAGE_SIZE_4KIB, false, false, false, false, false, true);
-
-        // FIND KERNEL ENTRY POINT
-        kernl_efn = transmute::<*mut u8, extern "sysv64" fn() -> !>(KERNL_VIRT_PTR.add(elfh_kernel.e_entry as usize));
     }
 
     // COMMAND LINE
@@ -302,15 +326,65 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         "JMP R15",
 
         stack = in(reg) KERNL_VIRT_PTR as u64 + kernel_total_size as u64,
-        entry = in(reg) KERNL_VIRT_PTR as u64 + elfh_kernel.e_entry,
+        entry = in(reg) KERNL_VIRT_PTR as u64 + kernel.file_header.entry_point,
         pagemap = in(reg) pml4_knenv as u64,
         options(nostack)
     );}
 
     // HALT COMPUTER
     writeln!(screen, "Halt reached.");
-    unsafe { asm!("HLT"); }
-    loop{}
+    unsafe {asm!("HLT");}
+    loop {}
+}
+
+
+// UEFI FUNCTIONS
+//Read a UEFI error status as a string
+fn uefi_error_readout(error: Status) -> &'static str{
+    match error {
+        Status::SUCCESS               => "UEFI Success.",
+        Status::WARN_UNKNOWN_GLYPH    => "UEFI Warning: Unknown Glyph.",
+        Status::WARN_DELETE_FAILURE   => "UEFI Warning: File Delete Failure.",
+        Status::WARN_WRITE_FAILURE    => "UEFI Warning: Handle Write Failure.",
+        Status::WARN_BUFFER_TOO_SMALL => "UEFI Warning: Buffer Too Small, Data Truncated.",
+        Status::WARN_STALE_DATA       => "UEFI Warning: Stale Data",
+        Status::WARN_FILE_SYSTEM      => "UEFI Warning: Buffer Contains File System.",
+        Status::WARN_RESET_REQUIRED   => "UEFI Warning: Reset Required.",
+        Status::LOAD_ERROR            => "UEFI Error: Image Load Error.",
+        Status::INVALID_PARAMETER     => "UEFI Error: Invalid Parameter Provided.",
+        Status::UNSUPPORTED           => "UEFI Error: Unsupported Operation.",
+        Status::BAD_BUFFER_SIZE       => "UEFI Error: Bad Buffer Size.",
+        Status::BUFFER_TOO_SMALL      => "UEFI Error: Buffer Too Small.",
+        Status::NOT_READY             => "UEFI Error: Not Ready.",
+        Status::DEVICE_ERROR          => "UEFI Error: Physical Device Error",
+        Status::WRITE_PROTECTED       => "UEFI Error: Device Write Protected.",
+        Status::OUT_OF_RESOURCES      => "UEFI Error: Out of Resources.",
+        Status::VOLUME_CORRUPTED      => "UEFI Error: Volume Corrupted.",
+        Status::VOLUME_FULL           => "UEFI Error: Volume Full.",
+        Status::NO_MEDIA              => "UEFI Error: Media Missing.",
+        Status::MEDIA_CHANGED         => "UEFI Error: Media Changed.",
+        Status::NOT_FOUND             => "UEFI Error: Item Not Found.",
+        Status::ACCESS_DENIED         => "UEFI Error: Access Denied.",
+        Status::NO_RESPONSE           => "UEFI Error: No Response.",
+        Status::NO_MAPPING            => "UEFI Error: No Mapping.",
+        Status::TIMEOUT               => "UEFI Error: Timeout.",
+        Status::NOT_STARTED           => "UEFI Error: Protocol Not Started.",
+        Status::ALREADY_STARTED       => "UEFI Error: Protocol Already Started.",
+        Status::ABORTED               => "UEFI Error: Operation Aborted.",
+        Status::ICMP_ERROR            => "UEFI Error: Network ICMP Error.",
+        Status::TFTP_ERROR            => "UEFI Error: Network TFTP Error.",
+        Status::PROTOCOL_ERROR        => "UEFI Error: Network Protocol Error.",
+        Status::INCOMPATIBLE_VERSION  => "UEFI Error: Incompatible Version.",
+        Status::SECURITY_VIOLATION    => "UEFI Error: Security Violation.",
+        Status::CRC_ERROR             => "UEFI Error: Cyclic Redundancy Check Error.",
+        Status::END_OF_MEDIA          => "UEFI Error: End of Media Reached.",
+        Status::END_OF_FILE           => "UEFI Error: End of File Reached.",
+        Status::INVALID_LANGUAGE      => "UEFI Error: Invalid Language.",
+        Status::COMPROMISED_DATA      => "UEFI Error: Compromised Data.",
+        Status::IP_ADDRESS_CONFLICT   => "UEFI Error: Network IP Address Conflict.",
+        Status::HTTP_ERROR            => "UEFI Error: Network HTTP Error.",
+        _                             => "UEFI Error: Error Unrecognized.",
+    }
 }
 
 //Set a larger graphics mode
@@ -324,7 +398,7 @@ fn set_graphics_mode(gop: &mut GraphicsOutput) {
 
 
 // COMMAND PROCESSOR
-//Evaluates and executes a bootloader command and returns a code
+//Evaluate and execute a bootloader command and return a code
 fn command_processor(screen: &mut Screen, system_table: &SystemTable<Boot>, command: &str) -> u8 {
     //Print command
     writeln!(screen, ">{}", command);
@@ -612,115 +686,3 @@ unsafe fn create_pml3_offset_1gib(boot_services: &BootServices, start_address: *
     return pml3;
 }
 
-// STRUCTS
-//64-bit ELF File Header
-#[derive(Debug)]
-struct ELFFileHeader64 {
-    ei_magic:      [u8;4],
-    ei_class:      u8,
-    ei_data:       u8,
-    ei_version:    u8,
-    ei_osabi:      u8,
-    ei_abiversion: u8,
-    ei_pad:        [u8;7],
-    e_type:        u16,
-    e_machine:     u16,
-    e_version:     u32,
-    e_entry:       u64,
-    e_phoff:       u64,
-    e_shoff:       u64,
-    e_flags:       [u8;4],
-    e_ehsize:      u16,
-    e_phentsize:   u16,
-    e_phnum:       u16,
-    e_shentsize:   u16,
-    e_shnum:       u16,
-    e_shstrndx:    u16
-}
-impl ELFFileHeader64 {
-    // CONSTRUCTOR
-    pub fn new(head: &[u8;0x40]) -> Result<ELFFileHeader64, &str> {
-        //Check ei_magic
-        if head[0x00..0x04] != [0x7Fu8, 0x45u8, 0x4cu8, 0x46u8]{return Result::Err("ELFHeader64: Invalid ei_magic (magic number).")}
-        //Check ei_class
-        if head[0x04] != 0x02 {return Result::Err("ELFHeader64: Invalid ei_class (bit width).")}
-        //Check ei_data
-        let (u16_fb, u32_fb, u64_fb):(fn([u8;2]) -> u16, fn([u8;4]) -> u32, fn([u8;8]) -> u64) = match head[0x05]{
-            0x01 => (u16::from_le_bytes, u32::from_le_bytes, u64::from_le_bytes),
-            0x02 => (u16::from_be_bytes, u32::from_be_bytes, u64::from_be_bytes),
-            _ => {return Result::Err("ELFHeader64: Invalid ei_data (endianness).")}
-        };
-        //Check ei_version
-        if head[0x06] != 0x01 {return Result::Err("ELFHeader64: Invalid ei_version (ELF version).")}
-        //Check ei_pad
-        if head[0x09..0x10] != [0x00u8; 7] {return Result::Err("ELFHeader64: Invalid ei_pad (padding).")}
-        //Check e_version
-        if u32_fb(head[0x14..0x18].try_into().unwrap()) != 0x01 {return Result::Err("ELFHeader64: Invalid e_version (ELF version).")}
-        //Check e_phoff
-        if u64_fb(head[0x20..0x28].try_into().unwrap()) != 0x40 {return Result::Err("ELFHeader64: Invalid e_phoff (program header offset).")}
-        //Check e_ehsize
-        if u16_fb(head[0x34..0x36].try_into().unwrap()) != 0x40 {return Result::Err("ELFHeader64: Invalid e_ehsize (ELF header size).")}
-        //Check e_phentsize
-        if u16_fb(head[0x36..0x38].try_into().unwrap()) != 0x38 {return Result::Err("ELFHeader64: Invalid e_phentsize (program header entry size).")}
-        //Check e_shentsize
-        if u16_fb(head[0x3A..0x3C].try_into().unwrap()) != 0x40 {return Result::Err("ELFHeader64: Invalid e_shentsize (section header entry size).")}
-        //Check e_shstrndx is not larger than e_shnum
-        if u16_fb(head[0x3E..0x40].try_into().unwrap()) >= u16_fb(head[0x3C..0x3E].try_into().unwrap()) {return Result::Err("Invalid e_shstrndx (section header strings index) according to e_shnum (section header number).")}
-        //Return
-        return Result::Ok(ELFFileHeader64 {
-            ei_magic:             head[0x00..0x04].try_into().unwrap(),
-            ei_class:             head[0x04],
-            ei_data:              head[0x05],
-            ei_version:           head[0x06],
-            ei_osabi:             head[0x07],
-            ei_abiversion:        head[0x08],
-            ei_pad:               head[0x09..0x10].try_into().unwrap(),
-            e_type:        u16_fb(head[0x10..0x12].try_into().unwrap()),
-            e_machine:     u16_fb(head[0x12..0x14].try_into().unwrap()),
-            e_version:     u32_fb(head[0x14..0x18].try_into().unwrap()),
-            e_entry:       u64_fb(head[0x18..0x20].try_into().unwrap()),
-            e_phoff:       u64_fb(head[0x20..0x28].try_into().unwrap()),
-            e_shoff:       u64_fb(head[0x28..0x30].try_into().unwrap()),
-            e_flags:              head[0x30..0x34].try_into().unwrap(),
-            e_ehsize:      u16_fb(head[0x34..0x36].try_into().unwrap()),
-            e_phentsize:   u16_fb(head[0x36..0x38].try_into().unwrap()),
-            e_phnum:       u16_fb(head[0x38..0x3A].try_into().unwrap()),
-            e_shentsize:   u16_fb(head[0x3A..0x3C].try_into().unwrap()),
-            e_shnum:       u16_fb(head[0x3C..0x3E].try_into().unwrap()),
-            e_shstrndx:    u16_fb(head[0x3E..0x40].try_into().unwrap())
-        })
-    }
-}
-
-//64-bit ELF Program Header
-#[derive(Debug)]
-struct ELFProgramHeader64 {
-    p_type:   u32,
-    p_flags:  [u8;4],
-    p_offset: u64,
-    p_vaddr:  u64,
-    p_paddr:  u64,
-    p_filesz: u64,
-    p_memsz:  u64,
-    p_align:  u64
-}
-impl ELFProgramHeader64 {
-    // CONSTRUCTOR
-    pub fn new(head: &[u8;0x38], endianness: u8) -> Result<ELFProgramHeader64, &str>{
-        let (_u16_fb, u32_fb, u64_fb):(fn([u8;2]) -> u16, fn([u8;4]) -> u32, fn([u8;8]) -> u64) = match endianness{
-            0x01 => (u16::from_le_bytes, u32::from_le_bytes, u64::from_le_bytes),
-            0x02 => (u16::from_be_bytes, u32::from_be_bytes, u64::from_be_bytes),
-            _ => {return Result::Err("ELFHeader64: Invalid endianness.")}
-        };
-        return Result::Ok(ELFProgramHeader64 {
-            p_type:   u32_fb(head[0x00..0x04].try_into().unwrap()),
-            p_flags:         head[0x04..0x08].try_into().unwrap(),
-            p_offset: u64_fb(head[0x08..0x10].try_into().unwrap()),
-            p_vaddr:  u64_fb(head[0x10..0x18].try_into().unwrap()),
-            p_paddr:  u64_fb(head[0x18..0x20].try_into().unwrap()),
-            p_filesz: u64_fb(head[0x20..0x28].try_into().unwrap()),
-            p_memsz:  u64_fb(head[0x28..0x30].try_into().unwrap()),
-            p_align:  u64_fb(head[0x30..0x38].try_into().unwrap())
-        })
-    }
-}
