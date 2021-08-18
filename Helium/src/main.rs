@@ -35,7 +35,7 @@ pub extern "sysv64" fn _start() -> ! {
     //Screen Variables
     let whitespace = Character::<BGRX_DEPTH>::new(' ', COLOR_WHT_BGRX, COLOR_BLK_BGRX);
     let redspace   = Character::<BGRX_DEPTH>::new(' ', COLOR_RED_BGRX, COLOR_BLK_BGRX);
-    let renderer = Renderer::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH>::new(FRAME_VIRT_PTR);
+    let renderer = Renderer::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH>::new(FRAME_BUFFER_VIRTUAL_POINTER);
     let mut frame = CharacterFrame::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_FRAME_HEIGHT, F1_FRAME_WIDTH>::new(renderer, whitespace);
     let mut printer = PrintWindow::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_PRINT_LINES, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, F1_PRINT_Y, F1_PRINT_X>::new(renderer, whitespace, whitespace);
     let mut inputter = InputWindow::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_INPUT_LENGTH, F1_INPUT_WIDTH, F1_INPUT_Y, F1_INPUT_X>::new(renderer, whitespace);
@@ -68,7 +68,7 @@ fn panic_handler(panic_info: &PanicInfo) -> ! {
     unsafe {
         let whitespace = Character::<BGRX_DEPTH>::new(' ', COLOR_WHT_BGRX, COLOR_BLK_BGRX);
             let blackspace = Character::<BGRX_DEPTH>::new(' ', COLOR_BLK_BGRX, COLOR_WHT_BGRX);
-            let renderer = Renderer::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH>::new(FRAME_VIRT_PTR);
+            let renderer = Renderer::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH>::new(FRAME_BUFFER_VIRTUAL_POINTER);
             let mut printer = PrintWindow::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_PRINT_HEIGHT, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, F1_PRINT_Y, F1_PRINT_X>::new(renderer, blackspace, whitespace);
             printer.push_render("KERNEL PANIC!\n", blackspace);
             writeln!(printer, "{}", panic_info);

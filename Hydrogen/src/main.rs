@@ -20,12 +20,14 @@
 extern crate rlibc;
 extern crate alloc;
 
+use gluon::program::ProgramIterator;
+use gluon::program_dynamic_entry::ProgramDynamicEntryIterator;
 //Imports
-use gluon::elf_file_header::ApplicationBinaryInterface;
-use gluon::elf_file_header::InstructionSetArchitecture;
-use gluon::elf_file_header::ObjectType;
-use gluon::elf_program_header::ELFProgramHeader;
-use gluon::elf_program_header::ProgramType;
+use gluon::header::ApplicationBinaryInterface;
+use gluon::header::InstructionSetArchitecture;
+use gluon::header::ObjectType;
+use gluon::program::Program;
+use gluon::program::ProgramType;
 use photon::*;
 use gluon::*;
 use alloc::format;
@@ -33,8 +35,8 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::cell::RefCell;
 use core::fmt::Write;
-use core::intrinsics::copy_nonoverlapping;
 use core::panic::PanicInfo;
 use core::ptr;
 use core::ptr::read_volatile;
@@ -56,7 +58,8 @@ use uefi::table::runtime::ResetType;
 use x86_64::registers::control::*;
 
 //Constants
-const HYDROGEN_VERSION: & str = "vDEV-2021-08-15";        //CURRENT VERSION OF BOOTLOADER
+const HYDROGEN_VERSION: & str = "vDEV-2021-08-18"; //CURRENT VERSION OF BOOTLOADER
+
 
 // MAIN
 //Main Entry Point After UEFI Boot
@@ -94,14 +97,14 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     //Simple File System initialization
     let simple_file_system = match boot_services.locate_protocol::<SimpleFileSystem>() {
         Ok(sfs) => sfs,
-        Err(error) => panic!(uefi_error_readout(error.status())),
+        Err(error) => panic!("{}", uefi_error_readout(error.status())),
     };
     let simple_file_system = simple_file_system.expect("Simjple File System initialization failed at unsafe cell.");
     let simple_file_system = unsafe {&mut *simple_file_system.get()};
     //Input initialization
     let input = match boot_services.locate_protocol::<Input>() {
         Ok(ink) => ink,
-        Err(error) => panic!(uefi_error_readout(error.status())),
+        Err(error) => panic!("{}", uefi_error_readout(error.status())),
     };
     let input = input.expect("Input initialization failed at unsafe cell.");
     let input = unsafe {&mut *input.get()};
@@ -109,23 +112,28 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     // FILE READ SYSTEM
     //Wrapper Struct
     struct FileWrapper<'a>{
-        file: &'a mut RegularFile,
+        ref_cell: RefCell<&'a mut RegularFile>,
     }
     //Locational Read Implementation
     impl<'a> LocationalRead for FileWrapper<'a>{
-        fn read(&mut self, offset: usize, buffer: &mut [u8]) -> Result<(), &'static str> {
-            self.file.set_position(offset as u64);
-            match self.file.read(buffer) {
-                Ok(completion) => {
-                    let size = completion.unwrap(); 
-                    if size == buffer.len(){
-                        Ok(())
-                    } 
-                    else {
-                        Err("UEFI File Read: Buffer exceeds end of file.")
+        fn read(&self, offset: usize, buffer: &mut [u8]) -> Result<(), &'static str> {
+            match self.ref_cell.try_borrow_mut() {
+                Ok(mut file) => {
+                    file.set_position(offset as u64);
+                    match file.read(buffer) {
+                        Ok(completion) => {
+                            let size = completion.unwrap(); 
+                            if size == buffer.len() {
+                                Ok(())
+                            } 
+                            else {
+                                Err("UEFI File Read: Buffer exceeds end of file.")
+                            }
+                        },
+                        Err(error) => Err(uefi_error_readout(error.status())),
                     }
                 },
-                Err(error) => Err(uefi_error_readout(error.status())),
+                Err(error) => {panic!("{}", error)}
             }
         }
     }
@@ -141,6 +149,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     frame.horizontal_string("HYDROGEN BOOTLOADER", 0, F1_FRAME_WIDTH - 20 - HYDROGEN_VERSION.len(), bluespace);
     frame.horizontal_string(HYDROGEN_VERSION,      0, F1_FRAME_WIDTH -      HYDROGEN_VERSION.len(), bluespace);
     frame.render();
+    writeln!(printer, "=== WELCOME TO NOBLE OS ===");
     writeln!(printer, "Hydrogen Bootloader     {}", HYDROGEN_VERSION);
     writeln!(printer, "Photon Graphics Library {}", PHOTON_VERSION);
     writeln!(printer, "Gluon Memory Library    {}", GLUON_VERSION);
@@ -155,11 +164,10 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     let mut sfs_kernel = unsafe {RegularFile::new(sfs_kernel_handle)};
     writeln!(printer, "Found kernel on file system.");
     //Read kernel file
-    let mut sfs_kernel_wrap = FileWrapper{file: &mut sfs_kernel};
-    let mut kernel_program_buffer = [ELFProgramHeader::default(); 10];
-    let mut kernel = match ELFFile::new(&mut sfs_kernel_wrap, &mut kernel_program_buffer) {
+    let mut sfs_kernel_wrap = FileWrapper{ref_cell: RefCell::new(&mut sfs_kernel)};
+    let mut kernel = match ELFFile::new(&mut sfs_kernel_wrap) {
         Ok(elffile) =>  elffile,
-        Err(error) => panic!(error),
+        Err(error) => panic!("{}", error),
     };
     //Check ELF header validity
     if kernel.file_header.binary_interface         != ApplicationBinaryInterface::None     {writeln!(printer, "Kernel load: Incorrect Application Binary Interface (ei_osabi). Should be SystemV/None (0x00)."); panic!();}
@@ -168,6 +176,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     if kernel.file_header.object_type              != ObjectType::Shared                   {writeln!(printer, "Kernel Load: Incorrect Object Type (e_type). Should be Dynamic (0x03)."); panic!()}
     //Print ELF header info
     {
+        writeln!(printer, "=== KERNEL INFO ===");
         writeln!(printer, "Kernel Entry Point:                 0x{:16X}", kernel.file_header.entry_point);
         writeln!(printer, "Kernel Program Header Offset:       0x{:16X}", kernel.file_header.program_header_offset);
         writeln!(printer, "Kernel Section Header Offset:       0x{:16X}", kernel.file_header.section_header_offset);
@@ -177,31 +186,46 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         writeln!(printer, "Kernel Section Header Entry Size:   0x{:16X}", kernel.file_header.section_header_entry_size);
         writeln!(printer, "Kernel Section Header Number:       0x{:16X}", kernel.file_header.section_header_number);
         writeln!(printer, "Kernel Section Header String Index: 0x{:16X}", kernel.file_header.string_section_index);
-        writeln!(printer, "Kernel Code Size:                   0x{:16X}", kernel.memory_size());
+        writeln!(printer, "Kernel Code Size:                   0x{:16X}", kernel.program_memory_size());
     }
     //Allocate memory for code
     let kernel_stack_size: usize = PAGE_SIZE_2MIB;
-    let kernel_total_size: usize = kernel.memory_size() as usize + kernel_stack_size;
+    let kernel_total_size: usize = kernel.program_memory_size() as usize + kernel_stack_size;
     let kernel_physical: *mut u8 = unsafe { allocate_memory(boot_services, MemoryType::LOADER_CODE, kernel_total_size, PAGE_SIZE_4KIB as usize) };
     //Load code into memory
-    /*for program_header in kernel.program_headers {
-        if program_header.program_type == ProgramType::Loadable {
-            let mut buf:Vec<u8> = vec![0; program_header.file_size as usize];
-            kernel.file.read(program_header.file_offset as usize, &mut buf);
-            unsafe {copy_nonoverlapping(buf.as_ptr(), kernl_ptr_phys.add(program_header.virtual_address as usize), program_header.memory_size as usize);}
-        }
-    }*/
     kernel.load(kernel_physical);
-    //Dynamic Relocation
-    for program_header in kernel.program_headers {
-        if program_header.program_type == ProgramType::Dynamic {
-
+    //Check
+    writeln!(printer, "=== PROGRAMS ===");
+    for program in ProgramIterator::new(kernel.file, &kernel.file_header) {
+        match program {
+            Ok(program) => {writeln!(printer, "  Program Found: {:?}", program);},
+            Err(error) => {writeln!(printer, "  Program Error: {}", error);}
+        }
+    }
+    //Relocation
+    writeln!(printer, "=== DYNAMIC INFO ===");
+    for program in ProgramIterator::new(kernel.file, &kernel.file_header) {
+        match program {
+            Ok(program) => {
+                if program.program_type == ProgramType::Dynamic {
+                    writeln!(printer, "Dynamic Table Found: {:?}", program);
+                    let dynamic_table = ProgramDynamicEntryIterator::new(kernel.file, &kernel.file_header, &program);
+                    for dynamic_entry in dynamic_table {
+                        match dynamic_entry {
+                            Ok(entry) => {writeln!(printer, "  Dynamic Table Entry: {:?}", entry);},
+                            Err(error) => {writeln!(printer, "  Dynamic Table Error: {}", error);},
+                        }
+                    }
+                }
+            },
+            Err(_) => {},
         }
     }
 
     // BOOT LOAD
     let pml4_knenv: *mut u8;
     unsafe {
+        writeln!(printer, "=== PAGE TABLES ===");
         // PAGE TABLES
         //Page Map Level 4: Kernel Environment
         pml4_knenv = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
@@ -222,11 +246,11 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         let pml3_frame = create_pml3_offset_2mib(boot_services, graphics_frame_pointer, F1_SCREEN_HEIGHT*F1_SCREEN_WIDTH*BGRX_DEPTH);
         writeln!(printer, "PML3 FRAME: 0o{0:016o} 0x{0:016X}", pml3_frame as usize);
         //Write PML4 Entries
-        write_pte(pml4_knenv, pml3_efiph, PHYSM_PHYS_OCT, PAGE_SIZE_4KIB, false, false, false, false, false, true);
-        write_pte(pml4_knenv, pml3_kernl, KERNL_VIRT_OCT, PAGE_SIZE_4KIB, false, false, false, false, false, true);
-        write_pte(pml4_knenv, pml3_frame, FRAME_VIRT_OCT, PAGE_SIZE_4KIB, false, false, false, false, false, true);
-        write_pte(pml4_knenv, pml3_osiph, PHYSM_VIRT_OCT, PAGE_SIZE_4KIB, false, false, false, false, false, true);
-        write_pte(pml4_knenv, pml4_knenv, PGMAP_VIRT_OCT, PAGE_SIZE_4KIB, false, false, false, false, false, true);
+        write_pte(pml4_knenv, pml3_efiph, PHYSICAL_MEMORY_PHYSICAL_OCTAL, PAGE_SIZE_4KIB, false, false, false, false, false, true);
+        write_pte(pml4_knenv, pml3_kernl, KERNEL_VIRTUAL_OCTAL, PAGE_SIZE_4KIB, false, false, false, false, false, true);
+        write_pte(pml4_knenv, pml3_frame, FRAME_BUFFER_VIRTUAL_OCTAL, PAGE_SIZE_4KIB, false, false, false, false, false, true);
+        write_pte(pml4_knenv, pml3_osiph, PHYSICAL_MEMORY_VIRTUAL_OCTAL, PAGE_SIZE_4KIB, false, false, false, false, false, true);
+        write_pte(pml4_knenv, pml4_knenv, PAGE_MAP_VIRTUAL_OCTAL, PAGE_SIZE_4KIB, false, false, false, false, false, true);
     }
 
     // COMMAND LINE
@@ -236,11 +260,11 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         boot_services.wait_for_event(&mut [input.wait_for_key_event()]).expect_success("Boot services event wait failed");
         //Check input key
         let input_key = input.read_key().expect_success("Key input failed").unwrap();
-        match input_key{
+        match input_key {
             //Printable Key
-            Key::Printable(input_char16) => {
+            Key::Printable(input_ucs16) => {
                 //Convert to usable type
-                let input_char = char::from(input_char16);
+                let input_char = char::from(input_ucs16);
                 //User has hit enter
                 if input_char == '\r' {
                     //Return to bottom of screen
@@ -270,24 +294,19 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
             }
             //Modifier or Control Key
             Key::Special(scancode) => {
-                if scancode == ScanCode::UP {
-                    printer.line_up();
-                }
-                else if scancode == ScanCode::DOWN {
-                    printer.line_down();
-                }
-                else if scancode == ScanCode::END {
-                    printer.end_down();
-                }
-                else if scancode == ScanCode::PAGE_UP {
-                    printer.page_up();
-                }
-                else if scancode == ScanCode::PAGE_DOWN {
-                    printer.page_down();
+                match scancode {
+                    ScanCode::HOME      => {printer.end_up();},
+                    ScanCode::END       => {printer.end_down();},
+                    ScanCode::UP        => {printer.line_up();},
+                    ScanCode::DOWN      => {printer.line_down();},
+                    ScanCode::PAGE_UP   => {printer.page_up();},
+                    ScanCode::PAGE_DOWN => {printer.page_down();},
+                    _ => {},
                 }
             }
         }
     }
+    writeln!(printer, "=== BOOTING ===");
     writeln!(printer, "Bootloader Command Line Exited.");
 
     // BOOT SEQUENCE
@@ -305,8 +324,8 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         "MOV RSP, R14",
         "JMP R15",
 
-        stack = in(reg) KERNL_VIRT_PTR as u64 + kernel_total_size as u64,
-        entry = in(reg) KERNL_VIRT_PTR as u64 + kernel.file_header.entry_point,
+        stack = in(reg) KERNEL_VIRTUAL_POINTER as u64 + kernel_total_size as u64,
+        entry = in(reg) KERNEL_VIRTUAL_POINTER as u64 + kernel.file_header.entry_point,
         pagemap = in(reg) pml4_knenv as u64,
         options(nostack)
     );}
@@ -588,7 +607,7 @@ unsafe fn write_pte(pt_address: *mut u8, pte_address: *mut u8, offset: usize, al
     //Return if invalid addresses
     if pt_address  as usize % PAGE_SIZE_4KIB != 0              {return false;}
     if pte_address as usize % align          != 0              {return false;}
-    if offset                                >= PAGE_NMBR_LVL1 {return false;}
+    if offset                                >= PAGE_NUMBER_1 {return false;}
     //Set flags
     let mut pte = pte_address as usize;
     if global        {pte |= 0b0001_0000_0000;}
@@ -631,18 +650,18 @@ unsafe fn create_pml3_offset_4kib(boot_services:&BootServices, start_address: *m
     let pages = size/PAGE_SIZE_4KIB + if size%PAGE_SIZE_4KIB != 0 {1} else {0};
     //Allocation Loop
     for i in 0..pages {
-        if i%PAGE_NMBR_LVL1 == 0 {
-            if i%PAGE_NMBR_LVL2 == 0 {
+        if i%PAGE_NUMBER_1 == 0 {
+            if i%PAGE_NUMBER_2 == 0 {
                 //New PML2
                 pml2 = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
-                write_pte(pml3, pml2, i/PAGE_NMBR_LVL2, PAGE_SIZE_4KIB, false, false, false, false, false, true);
+                write_pte(pml3, pml2, i/PAGE_NUMBER_2, PAGE_SIZE_4KIB, false, false, false, false, false, true);
             }
             //New PML1
             pml1 = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
-            write_pte(pml2, pml1, i/PAGE_NMBR_LVL1, PAGE_SIZE_4KIB, false, false, false, false, false, true);
+            write_pte(pml2, pml1, i/PAGE_NUMBER_1, PAGE_SIZE_4KIB, false, false, false, false, false, true);
         }
         //New 4KiB Page
-        write_pte(pml1, start_address.add(i*PAGE_SIZE_4KIB), i%PAGE_NMBR_LVL1, PAGE_SIZE_4KIB, false, false, false, false, false, true);
+        write_pte(pml1, start_address.add(i*PAGE_SIZE_4KIB), i%PAGE_NUMBER_1, PAGE_SIZE_4KIB, false, false, false, false, false, true);
     }
     //Finish
     return pml3;
@@ -661,13 +680,13 @@ unsafe fn create_pml3_offset_2mib(boot_services: &BootServices, start_address: *
     let pages = size/PAGE_SIZE_2MIB + if size%PAGE_SIZE_2MIB != 0 {1} else {0};
     //Allocation Loop
     for i in 0..pages {
-        if i%PAGE_NMBR_LVL1 == 0 {
+        if i%PAGE_NUMBER_1 == 0 {
             //New PML2
             pml2 = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
-            write_pte(pml3, pml2, i/PAGE_NMBR_LVL1, PAGE_SIZE_4KIB, false, false, false, false, false, true);
+            write_pte(pml3, pml2, i/PAGE_NUMBER_1, PAGE_SIZE_4KIB, false, false, false, false, false, true);
         }
         //New 2MiB Page
-        write_pte(pml2, start_address.add(i*PAGE_SIZE_2MIB), i%PAGE_NMBR_LVL1, PAGE_SIZE_2MIB, false, true, false, false, false, true);
+        write_pte(pml2, start_address.add(i*PAGE_SIZE_2MIB), i%PAGE_NUMBER_1, PAGE_SIZE_2MIB, false, true, false, false, false, true);
     }
     //Finish
     return pml3;

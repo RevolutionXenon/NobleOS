@@ -12,36 +12,35 @@
 //Imports
 use core::convert::TryFrom;
 use core::intrinsics::copy_nonoverlapping;
-use elf_file_header::ELFFileHeader;
-use elf_file_header::ObjectType;
-use elf_program_header::ELFProgramHeader;
-use elf_program_header::ProgramType;
-use elf_dynamic_table::DynamicTableIterator;
-use elf_dynamic_table::DynamicEntryType;
-use elf_dynamic_table::RelocationType;
+use header::Header;
+use header::ObjectType;
+use program::ProgramIterator;
+use program::ProgramType;
+use program_dynamic_entry::ProgramDynamicEntryIterator;
+use program_dynamic_entry::ProgramDynamicEntryType;
 
 //Constants
-pub const GLUON_VERSION:  &    str   = "vDEV-2021-08-12";                             //CURRENT VERSION OF GRAPHICS LIBRARY
-//                                          SIGN PM4 PM3 PM2 PM1 OFFSET
-pub const PHYSM_PHYS_OCT:      usize = 0o________000__________________usize;          //PHYSICAL MEMORY PHYSICAL LOCATION PML4 OFFSET
-pub const PHYSM_PHYS_PTR: *mut u8    = 0o_000000_000_000_000_000_0000_u64 as *mut u8; //PHYSICAL MEMORY PHYSICAL LOCATION POINTER
-pub const KERNL_VIRT_OCT:      usize = 0o________400__________________usize;          //KERNEL VIRTUAL LOCATION PML4 TABLE OFFSET
-pub const KERNL_VIRT_PTR: *mut u8    = 0o_177777_400_000_000_000_0000_u64 as *mut u8; //KERNEL VIRTUAL LOCATION POINTER
-pub const FRAME_VIRT_OCT:      usize = 0o________775__________________usize;          //FRAME BUFFER VIRTUAL LOCATION PML4 OFFSET
-pub const FRAME_VIRT_PTR: *mut u8    = 0o_177777_775_000_000_000_0000_u64 as *mut u8; //FRAME BUFFER VIRTUAL LOCATION POINTER
-pub const PHYSM_VIRT_OCT:      usize = 0o________776__________________usize;          //PHYSICAL MEMORY VIRTUAL LOCATION PML4 OFFSET
-pub const PHYSM_VIRT_PTR: *mut u8    = 0o_177777_776_000_000_000_0000_u64 as *mut u8; //PHYSICAL MEMORY VIRTUAL LOCATION POINTER
-pub const PGMAP_VIRT_OCT:      usize = 0o________777__________________usize;          //PAGE MAP VIRTUAL LOCATION PML4 OFFSET
-pub const PGMAP_VIRT_PTR: *mut u8    = 0o_177777_777_000_000_000_0000_u64 as *mut u8; //PAGE MAP VIRTUAL LOCATION POINTER
-pub const PAGE_SIZE_4KIB:      usize = 0o______________________1_0000_usize;          //MEMORY PAGE SIZE (  4KiB),                            PAGE MAP LEVEL 1 ENTRY SIZE
-pub const PAGE_SIZE_2MIB:      usize = 0o__________________1_000_0000_usize;          //MEMORY PAGE SIZE (  2MiB), PAGE MAP LEVEL 1 CAPACITY, PAGE MAP LEVEL 2 ENTRY SIZE
-pub const PAGE_SIZE_1GIB:      usize = 0o______________1_000_000_0000_usize;          //MEMORY PAGE SIZE (  1GiB), PAGE MAP LEVEL 2 CAPACITY, PAGE MAP LEVEL 3 ENTRY SIZE
-pub const PAGE_SIZE_512G:      usize = 0o__________1_000_000_000_0000_usize;          //MEMORY PAGE SIZE (512GiB), PAGE MAP LEVEL 3 CAPACITY
-pub const PAGE_SIZE_256T:      usize = 0o______1_000_000_000_000_0000_usize;          //MEMORY PAGE SIZE (256TiB), PAGE MAP LEVEL 4 CAPACITY
-pub const PAGE_NMBR_LVL1:      usize = 0o________________________1000_usize;          //NUMBER OF PAGE TABLE ENTRIES 1 LEVEL UP
-pub const PAGE_NMBR_LVL2:      usize = 0o____________________100_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 2 LEVELS UP
-pub const PAGE_NMBR_LVL3:      usize = 0o________________100_000_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 3 LEVELS UP
-pub const PAGE_NMBR_LVL4:      usize = 0o____________100_000_000_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 4 LEVELS UP
+pub const GLUON_VERSION:  &    str   = "vDEV-2021-08-18";                                               //CURRENT VERSION OF GRAPHICS LIBRARY
+//                                                            SIGN PM4 PM3 PM2 PM1 OFFSET
+pub const PHYSICAL_MEMORY_PHYSICAL_OCTAL:        usize = 0o________000__________________usize;          //PHYSICAL MEMORY PHYSICAL LOCATION PML4 OFFSET
+pub const PHYSICAL_MEMORY_PHYSICAL_POINTER: *mut u8    = 0o_000000_000_000_000_000_0000_u64 as *mut u8; //PHYSICAL MEMORY PHYSICAL LOCATION POINTER
+pub const KERNEL_VIRTUAL_OCTAL:                  usize = 0o________400__________________usize;          //KERNEL VIRTUAL LOCATION PML4 TABLE OFFSET
+pub const KERNEL_VIRTUAL_POINTER:           *mut u8    = 0o_177777_400_000_000_000_0000_u64 as *mut u8; //KERNEL VIRTUAL LOCATION POINTER
+pub const FRAME_BUFFER_VIRTUAL_OCTAL:            usize = 0o________775__________________usize;          //FRAME BUFFER VIRTUAL LOCATION PML4 OFFSET
+pub const FRAME_BUFFER_VIRTUAL_POINTER:     *mut u8    = 0o_177777_775_000_000_000_0000_u64 as *mut u8; //FRAME BUFFER VIRTUAL LOCATION POINTER
+pub const PHYSICAL_MEMORY_VIRTUAL_OCTAL:         usize = 0o________776__________________usize;          //PHYSICAL MEMORY VIRTUAL LOCATION PML4 OFFSET
+pub const PHYSICAL_MEMORY_VIRTUAL_POINTER:  *mut u8    = 0o_177777_776_000_000_000_0000_u64 as *mut u8; //PHYSICAL MEMORY VIRTUAL LOCATION POINTER
+pub const PAGE_MAP_VIRTUAL_OCTAL:                usize = 0o________777__________________usize;          //PAGE MAP VIRTUAL LOCATION PML4 OFFSET
+pub const PAGE_MAP_VIRTUAL_POINTER:         *mut u8    = 0o_177777_777_000_000_000_0000_u64 as *mut u8; //PAGE MAP VIRTUAL LOCATION POINTER
+pub const PAGE_SIZE_4KIB:                        usize = 0o______________________1_0000_usize;          //MEMORY PAGE SIZE (  4KiB),                            PAGE MAP LEVEL 1 ENTRY SIZE
+pub const PAGE_SIZE_2MIB:                        usize = 0o__________________1_000_0000_usize;          //MEMORY PAGE SIZE (  2MiB), PAGE MAP LEVEL 1 CAPACITY, PAGE MAP LEVEL 2 ENTRY SIZE
+pub const PAGE_SIZE_1GIB:                        usize = 0o______________1_000_000_0000_usize;          //MEMORY PAGE SIZE (  1GiB), PAGE MAP LEVEL 2 CAPACITY, PAGE MAP LEVEL 3 ENTRY SIZE
+pub const PAGE_SIZE_512G:                        usize = 0o__________1_000_000_000_0000_usize;          //MEMORY PAGE SIZE (512GiB), PAGE MAP LEVEL 3 CAPACITY
+pub const PAGE_SIZE_256T:                        usize = 0o______1_000_000_000_000_0000_usize;          //MEMORY PAGE SIZE (256TiB), PAGE MAP LEVEL 4 CAPACITY
+pub const PAGE_NUMBER_1:                         usize = 0o________________________1000_usize;          //NUMBER OF PAGE TABLE ENTRIES 1 LEVEL UP
+pub const PAGE_NUMBER_2:                         usize = 0o____________________100_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 2 LEVELS UP
+pub const PAGE_NUMBER_3:                         usize = 0o________________100_000_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 3 LEVELS UP
+pub const PAGE_NUMBER_4:                         usize = 0o____________100_000_000_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 4 LEVELS UP
 
 
 // MACROS
@@ -74,59 +73,58 @@ macro_rules!numeric_enum {(
 // TRAITS
 //Locational Read
 pub trait LocationalRead {
-    fn read(&mut self, offset: usize, buffer: &mut [u8]) -> Result<(), &'static str>;
+    fn read(&self, offset: usize, buffer: &mut [u8]) -> Result<(), &'static str>;
 }
 
 
 // STRUCTS
 //Full ELF File Header
+#[derive(Debug)]
 pub struct ELFFile<'a, LR: 'a+LocationalRead> {
-    pub file:            &'a mut LR,
-    pub file_header:             ELFFileHeader,
-    pub program_headers: &'a     [ELFProgramHeader],
+    pub file:    &'a LR,
+    pub file_header: Header,
 }
 impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
     // CONSTRUCTOR
-    pub fn new(file: &'a mut LR, program_header_buffer: &'a mut [ELFProgramHeader]) -> Result<ELFFile<'a, LR>, &'static str> {
+    pub fn new(file: &'a LR) -> Result<ELFFile<'a, LR>, &'static str> {
         //Load File Header
-        let file_header = match ELFFileHeader::new(&{let mut buf:[u8; 0x40] = [0u8; 0x40]; match file.read(0x00,  &mut buf) {Ok(_) => (), Err(error) => return Err(error)}; buf}) {Ok(result) => result, Err(error) => return Err(error)};
-        //Load Program Headers
-        if file_header.program_header_number as usize > program_header_buffer.len() {return Err("ELF File: More than the given maximum number of program headers found.")}
-        for i in 0..file_header.program_header_number as usize {
-            //New Program Header
-            program_header_buffer[i] = match ELFProgramHeader::new(&{let mut buf:[u8; 0x38] = [0u8; 0x38]; match file.read(file_header.header_size as usize + i*file_header.program_header_entry_size as usize, &mut buf) {Ok(_) => (), Err(error) => return Err(error)}; buf}, file_header.bit_width, file_header.endianness) {
-                Ok(valid_program_header)    => valid_program_header,
-                Err(invalid_program_header) => invalid_program_header
-            }
-        }
+        let file_header = Header::new(&{
+            let mut buffer:[u8; 0x40] = [0u8; 0x40]; 
+            file.read(0x00, &mut buffer)?;
+            buffer}
+        )?;
         //Return
         return Ok(ELFFile {
-            file,
+            file: file,
             file_header,
-            program_headers: & program_header_buffer[0..file_header.program_header_number as usize],
         });
     }
 
     // FUNCTIONS
     //Total memory size of program from lowest virtual address to highest virtual address
-    pub fn memory_size(&self) -> u64 {
+    pub fn program_memory_size(&mut self) -> u64 {
         //Buffers
         let mut program_lowest_address:  u64 = 0xFFFF_FFFF_FFFF_FFFF;
         let mut program_highest_address: u64 = 0x0000_0000_0000_0000;
         let mut loadable_found: bool = false;
         //Loop over program headers
-        for program_header in self.program_headers {
-            //Check if program segment is loadable
-            if program_header.program_type == elf_program_header::ProgramType::Loadable {
-                loadable_found = true;
-                //Check if minimum virtual address needs adjusting
-                if program_header.virtual_address < program_lowest_address {
-                    program_lowest_address = program_header.virtual_address;
+        for program in ProgramIterator::new(self.file, &self.file_header) {
+            match program {
+                Ok(program) => {
+                    //Check if program segment is loadable
+                    if program.program_type == program::ProgramType::Loadable {
+                        loadable_found = true;
+                        //Check if minimum virtual address needs adjusting
+                        if program.virtual_address < program_lowest_address {
+                            program_lowest_address = program.virtual_address;
+                        }
+                        //Check if maximum virtual address needs adjusting
+                        if program.virtual_address + program.memory_size > program_highest_address {
+                            program_highest_address = program.virtual_address + program.memory_size;
+                        }
+                    }
                 }
-                //Check if maximum virtual address needs adjusting
-                if program_header.virtual_address + program_header.memory_size > program_highest_address {
-                    program_highest_address = program_header.virtual_address + program_header.memory_size;
-                }
+                Err(_) => {},
             }
         }
         //Return
@@ -134,68 +132,80 @@ impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
     }
 
     //Load File Into Memory (Very Important to Allocate Memory First)
-    pub fn load(&mut self, location: *mut u8) {
-        for program_header in self.program_headers {
-            if program_header.program_type == ProgramType::Loadable {
-                const buffer_size: usize = 512;
-                let mut buffer: [u8; buffer_size] = [0u8; buffer_size];
-                let count = program_header.file_size as usize/buffer_size;
-                for i in 0..count {
-                    self.file.read(program_header.file_offset as usize+i*buffer_size, &mut buffer);
-                    unsafe {copy_nonoverlapping(buffer.as_ptr(), location.add(program_header.virtual_address as usize + i*buffer_size as usize), buffer_size)}
-                }
-                let leftover: usize = program_header.file_size as usize %buffer_size;
-                if leftover != 0 {
-                    self.file.read(program_header.file_offset as usize + count*buffer_size, &mut buffer[0..leftover]);
-                    unsafe {copy_nonoverlapping(buffer.as_ptr(), location.add(program_header.virtual_address as usize + count*buffer_size as usize), leftover)}
-                }
-            }
-        }
-    }
-
-    //Do Relocation (Very Important to Load First)
-    pub fn relocate(&mut self, location: *mut u8) -> Result<(), &'static str> {
-        if self.file_header.object_type != ObjectType::Shared {return Err("ELF File: Object Type Not Yet Supported for Relocation.")}
-        for program_header in self.program_headers {
-            if program_header.program_type == ProgramType::Dynamic {
-                let mut symbol_table_address:                 Option<*const u8> = None;
-                let mut symbol_table_entry_size:              Option<u64>       = None;
-                let mut string_table_address:                 Option<*const u8> = None;
-                let mut string_table_size:                    Option<u64>       = None;
-                let mut implicit_relocation_table_address:    Option<*const u8> = None;
-                let mut implicit_relocation_table_size:       Option<u64>       = None;
-                let mut implicit_relocation_table_entry_size: Option<u64>       = None;
-                let mut explicit_relocation_table_address:    Option<*const u8> = None;
-                let mut explicit_relocation_table_size:       Option<u64>       = None;
-                let mut explicit_relocation_table_entry_size: Option<u64>       = None;
-                let mut procedure_linkage_table_address:      Option<*const u8> = None;
-                let mut procedure_linkage_table_size:         Option<u64>       = None;
-                let mut procedure_linkage_table_type:         RelocationType    = RelocationType::Explicit;
-
-                for dynamic_entry_read in DynamicTableIterator::new(self.file, &self.file_header, program_header) {
-                    match dynamic_entry_read {
-                        Ok(dynamic_entry) => {
-                            match dynamic_entry.entry_type {
-                                DynamicEntryType::Null                             => return Err("ELF File: Encountered Null Dynamic Entry During Relocation."),
-                                DynamicEntryType::ProcedureLinkageTableSize        => procedure_linkage_table_size         = Some(dynamic_entry.value),
-                                DynamicEntryType::ProcedureLinkageTableAddress     => procedure_linkage_table_address      = Some(dynamic_entry.value as *mut u8),
-                                DynamicEntryType::StringTableAddress               => string_table_address                 = Some(dynamic_entry.value as *mut u8),
-                                DynamicEntryType::SymbolTableAddress               => symbol_table_address                 = Some(dynamic_entry.value as *mut u8),
-                                DynamicEntryType::ExplicitRelocationTableAddress   => explicit_relocation_table_address    = Some(dynamic_entry.value as *mut u8),
-                                DynamicEntryType::ExplicitRelocationTableSize      => explicit_relocation_table_size       = Some(dynamic_entry.value),
-                                DynamicEntryType::ExplicitRelocationTableEntrySize => explicit_relocation_table_entry_size = Some(dynamic_entry.value),
-                                DynamicEntryType::StringTableSize                  => string_table_size                    = Some(dynamic_entry.value),
-                                DynamicEntryType::SymbolTableEntrySize             => symbol_table_entry_size              = Some(dynamic_entry.value),
-                                DynamicEntryType::ImplicitRelocationTableAddress   => implicit_relocation_table_address    = Some(dynamic_entry.value as *mut u8),
-                                DynamicEntryType::ImplicitRelocationTableSize      => implicit_relocation_table_size       = Some(dynamic_entry.value),
-                                DynamicEntryType::ImplicitRelocationTableEntrySize => implicit_relocation_table_entry_size = Some(dynamic_entry.value),
-                                DynamicEntryType::ProcedureLinkageTableType        => procedure_linkage_table_type         = RelocationType::try_from(dynamic_entry.value).map_err(|_| "ELF File: Encountered Invalid PLT Type Value.")?,
-                                _ => {},
-                            }
+    pub fn load(&mut self, location: *mut u8) -> Result<(), &'static str> {
+        for program in ProgramIterator::new(self.file, &self.file_header) {
+            match program {
+                Ok(program) => {
+                    if program.program_type == ProgramType::Loadable {
+                        const BUFFER_SIZE: usize = 512;
+                        let mut buffer: [u8; BUFFER_SIZE] = [0u8; BUFFER_SIZE];
+                        let count = program.file_size as usize/BUFFER_SIZE;
+                        for i in 0..count {
+                            self.file.read(program.file_offset as usize+i*BUFFER_SIZE, &mut buffer)?;
+                            unsafe {copy_nonoverlapping(buffer.as_ptr(), location.add(program.virtual_address as usize + i*BUFFER_SIZE as usize), BUFFER_SIZE)}
                         }
-                        Err(_) => (),
+                        let leftover: usize = program.file_size as usize %BUFFER_SIZE;
+                        if leftover != 0 {
+                            self.file.read(program.file_offset as usize + count*BUFFER_SIZE, &mut buffer[0..leftover])?;
+                            unsafe {copy_nonoverlapping(buffer.as_ptr(), location.add(program.virtual_address as usize + count*BUFFER_SIZE as usize), leftover)}
+                        }
                     }
                 }
+                Err(_) => {},
+            }
+        }
+        return Ok(());
+    }
+
+    //Do Relocation (Very Important to Load First) **NOT FINISHED**
+    pub fn relocate(&mut self, location: *mut u8) -> Result<(), &'static str> {
+        if self.file_header.object_type != ObjectType::Shared {return Err("ELF File: Object Type Not Yet Supported for Relocation.")}
+        for program in ProgramIterator::new(self.file, &self.file_header) {
+            match program {
+                Ok(program) => {
+                    if program.program_type == ProgramType::Dynamic {
+                        let mut symbol_table_address:                 Option<*const u8> = None;
+                        let mut symbol_table_entry_size:              Option<u64>       = None;
+                        let mut string_table_address:                 Option<*const u8> = None;
+                        let mut string_table_size:                    Option<u64>       = None;
+                        let mut implicit_relocation_table_address:    Option<*const u8> = None;
+                        let mut implicit_relocation_table_size:       Option<u64>       = None;
+                        let mut implicit_relocation_table_entry_size: Option<u64>       = None;
+                        let mut explicit_relocation_table_address:    Option<*const u8> = None;
+                        let mut explicit_relocation_table_size:       Option<u64>       = None;
+                        let mut explicit_relocation_table_entry_size: Option<u64>       = None;
+                        let mut procedure_linkage_table_address:      Option<*const u8> = None;
+                        let mut procedure_linkage_table_size:         Option<u64>       = None;
+                        let mut procedure_linkage_table_type:         RelocationType    = RelocationType::Explicit;
+                    
+                        for dynamic_entry_read in ProgramDynamicEntryIterator::new(self.file, &self.file_header, &program) {
+                            match dynamic_entry_read {
+                                Ok(dynamic_entry) => {
+                                    match dynamic_entry.entry_type {
+                                        ProgramDynamicEntryType::Null                             => return Err("ELF File: Encountered Null Dynamic Entry During Relocation."),
+                                        ProgramDynamicEntryType::ProcedureLinkageTableSize        => procedure_linkage_table_size         = Some(dynamic_entry.value),
+                                        ProgramDynamicEntryType::ProcedureLinkageTableAddress     => procedure_linkage_table_address      = Some(dynamic_entry.value as *mut u8),
+                                        ProgramDynamicEntryType::StringTableAddress               => string_table_address                 = Some(dynamic_entry.value as *mut u8),
+                                        ProgramDynamicEntryType::SymbolTableAddress               => symbol_table_address                 = Some(dynamic_entry.value as *mut u8),
+                                        ProgramDynamicEntryType::ExplicitRelocationTableAddress   => explicit_relocation_table_address    = Some(dynamic_entry.value as *mut u8),
+                                        ProgramDynamicEntryType::ExplicitRelocationTableSize      => explicit_relocation_table_size       = Some(dynamic_entry.value),
+                                        ProgramDynamicEntryType::ExplicitRelocationTableEntrySize => explicit_relocation_table_entry_size = Some(dynamic_entry.value),
+                                        ProgramDynamicEntryType::StringTableSize                  => string_table_size                    = Some(dynamic_entry.value),
+                                        ProgramDynamicEntryType::SymbolTableEntrySize             => symbol_table_entry_size              = Some(dynamic_entry.value),
+                                        ProgramDynamicEntryType::ImplicitRelocationTableAddress   => implicit_relocation_table_address    = Some(dynamic_entry.value as *mut u8),
+                                        ProgramDynamicEntryType::ImplicitRelocationTableSize      => implicit_relocation_table_size       = Some(dynamic_entry.value),
+                                        ProgramDynamicEntryType::ImplicitRelocationTableEntrySize => implicit_relocation_table_entry_size = Some(dynamic_entry.value),
+                                        ProgramDynamicEntryType::ProcedureLinkageTableType        => procedure_linkage_table_type         = RelocationType::try_from(dynamic_entry.value).map_err(|_| "ELF File: Encountered Invalid PLT Type Value.")?,
+                                        _ => {},
+                                    }
+                                }
+                                Err(_) => (),
+                            }
+                        }
+                        return Err("ELF File: Relocation not yet implemented.")
+                    }
+                },
+                Err(_) => {},
             }
         }
         return Err("ELF File: Dynamic Relocation Program Header Not Found.");
@@ -203,10 +213,9 @@ impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
 }
 
 
-
 // MODULES
 //ELF File Header
-pub mod elf_file_header {
+pub mod header {
     // IMPORTS
     use core::convert::{TryFrom, TryInto};
     use crate::{BitWidth, Endianness};
@@ -214,7 +223,8 @@ pub mod elf_file_header {
     // STRUCTS
     //File Header
     #[derive(Clone, Copy)]
-    pub struct ELFFileHeader {
+    #[derive(Debug)]
+    pub struct Header {
         pub bit_width:                 BitWidth,
         pub endianness:                Endianness,
         pub ident_version:             IdentVersion,
@@ -234,9 +244,9 @@ pub mod elf_file_header {
         pub section_header_number:     u16,
         pub string_section_index:      u16,
     }
-    impl ELFFileHeader {
+    impl Header {
         // CONSTRUCTOR
-        pub fn new(bytes: &[u8]) -> Result<ELFFileHeader, &'static str> {
+        pub fn new(bytes: &[u8]) -> Result<Header, &'static str> {
             if bytes.len()       <  0x10                             {return Err("ELF File Header: Length of data given to parse from not large enough to contain ident.")}
             if bytes[0x00..0x04] != [0x7Fu8, 0x45u8, 0x4cu8, 0x46u8] {return Err("ELF File Header: Invalid Magic Number (ei_magic).");}
             if bytes[0x04]       != 0x02                             {return Err("ELF File Header: Handling of Bit Width (ei_class) value of 32 bits (0x01) not yet handled.")}
@@ -247,7 +257,7 @@ pub mod elf_file_header {
                 Endianness::Little => (u16::from_le_bytes, u32::from_le_bytes, u64::from_le_bytes),
                 Endianness::Big    => (u16::from_be_bytes, u32::from_be_bytes, u64::from_be_bytes),
             };
-            return Result::Ok(ELFFileHeader {
+            return Result::Ok(Header {
                 bit_width:                                   BitWidth::try_from(       bytes[0x04]                           ).map_err(|_| "ELF File Header: Invalid Bit Width (ei_class).")?,
                 endianness,
                 ident_version:                           IdentVersion::try_from(       bytes[0x06]                           ).map_err(|_| "ELF File Header: Invalid Ident Version (ei_version).")?,
@@ -276,6 +286,7 @@ pub mod elf_file_header {
         #[repr(u8)]
         #[derive(PartialEq)]
         #[derive(Clone, Copy)]
+        #[derive(Debug)]
         pub enum IdentVersion {
             Original = 0x01,
         }
@@ -286,6 +297,7 @@ pub mod elf_file_header {
         #[repr(u8)]
         #[derive(PartialEq)]
         #[derive(Clone, Copy)]
+        #[derive(Debug)]
         pub enum ApplicationBinaryInterface {
             None              = 0x00,
             HewettPackardUnix = 0x01,
@@ -313,6 +325,7 @@ pub mod elf_file_header {
         #[repr(u16)]
         #[derive(PartialEq)]
         #[derive(Clone, Copy)]
+        #[derive(Debug)]
         pub enum ObjectType {
             None        = 0x00,
             Relocatable = 0x01,
@@ -327,6 +340,7 @@ pub mod elf_file_header {
         #[repr(u16)]
         #[derive(PartialEq)]
         #[derive(Clone, Copy)]
+        #[derive(Debug)]
         pub enum InstructionSetArchitecture {
             None          = 0x0000,
             EmM32         = 0x0001,
@@ -418,22 +432,78 @@ pub mod elf_file_header {
         #[repr(u32)]
         #[derive(PartialEq)]
         #[derive(Clone, Copy)]
+        #[derive(Debug)]
         pub enum Version {
             Original = 0x01,
         }
     }
 }
 
-//ELF Program Header
-pub mod elf_program_header {
+//Program
+pub mod program {
     // IMPORTS
     use core::convert::{TryFrom, TryInto};
-    use crate::{BitWidth, Endianness};
+    use crate::{BitWidth, Endianness, LocationalRead, header::Header};
 
     // STRUCTS
+    //Program Header Iterator
+    pub struct ProgramIterator<'a, LR: 'a+LocationalRead> {
+        file:       &'a LR,
+        bit_width:      BitWidth,
+        endianness:     Endianness,
+        base_offset:    u64,
+        entry_position: usize,
+        entry_count:    usize,
+    }
+    impl<'a, LR: 'a+LocationalRead> ProgramIterator<'a, LR> {
+        // FUNCTIONS
+        //Constructor
+        pub fn new(file: &'a LR, file_header: &Header) -> Self{
+            Self {
+                file:           file,
+                bit_width:      file_header.bit_width,
+                endianness:     file_header.endianness,
+                base_offset:    file_header.program_header_offset,
+                entry_position: 0,
+                entry_count:    file_header.program_header_number as usize,
+            }
+        }
+        
+        //Get Entry
+        fn entry(&mut self) -> Result<Program, &'static str> {
+            return match self.bit_width {
+                BitWidth::W32 => {
+                    let mut buffer: [u8; 0x20] = [0u8; 0x20];
+                    self.file.read(self.base_offset as usize + 0x20*self.entry_position as usize, &mut buffer)?;
+                    Program::new(&buffer, self.bit_width, self.endianness)
+                },
+                BitWidth::W64 => {
+                    let mut buffer: [u8; 0x38] = [0u8; 0x38];
+                    self.file.read(self.base_offset as usize + 0x38*self.entry_position as usize, &mut buffer)?;
+                    Program::new(&buffer, self.bit_width, self.endianness)
+                },
+            }
+        }
+    }
+    impl<'a, LR: 'a+LocationalRead> Iterator for ProgramIterator<'a, LR> {
+        type Item = Result<Program, &'static str>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.entry_position >= self.entry_count {
+                None
+            }
+            else {
+                let entry = self.entry();
+                self.entry_position += 1;
+                Some(entry)
+            }
+        }
+    }
+
     //Program Header
     #[derive(Clone, Copy)]
-    pub struct ELFProgramHeader {
+    #[derive(Debug)]
+    pub struct Program {
         pub program_type:        ProgramType,
         pub flags:               [u8;4],
         pub file_offset:         u64,
@@ -442,46 +512,48 @@ pub mod elf_program_header {
         pub file_size:           u64,
         pub memory_size:         u64,
         pub alignment:           u64,
-        pub diagnostic: &'static str,
     }
-    pub fn default_diagnostic(diagnostic: &'static str) -> ELFProgramHeader{
-        ELFProgramHeader {
-            program_type:     ProgramType::Null,
-            flags:            [0;4],
-            file_offset:      0,
-            virtual_address:  0,
-            physical_address: 0,
-            file_size:        0,
-            memory_size:      0,
-            alignment:        0,
-            diagnostic:       diagnostic,
-        }
-    }
-    impl ELFProgramHeader {
+    impl Program {
         // CONSTRUCTOR
         //New
-        pub fn new(head: &[u8], bit_width: BitWidth, endianness: Endianness) -> Result<ELFProgramHeader, ELFProgramHeader> {
-            if bit_width == BitWidth::W64 && head.len() != 0x38 {return Err(default_diagnostic("ELF Program Header: Length of data given to parse from incorrect."))};
+        pub fn new(data: &[u8], bit_width: BitWidth, endianness: Endianness) -> Result<Self, &'static str> {
+            
             let (_u16_fb, u32_fb, u64_fb): (fn([u8;2]) -> u16, fn([u8;4]) -> u32, fn([u8;8]) -> u64) = match endianness {
                 Endianness::Little => (u16::from_le_bytes, u32::from_le_bytes, u64::from_le_bytes),
                 Endianness::Big    => (u16::from_be_bytes, u32::from_be_bytes, u64::from_be_bytes),
             };
-            return Result::Ok(ELFProgramHeader {
-                program_type:     ProgramType::try_from(u32_fb(head[0x00..0x04].try_into().unwrap())).map_err(|_| default_diagnostic("ELF Program Header: Length of data given to parse from incorrect."))?,
-                flags:            head[0x04..0x08].try_into().unwrap(),
-                file_offset:      u64_fb(head[0x08..0x10].try_into().unwrap()),
-                virtual_address:  u64_fb(head[0x10..0x18].try_into().unwrap()),
-                physical_address: u64_fb(head[0x18..0x20].try_into().unwrap()),
-                file_size:        u64_fb(head[0x20..0x28].try_into().unwrap()),
-                memory_size:      u64_fb(head[0x28..0x30].try_into().unwrap()),
-                alignment:        u64_fb(head[0x30..0x38].try_into().unwrap()),
-                diagnostic:       "ELF Program Header: Valid.",
-            })
-        }
-    }
-    impl Default for ELFProgramHeader {
-        fn default() -> Self {
-            default_diagnostic("ELF Program Header: Default unitialized value.")
+            return match bit_width {
+                BitWidth::W32 => {
+                    if data.len() != 0x20 {return Err("Program: Incorrect data length for 32-bit program.")}
+                    Ok(Self {
+                        program_type:     ProgramType::try_from(
+                                          u32_fb(data[0x00..0x04].try_into().map_err( |_| "ELF Program Header: Error slicing program type."    )?))
+                                                                            .map_err( |_| "ELF Program Header: Invalid program type."          )?,
+                        file_offset:      u64_fb(data[0x04..0x08].try_into().map_err( |_| "ELF Program Header: Error slicing file offset."     )?),
+                        virtual_address:  u64_fb(data[0x08..0x0C].try_into().map_err( |_| "ELF Program Header: Error slicing virtual address." )?),
+                        physical_address: u64_fb(data[0x0C..0x10].try_into().map_err( |_| "ELF Program Header: Error slicing physical address.")?),
+                        file_size:        u64_fb(data[0x20..0x28].try_into().map_err( |_| "ELF Program Header: Error slicing file size."       )?),
+                        memory_size:      u64_fb(data[0x28..0x30].try_into().map_err( |_| "ELF Program Header: Error slicing memory size."     )?),
+                        flags:                   data[0x04..0x08].try_into().map_err( |_| "ELF Program Header: Error slicing flags."           )?,
+                        alignment:        u64_fb(data[0x30..0x38].try_into().map_err( |_| "ELF Program Header: Error slicing alignment."       )?),
+                    })
+                },
+                BitWidth::W64 => {
+                    if data.len() != 0x38 {return Err("Program: Incorrect data length for 64-bit program.")};
+                    Ok(Self {
+                        program_type:     ProgramType::try_from(
+                                          u32_fb(data[0x00..0x04].try_into().map_err( |_| "ELF Program Header: Error slicing program type."    )?))
+                                                                            .map_err( |_| "ELF Program Header: Invalid program type."          )?,
+                        flags:                   data[0x04..0x08].try_into().map_err( |_| "ELF Program Header: Error slicing flags."           )?,
+                        file_offset:      u64_fb(data[0x08..0x10].try_into().map_err( |_| "ELF Program Header: Error slicing file offset."     )?),
+                        virtual_address:  u64_fb(data[0x10..0x18].try_into().map_err( |_| "ELF Program Header: Error slicing virtual address." )?),
+                        physical_address: u64_fb(data[0x18..0x20].try_into().map_err( |_| "ELF Program Header: Error slicing physical address.")?),
+                        file_size:        u64_fb(data[0x20..0x28].try_into().map_err( |_| "ELF Program Header: Error slicing file size."       )?),
+                        memory_size:      u64_fb(data[0x28..0x30].try_into().map_err( |_| "ELF Program Header: Error slicing memory size."     )?),
+                        alignment:        u64_fb(data[0x30..0x38].try_into().map_err( |_| "ELF Program Header: Error slicing alignment."       )?),
+                    })
+                }, 
+            }
         }
     }
 
@@ -491,87 +563,219 @@ pub mod elf_program_header {
         #[repr(u32)]
         #[derive(PartialEq)]
         #[derive(Clone, Copy)]
+        #[derive(Debug)]
         pub enum ProgramType {
-            Null                 = 0x00,
-            Loadable             = 0x01,
-            Dynamic              = 0x02,
-            Interpreter          = 0x03,
-            Note                 = 0x04,
-            ProgramHeader        = 0x06,
-            ThreadLocalStorage   = 0x07,
+            Null                 = 0x00_00_00_00,
+            Loadable             = 0x00_00_00_01,
+            Dynamic              = 0x00_00_00_02,
+            Interpreter          = 0x00_00_00_03,
+            Note                 = 0x00_00_00_04,
+            ProgramHeader        = 0x00_00_00_06,
+            ThreadLocalStorage   = 0x00_00_00_07,
         }
     }
 }
 
-//Dynamic Table
-pub mod elf_dynamic_table {
+//Section
+pub mod section {
     // IMPORTS
-    use core::convert::TryFrom;
-    use crate::{BitWidth, Endianness, LocationalRead, elf_file_header::ELFFileHeader, elf_program_header::ELFProgramHeader};
-    
-    // STRUCTS
-    //Dynamic Entry
-    #[derive(Clone, Copy)]
-    pub struct DynamicEntry {
-        pub entry_type: DynamicEntryType,
-        pub value:      u64,
-    }
+    use core::convert::{TryFrom, TryInto};
+    use crate::{BitWidth, Endianness, LocationalRead, header::Header};
 
-    //Dynamic Table Iterator
-    pub struct DynamicTableIterator<'a, R: 'a+LocationalRead> {
-        file:   &'a mut R,
+    // STRUCTS
+    //Section Header Iterator
+    pub struct SectionIterator<'a, LR: 'a+LocationalRead> {
+        file:   &'a mut LR,
         bit_width:      BitWidth,
         endianness:     Endianness,
-        offset:         u64,
-        entry_count:    u64,
-        entry_position: u64,
+        base_offset:    u64,
+        entry_position: usize,
+        entry_count:    usize,
     }
-    impl<'a, R: 'a+LocationalRead> DynamicTableIterator<'a, R> {
-        // CONSTRUCTOR
-        pub fn new(file: &'a mut R, file_header: &ELFFileHeader, program_header: &ELFProgramHeader) -> Self{
-            DynamicTableIterator {
-                file,
-                bit_width: file_header.bit_width,
-                endianness: file_header.endianness,
-                offset: program_header.file_offset,
-                entry_count: program_header.file_size / match file_header.bit_width{W32 => 8, W64 => 16},
+    impl<'a, LR: 'a+LocationalRead> SectionIterator<'a, LR> {
+        // FUNCTIONS
+        //Constructor
+        pub fn new(file: &'a mut LR, file_header: &Header) -> Self{
+            Self {
+                file:           file,
+                bit_width:      file_header.bit_width,
+                endianness:     file_header.endianness,
+                base_offset:    file_header.section_header_offset,
                 entry_position: 0,
+                entry_count:    file_header.section_header_number as usize,
             }
         }
-
-        // FUNCTIONS
+        
         //Get Entry
-        fn entry(&mut self) -> Result<DynamicEntry, &'static str> {
-            let (_u16_fb, u32_fb, u64_fb): (fn([u8;2]) -> u16, fn([u8;4]) -> u32, fn([u8;8]) -> u64) = match self.endianness {
+        fn entry(&mut self) -> Result<Section, &'static str> {
+            return match self.bit_width {
+                BitWidth::W32 => {
+                    let mut buffer: [u8; 0x28] = [0u8; 0x28];
+                    self.file.read(self.base_offset as usize + 0x28*self.entry_position as usize, &mut buffer)?;
+                    Section::new(&buffer, self.bit_width, self.endianness)
+                },
+                BitWidth::W64 => {
+                    let mut buffer: [u8; 0x40] = [0u8; 0x40];
+                    self.file.read(self.base_offset as usize + 0x40*self.entry_position as usize, &mut buffer)?;
+                    Section::new(&buffer, self.bit_width, self.endianness)
+                },
+            }
+        }
+    }
+    impl<'a, LR: 'a+LocationalRead> Iterator for SectionIterator<'a, LR> {
+        type Item = Result<Section, &'static str>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.entry_position >= self.entry_count {
+                None
+            }
+            else {
+                let entry = self.entry();
+                self.entry_position += 1;
+                Some(entry)
+            }
+        }
+    }
+
+    //Section Header
+    #[derive(Clone, Copy)]
+    #[derive(Debug)]
+    pub struct Section {
+        pub name:            u32,
+        pub section_type:    SectionType,
+        pub flags:           u64,
+        pub virtual_address: u64,
+        pub file_offset:     u64,
+        pub file_size:       u64,
+        pub link:            u32,
+        pub info:            u32,
+        pub alignment:       u64,
+        pub entry_size:      u64,
+    }
+    impl Section {
+        // CONSTRUCTOR
+        //New
+        pub fn new(data: &[u8], bit_width: BitWidth, endianness: Endianness) -> Result<Self, &'static str> {
+            let (_u16_fb, u32_fb, u64_fb): (fn([u8;2]) -> u16, fn([u8;4]) -> u32, fn([u8;8]) -> u64) = match endianness {
                 Endianness::Little => (u16::from_le_bytes, u32::from_le_bytes, u64::from_le_bytes),
                 Endianness::Big    => (u16::from_be_bytes, u32::from_be_bytes, u64::from_be_bytes),
             };
-            match self.bit_width {
+            return match bit_width {
                 BitWidth::W32 => {
-                    let mut b1 = [0u8; 4];
-                    let mut b2 = [0u8; 4];
-                    self.file.read(self.offset as usize + 8*self.entry_position as usize, &mut b1)?;
-                    self.file.read(self.offset as usize + 8*self.entry_position as usize + 4, &mut b2)?;
-                    Ok(DynamicEntry{
-                        entry_type: DynamicEntryType::try_from(u32_fb(b1) as u64).map_err(|_| "Unrecognized Dynamic Entry Type.")?,
-                        value: u32_fb(b2) as u64,
+                    if data.len() != 0x28 {return Err("Section: Incorrect data length for 32-bit section.")};
+                    Ok(Self {
+                        name:            u32_fb(data[0x00..0x04].try_into().map_err( |_| "Section: Error slicing name."           )?),
+                        section_type: SectionType::try_from(
+                                         u32_fb(data[0x04..0x08].try_into().map_err( |_| "Section: Error slicing section type."   )?))
+                                                                           .map_err( |_| "Section: Invalid section type."         )?,
+                        flags:           u32_fb(data[0x08..0x0C].try_into().map_err( |_| "Section: Error slicing flags."          )?) as u64,
+                        virtual_address: u32_fb(data[0x0C..0x10].try_into().map_err( |_| "Section: Error slicing virtual address.")?) as u64,
+                        file_offset:     u32_fb(data[0x10..0x14].try_into().map_err( |_| "Section: Error slicing file offset."    )?) as u64,
+                        file_size:       u32_fb(data[0x14..0x18].try_into().map_err( |_| "Section: Error slicing file size."      )?) as u64,
+                        link:            u32_fb(data[0x18..0x1C].try_into().map_err( |_| "Section: Error slicing link."           )?),
+                        info:            u32_fb(data[0x1C..0x20].try_into().map_err( |_| "Section: Error slicing info."           )?),
+                        alignment:       u32_fb(data[0x20..0x24].try_into().map_err( |_| "Section: Error slicing alignment."      )?) as u64,
+                        entry_size:      u32_fb(data[0x24..0x28].try_into().map_err( |_| "Section: Error slicing entry size."     )?) as u64,
                     })
-                }
+                },
                 BitWidth::W64 => {
-                    let mut b1 = [0u8; 8];
-                    let mut b2 = [0u8; 8];
-                    self.file.read(self.offset as usize + 16*self.entry_position as usize, &mut b1)?;
-                    self.file.read(self.offset as usize + 16*self.entry_position as usize + 8, &mut b2)?;
-                    Ok(DynamicEntry{
-                        entry_type: DynamicEntryType::try_from(u64_fb(b1)).map_err(|_| "Unrecognized Dynamic Entry Type.")?,
-                        value: u64_fb(b2),
+                    if data.len() != 0x40 {return Err("Section: Incorrect data length for 64-bit section.")};
+                    Ok(Self {
+                        name:            u32_fb(data[0x00..0x04].try_into().map_err( |_| "Section: Error slicing name."           )?),
+                        section_type: SectionType::try_from(
+                                         u32_fb(data[0x04..0x08].try_into().map_err( |_| "Section: Error slicing section type."   )?))
+                                                                           .map_err( |_| "Section: Invalid section type."         )?,
+                        flags:           u64_fb(data[0x08..0x10].try_into().map_err( |_| "Section: Error slicing flags."          )?),
+                        virtual_address: u64_fb(data[0x10..0x18].try_into().map_err( |_| "Section: Error slicing virtual address.")?),
+                        file_offset:     u64_fb(data[0x18..0x20].try_into().map_err( |_| "Section: Error slicing file offset."    )?),
+                        file_size:       u64_fb(data[0x20..0x28].try_into().map_err( |_| "Section: Error slicing file size."      )?),
+                        link:            u32_fb(data[0x28..0x2C].try_into().map_err( |_| "Section: Error slicing link."           )?),
+                        info:            u32_fb(data[0x2C..0x30].try_into().map_err( |_| "Section: Error slicing info."           )?),
+                        alignment:       u64_fb(data[0x30..0x38].try_into().map_err( |_| "Section: Error slicing alignment."      )?),
+                        entry_size:      u64_fb(data[0x38..0x40].try_into().map_err( |_| "Section: Error slicing entry size."     )?),
                     })
                 },
             }
         }
     }
-    impl<'a, R: 'a+LocationalRead> Iterator for DynamicTableIterator<'a, R> {
-        type Item = Result<DynamicEntry, &'static str>;
+
+    // ENUMS
+    //Section Type
+    numeric_enum!{
+        #[repr(u32)]
+        #[derive(PartialEq)]
+        #[derive(Clone, Copy)]
+        #[derive(Debug)]
+        pub enum SectionType {
+            Null                           = 0x00_00_00_00,
+            ProgramData                    = 0x00_00_00_01,
+            SymbolTable                    = 0x00_00_00_02,
+            StringTable                    = 0x00_00_00_03,
+            ExplicitRelocationTable        = 0x00_00_00_04,
+            SymbolHashTable                = 0x00_00_00_05,
+            DynamicLinkingInformation      = 0x00_00_00_06,
+            Notes                          = 0x00_00_00_07,
+            ProgramNoData                  = 0x00_00_00_08,
+            ImplicitRelocationTable        = 0x00_00_00_09,
+            DynamicSymbolTable             = 0x00_00_00_0B,
+            InitializationFunctionArray    = 0x00_00_00_0E,
+            TerminationFunctionArray       = 0x00_00_00_0F,
+            PreInitializationFunctionArray = 0x00_00_00_10,
+            SectionGroup                   = 0x00_00_00_11,
+            ExtendedSectionIndex           = 0x00_00_00_12,
+            Number                         = 0x00_00_00_13,
+        }
+    }
+}
+
+//Program: Dynamic Entry
+pub mod program_dynamic_entry {
+    // IMPORTS
+    use core::convert::{TryFrom, TryInto};
+    use crate::{BitWidth, Endianness, LocationalRead, header::Header, program::Program};
+    
+    // STRUCTS
+    //Dynamic Table Iterator
+    pub struct ProgramDynamicEntryIterator<'a, LR: 'a+LocationalRead> {
+        file:       &'a LR,
+        bit_width:      BitWidth,
+        endianness:     Endianness,
+        base_offset:    u64,
+        entry_position: u64,
+        entry_count:    u64,
+    }
+    impl<'a, LR: 'a+LocationalRead> ProgramDynamicEntryIterator<'a, LR> {
+        // FUNCTIONS
+        //Constructor
+        pub fn new(file: &'a LR, file_header: &Header, program_header: &Program) -> Self{
+            ProgramDynamicEntryIterator {
+                file:           file,
+                bit_width:      file_header.bit_width,
+                endianness:     file_header.endianness,
+                base_offset:    program_header.file_offset,
+                entry_position: 0,
+                entry_count:    program_header.file_size / match file_header.bit_width{BitWidth::W32 => 8, BitWidth::W64 => 16},
+            }
+        }
+
+        //Get Entry
+        fn entry(&mut self) -> Result<ProgramDynamicEntry, &'static str> {
+            return match self.bit_width {
+                BitWidth::W32 => {
+                    let mut buffer: [u8; 8] = [0u8; 8];
+                    self.file.read(self.base_offset as usize + 8*self.entry_position as usize, &mut buffer)?;
+                    ProgramDynamicEntry::new(&buffer, self.bit_width, self.endianness)
+                },
+                BitWidth::W64 => {
+                    let mut buffer: [u8; 16] = [0u8; 16];
+                    self.file.read(self.base_offset as usize + 16*self.entry_position as usize, &mut buffer)?;
+                    ProgramDynamicEntry::new(&buffer, self.bit_width, self.endianness)
+                },
+            }
+        }
+    }
+    impl<'a, R: 'a+LocationalRead> Iterator for ProgramDynamicEntryIterator<'a, R> {
+        type Item = Result<ProgramDynamicEntry, &'static str>;
 
         fn next(&mut self) -> Option<Self::Item> {
             if self.entry_position >= self.entry_count {
@@ -580,11 +784,47 @@ pub mod elf_dynamic_table {
             else {
                 let entry = self.entry();
                 match entry {
-                    Ok(e) => if e.entry_type == DynamicEntryType::Null {return None}
+                    Ok(e) => if e.entry_type == ProgramDynamicEntryType::Null {return None}
                     Err(_) => (),
                 }
                 self.entry_position += 1;
                 Some(entry)
+            }
+        }
+    }
+    
+    //Dynamic Entry
+    #[derive(Clone, Copy)]
+    #[derive(Debug)]
+    pub struct ProgramDynamicEntry {
+        pub entry_type: ProgramDynamicEntryType,
+        pub value:      u64,
+    }
+    impl ProgramDynamicEntry {
+        pub fn new(data: &[u8], bit_width: BitWidth, endianness: Endianness) -> Result<Self, &'static str> {
+            let (_u16_fb, u32_fb, u64_fb): (fn([u8;2]) -> u16, fn([u8;4]) -> u32, fn([u8;8]) -> u64) = match endianness {
+                Endianness::Little => (u16::from_le_bytes, u32::from_le_bytes, u64::from_le_bytes),
+                Endianness::Big    => (u16::from_be_bytes, u32::from_be_bytes, u64::from_be_bytes),
+            };
+            match bit_width {
+                BitWidth::W32 => {
+                    if data.len() != 8 {return Err("Program Dynamic: Incorrect data length for 32-bit program dynamic entry.")};
+                    Ok(Self {
+                        entry_type: ProgramDynamicEntryType::try_from(
+                               u32_fb(data[0x00..0x04].try_into().map_err( |_| "Dynamic Entry: Error slicing entry type.")?) as u64)
+                                                           .map_err( |_| "Dynamic Entry: Invalid entry type."      )?,
+                        value: u32_fb(data[0x04..0x08].try_into().map_err( |_| "Dynamic Entry: Error slicing value."     )?) as u64,
+                    })
+                },
+                BitWidth::W64 => {
+                    if data.len() != 16 {return Err("Dynamic Entry: Incorrect data length.")};
+                    Ok(Self {
+                        entry_type: ProgramDynamicEntryType::try_from(
+                               u64_fb(data[0x00..0x08].try_into().map_err( |_| "Dynamic Entry: Error slicing entry type.")?) as u64)
+                                                            .map_err( |_| "Dynamic Entry: Invalid entry type."      )?,
+                        value: u64_fb(data[0x08..0x10].try_into().map_err( |_| "Dynamic Entry: Error slicing value."     )?) as u64,
+                    })
+                },
             }
         }
     }
@@ -595,7 +835,8 @@ pub mod elf_dynamic_table {
         #[repr(u64)]
         #[derive(PartialEq)]
         #[derive(Clone, Copy)]
-        pub enum DynamicEntryType {
+        #[derive(Debug)]
+        pub enum ProgramDynamicEntryType {
             Null                                     = 0x00,
             Needed                                   = 0x01,
             ProcedureLinkageTableSize                = 0x02,
@@ -623,15 +864,35 @@ pub mod elf_dynamic_table {
             BindNowFlag                              = 0x18,
         }
     }
+}
 
-    //Relocation Type
-    numeric_enum!{
-        #[repr(u64)]
-        pub enum RelocationType {
-            Explicit = 0x07,
-            Implicit = 0x11,
-        }
+//Relocation Table
+pub mod elf_relocation_table {
+    // IMPORTS
+    use crate::{BitWidth, Endianness, LocationalRead, RelocationType};
+
+    // STRUCTS
+    //Relocation Table Iterator
+    struct RelocationTableIterator <'a, LR: 'a+LocationalRead> {
+        file:  &'a mut   LR,
+        bit_width:       BitWidth,
+        endianness:      Endianness,
+        relocation_type: RelocationType,
+        file_offset:     u64,
+        entry_positon:   usize,
+        entry_count:     usize,
     }
+    impl<'a, LR: 'a+LocationalRead> RelocationTableIterator<'a, LR> {
+        // CONSTRUCTOR
+        /*pub fn new(file: &'a mut LR, file_header: ELFFileHeader, file_size: usize) -> Self {
+            RelocationTableIterator {
+                file,
+                bit_width: file_header.bit_width,
+                endianness: file_header.endianness,
+            }
+        }*/
+    }
+
 }
 
 // ENUMS
@@ -640,6 +901,7 @@ numeric_enum! {
     #[repr(u8)]
     #[derive(PartialEq)]
     #[derive(Clone, Copy)]
+    #[derive(Debug)]
     pub enum BitWidth {
         W32 = 0x01,
         W64 = 0x02,
@@ -651,8 +913,21 @@ numeric_enum! {
     #[repr(u8)]
     #[derive(PartialEq)]
     #[derive(Clone, Copy)]
+    #[derive(Debug)]
     pub enum Endianness {
         Little = 0x01,
         Big    = 0x02,
+    }
+}
+
+//Relocation Type
+numeric_enum!{
+    #[repr(u64)]
+    #[derive(PartialEq)]
+    #[derive(Clone, Copy)]
+    #[derive(Debug)]
+    pub enum RelocationType {
+        Explicit = 0x07,
+        Implicit = 0x11,
     }
 }
