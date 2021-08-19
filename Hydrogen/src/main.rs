@@ -26,14 +26,12 @@ use gluon::program_dynamic_entry::ProgramDynamicEntryIterator;
 use gluon::header::ApplicationBinaryInterface;
 use gluon::header::InstructionSetArchitecture;
 use gluon::header::ObjectType;
-use gluon::program::Program;
 use gluon::program::ProgramType;
 use photon::*;
 use gluon::*;
 use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString;
-use alloc::vec;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 use core::fmt::Write;
@@ -41,6 +39,7 @@ use core::panic::PanicInfo;
 use core::ptr;
 use core::ptr::read_volatile;
 use core::ptr::write_volatile;
+use core::str::Split;
 use uefi::alloc::exit_boot_services;
 use uefi::prelude::*;
 use uefi::proto::console::gop::GraphicsOutput;
@@ -149,11 +148,10 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     frame.horizontal_string("HYDROGEN BOOTLOADER", 0, F1_FRAME_WIDTH - 20 - HYDROGEN_VERSION.len(), bluespace);
     frame.horizontal_string(HYDROGEN_VERSION,      0, F1_FRAME_WIDTH -      HYDROGEN_VERSION.len(), bluespace);
     frame.render();
-    writeln!(printer, "=== WELCOME TO NOBLE OS ===");
+    writeln!(printer, "\n=== WELCOME TO NOBLE OS ===\n");
     writeln!(printer, "Hydrogen Bootloader     {}", HYDROGEN_VERSION);
     writeln!(printer, "Photon Graphics Library {}", PHOTON_VERSION);
     writeln!(printer, "Gluon Memory Library    {}", GLUON_VERSION);
-    writeln!(printer, "Frame Buffer Location:  0o{0:016o} 0x{0:016X}", graphics_frame_pointer as usize);
 
     // LOAD KERNEL
     //Find kernel on disk
@@ -170,50 +168,61 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         Err(error) => panic!("{}", error),
     };
     //Check ELF header validity
-    if kernel.file_header.binary_interface         != ApplicationBinaryInterface::None     {writeln!(printer, "Kernel load: Incorrect Application Binary Interface (ei_osabi). Should be SystemV/None (0x00)."); panic!();}
-    if kernel.file_header.binary_interface_version != 0x00                                 {writeln!(printer, "Kernel load: Incorrect Application Binary Interface Version (ei_abiversion). Should be None (0x00)."); panic!();}
-    if kernel.file_header.architecture             != InstructionSetArchitecture::EmX86_64 {writeln!(printer, "Kernel load: Incorrect Instruction Set Architecture (e_machine). Should be x86-64 (0x3E)."); panic!();}
-    if kernel.file_header.object_type              != ObjectType::Shared                   {writeln!(printer, "Kernel Load: Incorrect Object Type (e_type). Should be Dynamic (0x03)."); panic!()}
+    if kernel.header.binary_interface         != ApplicationBinaryInterface::None     {writeln!(printer, "Kernel load: Incorrect Application Binary Interface (ei_osabi). Should be SystemV/None (0x00)."); panic!();}
+    if kernel.header.binary_interface_version != 0x00                                 {writeln!(printer, "Kernel load: Incorrect Application Binary Interface Version (ei_abiversion). Should be None (0x00)."); panic!();}
+    if kernel.header.architecture             != InstructionSetArchitecture::EmX86_64 {writeln!(printer, "Kernel load: Incorrect Instruction Set Architecture (e_machine). Should be x86-64 (0x3E)."); panic!();}
+    if kernel.header.object_type              != ObjectType::Shared                   {writeln!(printer, "Kernel Load: Incorrect Object Type (e_type). Should be Dynamic (0x03)."); panic!()}
     //Print ELF header info
     {
-        writeln!(printer, "=== KERNEL INFO ===");
-        writeln!(printer, "Kernel Entry Point:                 0x{:16X}", kernel.file_header.entry_point);
-        writeln!(printer, "Kernel Program Header Offset:       0x{:16X}", kernel.file_header.program_header_offset);
-        writeln!(printer, "Kernel Section Header Offset:       0x{:16X}", kernel.file_header.section_header_offset);
-        writeln!(printer, "Kernel ELF Header Size:             0x{:16X}", kernel.file_header.header_size);
-        writeln!(printer, "Kernel Program Header Entry Size:   0x{:16X}", kernel.file_header.program_header_entry_size);
-        writeln!(printer, "Kernel Program Header Number:       0x{:16X}", kernel.file_header.program_header_number);
-        writeln!(printer, "Kernel Section Header Entry Size:   0x{:16X}", kernel.file_header.section_header_entry_size);
-        writeln!(printer, "Kernel Section Header Number:       0x{:16X}", kernel.file_header.section_header_number);
-        writeln!(printer, "Kernel Section Header String Index: 0x{:16X}", kernel.file_header.string_section_index);
+        writeln!(printer, "\n=== KERNEL INFO ===\n");
+        writeln!(printer, "Kernel Entry Point:                 0x{:16X}", kernel.header.entry_point);
+        writeln!(printer, "Kernel Program Header Offset:       0x{:16X}", kernel.header.program_header_offset);
+        writeln!(printer, "Kernel Section Header Offset:       0x{:16X}", kernel.header.section_header_offset);
+        writeln!(printer, "Kernel ELF Header Size:             0x{:16X}", kernel.header.header_size);
+        writeln!(printer, "Kernel Program Header Entry Size:   0x{:16X}", kernel.header.program_header_entry_size);
+        writeln!(printer, "Kernel Program Header Number:       0x{:16X}", kernel.header.program_header_number);
+        writeln!(printer, "Kernel Section Header Entry Size:   0x{:16X}", kernel.header.section_header_entry_size);
+        writeln!(printer, "Kernel Section Header Number:       0x{:16X}", kernel.header.section_header_number);
+        writeln!(printer, "Kernel Section Header String Index: 0x{:16X}", kernel.header.string_section_index);
         writeln!(printer, "Kernel Code Size:                   0x{:16X}", kernel.program_memory_size());
     }
     //Allocate memory for code
-    let kernel_stack_size: usize = PAGE_SIZE_2MIB;
+    let kernel_stack_size: usize = 16*MIB;
     let kernel_total_size: usize = kernel.program_memory_size() as usize + kernel_stack_size;
     let kernel_physical: *mut u8 = unsafe { allocate_memory(boot_services, MemoryType::LOADER_CODE, kernel_total_size, PAGE_SIZE_4KIB as usize) };
     //Load code into memory
     kernel.load(kernel_physical);
     //Check
-    writeln!(printer, "=== PROGRAMS ===");
-    for program in ProgramIterator::new(kernel.file, &kernel.file_header) {
+    writeln!(printer, "\n=== PROGRAMS ===\n");
+    let mut pi = 0;
+    for program in kernel.programs() {
         match program {
-            Ok(program) => {writeln!(printer, "  Program Found: {:?}", program);},
-            Err(error) => {writeln!(printer, "  Program Error: {}", error);}
-        }
+            Ok(program) => writeln!(printer, "Program Found at Index {}: {:?}", pi, program),
+            Err(error) => writeln!(printer, "Program Error at Index {}: {}", pi, error),
+        };
+        pi += 1;
+    }
+    writeln!(printer, "\n=== SECTIONS ===\n");
+    let mut si = 0;
+    for section in kernel.sections(){
+        match section {
+            Ok(section) => writeln!(printer, "Section Found at Index {}: {:?}", si, section),
+            Err(error) => writeln!(printer, "Section Error at Index {}: {}", si, error)
+        };
+        si += 1;
     }
     //Relocation
-    writeln!(printer, "=== DYNAMIC INFO ===");
-    for program in ProgramIterator::new(kernel.file, &kernel.file_header) {
+    writeln!(printer, "\n=== DYNAMIC INFO ===\n");
+    for program in ProgramIterator::new(kernel.file, &kernel.header) {
         match program {
             Ok(program) => {
                 if program.program_type == ProgramType::Dynamic {
-                    writeln!(printer, "Dynamic Table Found: {:?}", program);
-                    let dynamic_table = ProgramDynamicEntryIterator::new(kernel.file, &kernel.file_header, &program);
+                    writeln!(printer, "Dynamic Table Found: {:#?}", program);
+                    let dynamic_table = ProgramDynamicEntryIterator::new(kernel.file, &kernel.header, &program);
                     for dynamic_entry in dynamic_table {
                         match dynamic_entry {
-                            Ok(entry) => {writeln!(printer, "  Dynamic Table Entry: {:?}", entry);},
-                            Err(error) => {writeln!(printer, "  Dynamic Table Error: {}", error);},
+                            Ok(entry) => {writeln!(printer, "Dynamic Table Entry: {:#?}", entry);},
+                            Err(error) => {writeln!(printer, "Dynamic Table Error: {}", error);},
                         }
                     }
                 }
@@ -272,19 +281,26 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                     //Execute command and reset input stack
                     let mut buffer = [' '; F1_INPUT_LENGTH];
                     let command = &inputter.to_chararray(&mut buffer).iter().collect::<String>();
-                    let boot_command_return = command_processor(&mut printer, &system_table_boot, command);
+                    let return_code = command_processor(&mut printer, &system_table_boot, command);
                     inputter.flush(whitespace);
                     //Check return code
-                    if boot_command_return != 0 {
-                        //Boot sequence
-                        if boot_command_return == 1 {
+                    match return_code{
+                        0x00 => { //Continue
+                        },
+                        0x01 => { //Boot
                             break;
-                        }
-                        //Shutdown sequence
-                        else if boot_command_return == 2 {
+                        },
+                        0x02 => { //Shutdown
                             system_table_boot.boot_services().stall(5_000_000);
                             system_table_boot.runtime_services().reset(ResetType::Shutdown, Status(0), None);
-                        }
+                        },
+                        0x03 => { //Panic
+                            system_table_boot.boot_services().stall(5_000_000);
+                            panic!("Manually called panic.");
+                        },
+                        _    => { //Unrecognized
+                            panic!("Unexpected return code.");
+                        },
                     }
                 }
                 //User has typed a character
@@ -306,7 +322,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
             }
         }
     }
-    writeln!(printer, "=== BOOTING ===");
+    writeln!(printer, "\n=== BOOTING ===\n");
     writeln!(printer, "Bootloader Command Line Exited.");
 
     // BOOT SEQUENCE
@@ -325,7 +341,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         "JMP R15",
 
         stack = in(reg) KERNEL_VIRTUAL_POINTER as u64 + kernel_total_size as u64,
-        entry = in(reg) KERNEL_VIRTUAL_POINTER as u64 + kernel.file_header.entry_point,
+        entry = in(reg) KERNEL_VIRTUAL_POINTER as u64 + kernel.header.entry_point,
         pagemap = in(reg) pml4_knenv as u64,
         options(nostack)
     );}
@@ -346,9 +362,9 @@ static mut PHYSICAL_FRAME_POINTER: *mut u8 = 0 as *mut u8;
 fn panic_handler(panic_info: &PanicInfo) -> ! {
     unsafe {
         if PHYSICAL_FRAME_POINTER != 0 as *mut u8 {
+            let renderer = Renderer::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH>::new(PHYSICAL_FRAME_POINTER);
             let whitespace = Character::<BGRX_DEPTH>::new(' ', COLOR_WHT_BGRX, COLOR_BLK_BGRX);
             let blackspace = Character::<BGRX_DEPTH>::new(' ', COLOR_BLK_BGRX, COLOR_WHT_BGRX);
-            let renderer = Renderer::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH>::new(PHYSICAL_FRAME_POINTER);
             let mut printer = PrintWindow::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_PRINT_HEIGHT, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, F1_PRINT_Y, F1_PRINT_X>::new(renderer, blackspace, whitespace);
             printer.push_render("BOOTLOADER PANIC!\n", blackspace);
             writeln!(printer, "{}", panic_info);
@@ -420,76 +436,83 @@ fn set_graphics_mode(gop: &mut GraphicsOutput) {
 
 // COMMAND PROCESSOR
 //Evaluate and execute a bootloader command and return a code
-fn command_processor(screen: &mut dyn Write, system_table: &SystemTable<Boot>, command: &str) -> u8 {
+fn command_processor(printer: &mut dyn Write, system_table: &SystemTable<Boot>, command_str: &str) -> u8 {
+    //Get necessary objects from system table
+    let boot_services = system_table.boot_services();
+    let runtime_services = system_table.runtime_services();
     //Print command
-    writeln!(screen, ">{}", command);
-    //Assess command
-    if command.eq_ignore_ascii_case("time") {
-        //Time
-        writeln!(screen, ">{}", match system_table.runtime_services().get_time(){
-            Ok(v) => {let v = v.log(); format!{"{}-{:02}-{:02} {:02}:{:02}:{:02} UTC", v.year(), v.month(), v.day(), v.hour(), v.minute(), v.second()}},
-            Err(e) => format!("Command failed: {:?}", e)});
+    writeln!(printer, ">{}", command_str);
+    //Split command into iterator
+    let mut args: Split<&str> = command_str.split(" ");
+    let command: &str = match args.next(){
+        Some(s) => s,
+        None => {writeln!(printer, "Processor: No command entered."); return 0;}
+    };
+    //Assess command (NEW)
+    match command {
+        command if command.eq_ignore_ascii_case("boot")     => {writeln!       (printer, "Processor: Boot sequence requested."); return 0x01;},
+        command if command.eq_ignore_ascii_case("shutdown") => {writeln!       (printer, "Processor: Shutdown requested.");      return 0x02;},
+        command if command.eq_ignore_ascii_case("panic")    => {writeln!       (printer, "Processor: Panic requested.");         return 0x03;},
+        command if command.eq_ignore_ascii_case("time")     => {command_time   (printer, runtime_services, &mut args);           return 0x00;},
+        command if command.eq_ignore_ascii_case("memmap")   => {command_memmap (printer, boot_services, &mut args);              return 0x00;},
+        command if command.eq_ignore_ascii_case("memread")  => {command_memread(printer, args);                                  return 0x00;},
+        command if command.eq_ignore_ascii_case("crread")   => {command_crread (printer, &mut args);                             return 0x00;},
+        command                                             => {writeln!       (printer, "Processor: Unrecognized command.");    return 0x00;},
     }
-    else if command.eq_ignore_ascii_case("mem") {
-        //Memory Map
-        command_mem(screen, system_table.boot_services());
+}
+
+//Display the time
+fn command_time(printer: &mut dyn Write, runtime_services: &RuntimeServices, args: &mut Split<&str>) {
+    //Help String
+    let help: &str = "\"TIME: Display the computer's Unix time in UTC.\":\n\
+                      time\n\
+                      Command takes no arguments.\n";
+    //Processing
+    loop {
+        let arg = match args.next() {
+            Some(s) => s,
+            None => {break;},
+        };
+        if arg.starts_with("-") {writeln!(printer, "Invalid flag: {}.\n{}",     arg, help); return;}
+        else                    {writeln!(printer, "Invalid argument: {}.\n{}", arg, help); return;}
     }
-    else if command.eq_ignore_ascii_case("shutdown") {
-        //Shutdown
-        writeln!(screen, "Shutdown sequence started.");
-        return 0x02;
+    //Time Display
+    let t = runtime_services.get_time();
+    match t {
+        Ok(t) => {let t = t.log(); writeln!(printer, "{}-{:02}-{:02} {:02}:{:02}:{:02} UTC", t.year(), t.month(), t.day(), t.hour(), t.minute(), t.second());},
+        Err(error) => {writeln!(printer, "Failed to retrieve time:\n{}", uefi_error_readout(error.status()));}
     }
-    else if command.eq_ignore_ascii_case("boot") {
-        //Boot
-        writeln!(screen, "Boot sequence started.");
-        return 0x01;
-    }
-    else if command.eq_ignore_ascii_case("crd") {
-        //Control Register Display
-        writeln!(screen, "CR0:  {:016x}", Cr0::read().bits());
-        writeln!(screen, "CR2:  {:016x}", Cr2::read().as_u64());
-        writeln!(screen, "CR3A: {:016x}", Cr3::read().0.start_address());
-        writeln!(screen, "CR3F: {:016x}", Cr3::read().1.bits());
-        writeln!(screen, "CR4:  {:016x}", Cr4::read().bits());
-        writeln!(screen, "EFER: {:016x}", Efer::read().bits());
-    }
-    else if command.starts_with("peek ") {
-        //Peek Memory
-        command_peek(screen, command);
-    }
-    else if command.eq_ignore_ascii_case("panic") {
-        panic!("Manual Panic")
-    }
-    else {
-        //No Result
-        writeln!(screen, "Command not entered properly.");
-    }
-    //Return to Command Line
-    return 0x00;
 }
 
 //Display memory map contents to console
-fn command_mem(screen: &mut dyn Write, boot_service: &BootServices){
-    //Estimated map size
-    let map_size = boot_service.memory_map_size();
-    writeln!(screen, "Map size: {}", map_size);
-    //Build a buffer big enough to handle the memory map
-    let mut buffer = vec![0;map_size+512];
-    writeln!(screen, "Buffer len: {}", buffer.len());
-    writeln!(screen, "Buffer cap: {}", buffer.capacity());
-    //Read memory map into buffer
-    let (_k, description_iterator) = boot_service
-        .memory_map(&mut buffer)
-        .expect_success("UEFI Memory Map retrieval failed.");
-    let descriptors = description_iterator.copied().collect::<Vec<_>>();
-    //Handle if memory map appears empty
-    if descriptors.is_empty() {
-        writeln!(screen, "UEFI Memory Map is empty.");
-        return;
+fn command_memmap(printer: &mut dyn Write, boot_services: &BootServices, args: &mut Split<&str>) {
+    //Help String
+    let help: &str = "\"MEMMAP: Display the contents of the UEFI memory map.\":\n\
+                      memmap\n\
+                      Command takes no arguments.\n";
+    //Processing
+    loop {
+        let arg = match args.next() {
+            Some(s) => s,
+            None => {break;},
+        };
+        if arg.starts_with("-") {writeln!(printer, "Invalid flag: {}.\n{}",     arg, help); return;}
+        else                    {writeln!(printer, "Invalid argument: {}.\n{}", arg, help); return;}
     }
+    //Estimated map size
+    let map_size = boot_services.memory_map_size();
+    writeln!(printer, "Map size: {}", map_size);
+    //Build a buffer big enough to handle the memory map
+    let mut buffer = [0u8;0x4000];
+    writeln!(printer, "Buffer len: {}", buffer.len());
+    //Read memory map into buffer
+    let (_k, description_iterator) = match boot_services.memory_map(&mut buffer) {
+        Ok(value) => value.unwrap(),
+        Err(error) => {writeln!(printer, "{}", uefi_error_readout(error.status())); return;}
+    };
     //Print memory map
-    writeln!(screen, "Usable ranges: {}", descriptors.len());
-    for descriptor in descriptors{
+    let mut i = 0;
+    for descriptor in description_iterator{
         let size_pages = descriptor.page_count;
         let size = size_pages * PAGE_SIZE_4KIB as u64;
         let end_address = descriptor.phys_start + size;
@@ -511,61 +534,144 @@ fn command_mem(screen: &mut dyn Write, boot_service: &BootServices){
             MemoryType::PERSISTENT_MEMORY => {memory_type_text =     "PERSISTENT           "}
             _ => {}
         }
-        writeln!(screen, "{}: {:016x}-{:016x} ({:8}KiB / {:8}Pg)", memory_type_text, descriptor.phys_start, end_address, size/1024, size_pages);
+        writeln!(printer, "{}: {:016x}-{:016x} ({:8}KiB / {:8}Pg)", memory_type_text, descriptor.phys_start, end_address, size/1024, size_pages);
+        i += 1;
     }
+    writeln!(printer, "Total entries: {}", i);
 }
 
 //Display the raw contents of a part of memory
-fn command_peek(screen: &mut dyn Write, command: &str) {
+fn command_memread(printer: &mut dyn Write, args: &mut Split<&str>) {
+    //Pre processing variables
+    enum Width {W8, W16, W24, W32, W48, W64}
+    enum Radix {B, O, D, X}
+    let mut a: (bool, usize) = (false, 0);
+    let mut w: (bool, Width) = (false, Width::W8);
+    let mut r: (bool, Radix) = (false, Radix::X);
+    let mut c: (bool, usize) = (false, 1);
+    //Help String
+    let help: &str = "MEMREAD     : Display an aribtrary portion of memory.\n\
+                      crread      -a [ address ]  ( -w [ width ] ) ( -r [ radix ] ) ( -c [ count ] ) \n\
+                      -a          : Read from 'address'.\n\
+                       address    : Hexidecimal number.\n\
+                      -w          : Read using and display with the given bit 'width'.\n\
+                       width      : '8', '16', '24', '32', '48', or '64'. Default of '8'.\n\
+                      -r          : Display with the given 'radix'.\n\
+                       radix      : 'b'inary, 'o'ctal, 'd'ecimal, or he'x'idecimal. Default of 'x'.\n\
+                      -c          : Sequentially repeat the read with the given 'count'.\n\
+                       count      : Hexidecimal number. Default of 1.";
+    //Processing
+    loop {
+        let arg = match args.next() {
+            Some(s) => s,
+            None => {break;},
+        };
+        if arg.starts_with("-") { match arg {
+            arg if arg.eq_ignore_ascii_case("-a")  => {if cr0||cr2||cr3||cr4||efer {writeln!(printer, "Flag usage not valid.\n{}", help); return;} else {cr0 = true; cr2 = true; cr3 = true; cr4 = true; efer = true;}},
+            arg if arg.eq_ignore_ascii_case("-w")  => {if cr0                      {writeln!(printer, "Flag usage not valid.\n{}", help); return;} else {cr0 = true}},
+            arg if arg.eq_ignore_ascii_case("-r")  => {if cr2                      {writeln!(printer, "Flag usage not valid.\n{}", help); return;} else {cr2 = true}},
+            arg if arg.eq_ignore_ascii_case("-c")  => {if cr3                      {writeln!(printer, "Flag usage not valid.\n{}", help); return;} else {cr3 = true}},
+            arg if arg.eq_ignore_ascii_case("-cr4")  => {if cr4                      {writeln!(printer, "Flag usage not valid.\n{}", help); return;} else {cr4 = true}},
+            arg if arg.eq_ignore_ascii_case("-efer") => {if efer                     {writeln!(printer, "Flag usage not valid.\n{}", help); return;} else {efer = true}},
+            _ => {writeln!(printer, "Invalid flag: {}.\n{}",     arg, help); return;}
+        }}
+        else     {writeln!(printer, "Invalid argument: {}.\n{}", arg, help); return;}
+    }
+    //Check validity
+    if !(cr0||cr2||cr3||cr4||efer) {writeln!(printer, "{}", help); return;}
     //Read subcommand from arguments
-    let split:Vec<&str> = command.split(" ").collect();
+    let split:Vec<&str> = args.split(" ").collect();
     //Handle if number of arguments is incorrect
     if split.len() != 4 {
-        writeln!(screen, "Incorrect number of arguments: {} (requires 3).", split.len());
+        writeln!(printer, "Incorrect number of arguments: {} (requires 3).", split.len());
         return;
     }
     //Read numbers from argument
-    let size = match split[3].to_string().parse::<usize>(){Ok(i) => {i}, Err(_) => {writeln!(screen, "3rd argument not valid: {}", split[3]); return;}};
+    let size = match split[3].to_string().parse::<usize>(){Ok(i) => {i}, Err(_) => {writeln!(printer, "3rd argument not valid: {}", split[3]); return;}};
     //Read memory
     if split[1].eq_ignore_ascii_case("u64b"){
-        let address = match usize::from_str_radix(split[2], 16){Ok(i) => {i}, Err(_) => {writeln!(screen, "2nd argument not valid: {}", split[2]); return;}} as *mut u8;
+        let address = match usize::from_str_radix(split[2], 16){Ok(i) => {i}, Err(_) => {writeln!(printer, "2nd argument not valid: {}", split[2]); return;}} as *mut u8;
         unsafe{
             for i in 0..size {
                 let mut le_bytes:[u8;8] = [0;8];
                 for j in 0..8{asm!("mov {0}, [{1}]", out(reg_byte) le_bytes[j], in(reg) address.add(i*8 + j), options(readonly, nostack))}
                 let num = u64::from_le_bytes(le_bytes);
-                writeln!(screen, "0x{:016X}: 0b{:064b}", address as usize + i*8, num);
+                writeln!(printer, "0x{:016X}: 0b{:064b}", address as usize + i*8, num);
             }
         }
-        writeln!(screen, "{:p} {}", address, size);
+        writeln!(printer, "{:p} {}", address, size);
     }
     else if split[1].eq_ignore_ascii_case("u64x"){
-        let address = match usize::from_str_radix(split[2], 16){Ok(i) => {i}, Err(_) => {writeln!(screen, "2nd argument not valid: {}", split[2]); return;}} as *mut u8;
+        let address = match usize::from_str_radix(split[2], 16){Ok(i) => {i}, Err(_) => {writeln!(printer, "2nd argument not valid: {}", split[2]); return;}} as *mut u8;
         unsafe {
             for i in 0..size {
                 let mut le_bytes:[u8;8] = [0;8];
                 for j in 0..8{asm!("mov {0}, [{1}]", out(reg_byte) le_bytes[j], in(reg) address.add(i*8 + j), options(readonly, nostack))}
                 let num = u64::from_le_bytes(le_bytes);
-                writeln!(screen, "0x{:016X}: 0x{:016X}", address as usize + i*8, num);
+                writeln!(printer, "0x{:016X}: 0x{:016X}", address as usize + i*8, num);
             }
         }
-        writeln!(screen, "{:p} {}", address, size);
+        writeln!(printer, "{:p} {}", address, size);
     }
     else if split[1].eq_ignore_ascii_case("u64o"){
-        let address = match usize::from_str_radix(split[2], 8){Ok(i) => {i}, Err(_) => {writeln!(screen, "2nd argument not valid: {}", split[2]); return;}} as *mut u8;
+        let address = match usize::from_str_radix(split[2], 8){Ok(i) => {i}, Err(_) => {writeln!(printer, "2nd argument not valid: {}", split[2]); return;}} as *mut u8;
         unsafe {
             for i in 0..size {
                 let mut le_bytes:[u8;8] = [0;8];
                 for j in 0..8{asm!("mov {0}, [{1}]", out(reg_byte) le_bytes[j], in(reg) address.add(i*8 + j), options(readonly, nostack))}
                 let num = u64::from_le_bytes(le_bytes);
-                writeln!(screen, "0o{:016o}: 0o{:022o}", address as usize + i*8, num);
+                writeln!(printer, "0o{:016o}: 0o{:022o}", address as usize + i*8, num);
             }
         }
-        writeln!(screen, "{:p} {}", address, size);
+        writeln!(printer, "{:p} {}", address, size);
     }
     else{
-        writeln!(screen, "1st argument not valid: {}", split[1]);
+        writeln!(printer, "1st argument not valid: {}", split[1]);
     }
+}
+
+//Display contents of control registers
+fn command_crread(printer: &mut dyn Write, args: &mut Split<&str>) {
+    //Pre processing variables
+    let mut cr0:  bool = false;
+    let mut cr2:  bool = false;
+    let mut cr3:  bool = false;
+    let mut cr4:  bool = false;
+    let mut efer: bool = false;
+    //Help String
+    let help: &str = "CRREAD      : Display the x86-64 control registers.\n\
+                      crread      [ -all | -cr0 -cr2 -cr3 -cr4 -efer ]\n\
+                      -all        : Display All Registers\n\
+                      -cr0        : Display Control Register 0\n\
+                      -cr2        : Display Control Register 2\n\
+                      -cr3        : Display Control Register 3\n\
+                      -cr4        : Display Control Register 4\n\
+                      -efer       : Display Extended Feature Enable Register";
+    //Processing
+    loop {
+        let arg = match args.next() {
+            Some(s) => s,
+            None => {break;},
+        };
+        if arg.starts_with("-") { match arg {
+            arg if arg.eq_ignore_ascii_case("-all")  => {if cr0||cr2||cr3||cr4||efer {writeln!(printer, "Flag usage not valid.\n{}", help); return;} else {cr0 = true; cr2 = true; cr3 = true; cr4 = true; efer = true;}},
+            arg if arg.eq_ignore_ascii_case("-cr0")  => {if cr0                      {writeln!(printer, "Flag usage not valid.\n{}", help); return;} else {cr0 = true}},
+            arg if arg.eq_ignore_ascii_case("-cr2")  => {if cr2                      {writeln!(printer, "Flag usage not valid.\n{}", help); return;} else {cr2 = true}},
+            arg if arg.eq_ignore_ascii_case("-cr3")  => {if cr3                      {writeln!(printer, "Flag usage not valid.\n{}", help); return;} else {cr3 = true}},
+            arg if arg.eq_ignore_ascii_case("-cr4")  => {if cr4                      {writeln!(printer, "Flag usage not valid.\n{}", help); return;} else {cr4 = true}},
+            arg if arg.eq_ignore_ascii_case("-efer") => {if efer                     {writeln!(printer, "Flag usage not valid.\n{}", help); return;} else {efer = true}},
+            _ => {writeln!(printer, "Invalid flag: {}.\n{}",     arg, help); return;}
+        }}
+        else     {writeln!(printer, "Invalid argument: {}.\n{}", arg, help); return;}
+    }
+    //Check validity
+    if !(cr0||cr2||cr3||cr4||efer) {writeln!(printer, "{}", help); return;}
+    //Control Register Display
+    if cr0  {writeln!(printer, "Control Register 0:\n  Flags:   0x{:016X}", Cr0::read().bits());}
+    if cr2  {writeln!(printer, "Control Register 2:\n  Address: 0x{:016X}", Cr2::read().as_u64());}
+    if cr3  {writeln!(printer, "Control Register 3:\n  Flags:   0b{:016X}\n  Address: 0x{:016X}", Cr3::read().1.bits(), Cr3::read().0.start_address());}
+    if cr4  {writeln!(printer, "Control Register 4:\n  Flags:   0x{:016X}", Cr4::read().bits());}
+    if efer {writeln!(printer, "Extended Feature Enable Register:\n  Flags:   0x{:016X}", Efer::read().bits());}
 }
 
 

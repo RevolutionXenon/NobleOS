@@ -18,29 +18,37 @@ use program::ProgramIterator;
 use program::ProgramType;
 use program_dynamic_entry::ProgramDynamicEntryIterator;
 use program_dynamic_entry::ProgramDynamicEntryType;
+use section::SectionIterator;
 
 //Constants
-pub const GLUON_VERSION:  &    str   = "vDEV-2021-08-18";                                               //CURRENT VERSION OF GRAPHICS LIBRARY
-//                                                            SIGN PM4 PM3 PM2 PM1 OFFSET
-pub const PHYSICAL_MEMORY_PHYSICAL_OCTAL:        usize = 0o________000__________________usize;          //PHYSICAL MEMORY PHYSICAL LOCATION PML4 OFFSET
-pub const PHYSICAL_MEMORY_PHYSICAL_POINTER: *mut u8    = 0o_000000_000_000_000_000_0000_u64 as *mut u8; //PHYSICAL MEMORY PHYSICAL LOCATION POINTER
-pub const KERNEL_VIRTUAL_OCTAL:                  usize = 0o________400__________________usize;          //KERNEL VIRTUAL LOCATION PML4 TABLE OFFSET
-pub const KERNEL_VIRTUAL_POINTER:           *mut u8    = 0o_177777_400_000_000_000_0000_u64 as *mut u8; //KERNEL VIRTUAL LOCATION POINTER
-pub const FRAME_BUFFER_VIRTUAL_OCTAL:            usize = 0o________775__________________usize;          //FRAME BUFFER VIRTUAL LOCATION PML4 OFFSET
-pub const FRAME_BUFFER_VIRTUAL_POINTER:     *mut u8    = 0o_177777_775_000_000_000_0000_u64 as *mut u8; //FRAME BUFFER VIRTUAL LOCATION POINTER
-pub const PHYSICAL_MEMORY_VIRTUAL_OCTAL:         usize = 0o________776__________________usize;          //PHYSICAL MEMORY VIRTUAL LOCATION PML4 OFFSET
-pub const PHYSICAL_MEMORY_VIRTUAL_POINTER:  *mut u8    = 0o_177777_776_000_000_000_0000_u64 as *mut u8; //PHYSICAL MEMORY VIRTUAL LOCATION POINTER
-pub const PAGE_MAP_VIRTUAL_OCTAL:                usize = 0o________777__________________usize;          //PAGE MAP VIRTUAL LOCATION PML4 OFFSET
-pub const PAGE_MAP_VIRTUAL_POINTER:         *mut u8    = 0o_177777_777_000_000_000_0000_u64 as *mut u8; //PAGE MAP VIRTUAL LOCATION POINTER
-pub const PAGE_SIZE_4KIB:                        usize = 0o______________________1_0000_usize;          //MEMORY PAGE SIZE (  4KiB),                            PAGE MAP LEVEL 1 ENTRY SIZE
-pub const PAGE_SIZE_2MIB:                        usize = 0o__________________1_000_0000_usize;          //MEMORY PAGE SIZE (  2MiB), PAGE MAP LEVEL 1 CAPACITY, PAGE MAP LEVEL 2 ENTRY SIZE
-pub const PAGE_SIZE_1GIB:                        usize = 0o______________1_000_000_0000_usize;          //MEMORY PAGE SIZE (  1GiB), PAGE MAP LEVEL 2 CAPACITY, PAGE MAP LEVEL 3 ENTRY SIZE
-pub const PAGE_SIZE_512G:                        usize = 0o__________1_000_000_000_0000_usize;          //MEMORY PAGE SIZE (512GiB), PAGE MAP LEVEL 3 CAPACITY
-pub const PAGE_SIZE_256T:                        usize = 0o______1_000_000_000_000_0000_usize;          //MEMORY PAGE SIZE (256TiB), PAGE MAP LEVEL 4 CAPACITY
-pub const PAGE_NUMBER_1:                         usize = 0o________________________1000_usize;          //NUMBER OF PAGE TABLE ENTRIES 1 LEVEL UP
-pub const PAGE_NUMBER_2:                         usize = 0o____________________100_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 2 LEVELS UP
-pub const PAGE_NUMBER_3:                         usize = 0o________________100_000_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 3 LEVELS UP
-pub const PAGE_NUMBER_4:                         usize = 0o____________100_000_000_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 4 LEVELS UP
+pub const GLUON_VERSION:  &    str   = "vDEV-2021-08-18";                                                //CURRENT VERSION OF GRAPHICS LIBRARY
+//                                                         SIGN PM5 PM4 PM3 PM2 PM1 OFFSET
+pub const PHYSICAL_MEMORY_PHYSICAL_OCTAL:        usize = 0o_________000__________________usize;          //PHYSICAL MEMORY PHYSICAL LOCATION PML4 OFFSET
+pub const PHYSICAL_MEMORY_PHYSICAL_POINTER: *mut u8    = 0o_000_000_000_000_000_000_0000_u64 as *mut u8; //PHYSICAL MEMORY PHYSICAL LOCATION POINTER
+pub const KERNEL_VIRTUAL_OCTAL:                  usize = 0o_________400__________________usize;          //KERNEL VIRTUAL LOCATION PML4 TABLE OFFSET
+pub const KERNEL_VIRTUAL_POINTER:           *mut u8    = 0o_177_777_400_000_000_000_0000_u64 as *mut u8; //KERNEL VIRTUAL LOCATION POINTER
+pub const FRAME_BUFFER_VIRTUAL_OCTAL:            usize = 0o_________775__________________usize;          //FRAME BUFFER VIRTUAL LOCATION PML4 OFFSET
+pub const FRAME_BUFFER_VIRTUAL_POINTER:     *mut u8    = 0o_177_777_775_000_000_000_0000_u64 as *mut u8; //FRAME BUFFER VIRTUAL LOCATION POINTER
+pub const PHYSICAL_MEMORY_VIRTUAL_OCTAL:         usize = 0o_________776__________________usize;          //PHYSICAL MEMORY VIRTUAL LOCATION PML4 OFFSET
+pub const PHYSICAL_MEMORY_VIRTUAL_POINTER:  *mut u8    = 0o_177_777_776_000_000_000_0000_u64 as *mut u8; //PHYSICAL MEMORY VIRTUAL LOCATION POINTER
+pub const PAGE_MAP_VIRTUAL_OCTAL:                usize = 0o_________777__________________usize;          //PAGE MAP VIRTUAL LOCATION PML4 OFFSET
+pub const PAGE_MAP_VIRTUAL_POINTER:         *mut u8    = 0o_177_777_777_000_000_000_0000_u64 as *mut u8; //PAGE MAP VIRTUAL LOCATION POINTER
+pub const PAGE_SIZE_4KIB:                        usize = 0o_______________________1_0000_usize;          //MEMORY PAGE SIZE (  4KiB),                            PAGE MAP LEVEL 1 ENTRY SIZE
+pub const PAGE_SIZE_2MIB:                        usize = 0o___________________1_000_0000_usize;          //MEMORY PAGE SIZE (  2MiB), PAGE MAP LEVEL 1 CAPACITY, PAGE MAP LEVEL 2 ENTRY SIZE
+pub const PAGE_SIZE_1GIB:                        usize = 0o_______________1_000_000_0000_usize;          //MEMORY PAGE SIZE (  1GiB), PAGE MAP LEVEL 2 CAPACITY, PAGE MAP LEVEL 3 ENTRY SIZE
+pub const PAGE_SIZE_512G:                        usize = 0o___________1_000_000_000_0000_usize;          //MEMORY PAGE SIZE (512GiB), PAGE MAP LEVEL 3 CAPACITY
+pub const PAGE_SIZE_256T:                        usize = 0o_______1_000_000_000_000_0000_usize;          //MEMORY PAGE SIZE (256TiB), PAGE MAP LEVEL 4 CAPACITY
+pub const PAGE_SIZE_128P:                        usize = 0o___1_000_000_000_000_000_0000_usize;          //MEMORY PAGE SIZE (128PiB), PAGE MAP LEVEL 5 CAPACITY
+pub const PAGE_NUMBER_1:                         usize = 0o_________________________1000_usize;          //NUMBER OF PAGE TABLE ENTRIES 1 LEVELS UP
+pub const PAGE_NUMBER_2:                         usize = 0o_____________________100_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 2 LEVELS UP
+pub const PAGE_NUMBER_3:                         usize = 0o_________________100_000_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 3 LEVELS UP
+pub const PAGE_NUMBER_4:                         usize = 0o_____________100_000_000_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 4 LEVELS UP
+pub const PAGE_NUMBER_5:                         usize = 0o_________100_000_000_000_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 5 LEVELS UP
+pub const KIB:                                   usize = 0o_________________________2000_usize;          //ONE KIBIBYTE
+pub const MIB:                                   usize = 0o_____________________400_0000_usize;          //ONE MEBIBYTE
+pub const GIB:                                   usize = 0o_______________1_000_000_0000_usize;          //ONE GIBIBYTE
+pub const TIB:                                   usize = 0o___________2_000_000_000_0000_usize;          //ONE TEBIBYTE
+pub const PIB:                                   usize = 0o_______4_000_000_000_000_0000_usize;          //ONE PEBIBYTE
 
 
 // MACROS
@@ -81,8 +89,8 @@ pub trait LocationalRead {
 //Full ELF File Header
 #[derive(Debug)]
 pub struct ELFFile<'a, LR: 'a+LocationalRead> {
-    pub file:    &'a LR,
-    pub file_header: Header,
+    pub file: &'a LR,
+    pub header:   Header,
 }
 impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
     // CONSTRUCTOR
@@ -96,8 +104,17 @@ impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
         //Return
         return Ok(ELFFile {
             file: file,
-            file_header,
+            header: file_header,
         });
+    }
+
+    // ITERATORS
+    pub fn programs(&self) -> ProgramIterator<LR> {
+        ProgramIterator::new(self.file, &self.header)
+    }
+
+    pub fn sections(&self) -> SectionIterator<LR> {
+        SectionIterator::new(self.file, &self.header)
     }
 
     // FUNCTIONS
@@ -108,7 +125,7 @@ impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
         let mut program_highest_address: u64 = 0x0000_0000_0000_0000;
         let mut loadable_found: bool = false;
         //Loop over program headers
-        for program in ProgramIterator::new(self.file, &self.file_header) {
+        for program in ProgramIterator::new(self.file, &self.header) {
             match program {
                 Ok(program) => {
                     //Check if program segment is loadable
@@ -133,7 +150,7 @@ impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
 
     //Load File Into Memory (Very Important to Allocate Memory First)
     pub fn load(&mut self, location: *mut u8) -> Result<(), &'static str> {
-        for program in ProgramIterator::new(self.file, &self.file_header) {
+        for program in ProgramIterator::new(self.file, &self.header) {
             match program {
                 Ok(program) => {
                     if program.program_type == ProgramType::Loadable {
@@ -159,8 +176,8 @@ impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
 
     //Do Relocation (Very Important to Load First) **NOT FINISHED**
     pub fn relocate(&mut self, location: *mut u8) -> Result<(), &'static str> {
-        if self.file_header.object_type != ObjectType::Shared {return Err("ELF File: Object Type Not Yet Supported for Relocation.")}
-        for program in ProgramIterator::new(self.file, &self.file_header) {
+        if self.header.object_type != ObjectType::Shared {return Err("ELF File: Object Type Not Yet Supported for Relocation.")}
+        for program in ProgramIterator::new(self.file, &self.header) {
             match program {
                 Ok(program) => {
                     if program.program_type == ProgramType::Dynamic {
@@ -178,7 +195,7 @@ impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
                         let mut procedure_linkage_table_size:         Option<u64>       = None;
                         let mut procedure_linkage_table_type:         RelocationType    = RelocationType::Explicit;
                     
-                        for dynamic_entry_read in ProgramDynamicEntryIterator::new(self.file, &self.file_header, &program) {
+                        for dynamic_entry_read in ProgramDynamicEntryIterator::new(self.file, &self.header, &program) {
                             match dynamic_entry_read {
                                 Ok(dynamic_entry) => {
                                     match dynamic_entry.entry_type {
@@ -505,7 +522,7 @@ pub mod program {
     #[derive(Debug)]
     pub struct Program {
         pub program_type:        ProgramType,
-        pub flags:               [u8;4],
+        pub flags:               u32,
         pub file_offset:         u64,
         pub virtual_address:     u64,
         pub physical_address:    u64,
@@ -534,7 +551,7 @@ pub mod program {
                         physical_address: u64_fb(data[0x0C..0x10].try_into().map_err( |_| "ELF Program Header: Error slicing physical address.")?),
                         file_size:        u64_fb(data[0x20..0x28].try_into().map_err( |_| "ELF Program Header: Error slicing file size."       )?),
                         memory_size:      u64_fb(data[0x28..0x30].try_into().map_err( |_| "ELF Program Header: Error slicing memory size."     )?),
-                        flags:                   data[0x04..0x08].try_into().map_err( |_| "ELF Program Header: Error slicing flags."           )?,
+                        flags:            u32_fb(data[0x04..0x08].try_into().map_err( |_| "ELF Program Header: Error slicing flags."           )?),
                         alignment:        u64_fb(data[0x30..0x38].try_into().map_err( |_| "ELF Program Header: Error slicing alignment."       )?),
                     })
                 },
@@ -544,7 +561,7 @@ pub mod program {
                         program_type:     ProgramType::try_from(
                                           u32_fb(data[0x00..0x04].try_into().map_err( |_| "ELF Program Header: Error slicing program type."    )?))
                                                                             .map_err( |_| "ELF Program Header: Invalid program type."          )?,
-                        flags:                   data[0x04..0x08].try_into().map_err( |_| "ELF Program Header: Error slicing flags."           )?,
+                        flags:            u32_fb(data[0x04..0x08].try_into().map_err( |_| "ELF Program Header: Error slicing flags."           )?),
                         file_offset:      u64_fb(data[0x08..0x10].try_into().map_err( |_| "ELF Program Header: Error slicing file offset."     )?),
                         virtual_address:  u64_fb(data[0x10..0x18].try_into().map_err( |_| "ELF Program Header: Error slicing virtual address." )?),
                         physical_address: u64_fb(data[0x18..0x20].try_into().map_err( |_| "ELF Program Header: Error slicing physical address.")?),
@@ -585,7 +602,7 @@ pub mod section {
     // STRUCTS
     //Section Header Iterator
     pub struct SectionIterator<'a, LR: 'a+LocationalRead> {
-        file:   &'a mut LR,
+        file:   &'a     LR,
         bit_width:      BitWidth,
         endianness:     Endianness,
         base_offset:    u64,
@@ -595,7 +612,7 @@ pub mod section {
     impl<'a, LR: 'a+LocationalRead> SectionIterator<'a, LR> {
         // FUNCTIONS
         //Constructor
-        pub fn new(file: &'a mut LR, file_header: &Header) -> Self{
+        pub fn new(file: &'a LR, file_header: &Header) -> Self{
             Self {
                 file:           file,
                 bit_width:      file_header.bit_width,
@@ -894,6 +911,7 @@ pub mod elf_relocation_table {
     }
 
 }
+
 
 // ENUMS
 //Bit Width
