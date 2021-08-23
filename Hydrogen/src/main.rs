@@ -20,16 +20,14 @@
 extern crate rlibc;
 extern crate alloc;
 
-use gluon::program::ProgramIterator;
-use gluon::program_dynamic_entry::ProgramDynamicEntryIterator;
 //Imports
-use gluon::header::ApplicationBinaryInterface;
-use gluon::header::InstructionSetArchitecture;
-use gluon::header::ObjectType;
-use gluon::program::ProgramType;
 use photon::*;
 use gluon::*;
-use alloc::string::String;
+use gluon::header::*;
+use gluon::program::*;
+use gluon::section::*;
+use gluon::program_dynamic_entry::*;
+use gluon::relocation_entry::*;
 use core::cell::RefCell;
 use core::fmt::Write;
 use core::panic::PanicInfo;
@@ -80,6 +78,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     unsafe {PHYSICAL_FRAME_POINTER = graphics_frame_pointer};
     //Screen Variables
     let whitespace = Character::<BGRX_DEPTH>::new(' ', COLOR_WHT_BGRX, COLOR_BLK_BGRX);
+    let _blackspace = Character::<BGRX_DEPTH>::new(' ', COLOR_BLK_BGRX, COLOR_WHT_BGRX);
     let bluespace  = Character::<BGRX_DEPTH>::new(' ', COLOR_BLU_BGRX, COLOR_BLK_BGRX);
     let renderer = Renderer::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH>::new(graphics_frame_pointer);
     let mut frame = CharacterFrame::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_FRAME_HEIGHT, F1_FRAME_WIDTH>::new(renderer, whitespace);
@@ -201,30 +200,43 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     let mut si = 0;
     for section in kernel.sections() {
         match section {
-            Ok(section) => writeln!(printer, "Section Found at Index {}: {:?}", si, section),
-            Err(error) => writeln!(printer, "Section Error at Index {}: {}", si, error)
+            Ok(section) => writeln!(printer, "Section Found at Index {}: {:?}\n", si, section),
+            Err(error) => writeln!(printer, "Section Error at Index {}: {}\n", si, error)
         };
         si += 1;
     }
     //Relocation
-    writeln!(printer, "\n=== DYNAMIC INFO ===\n");
-    for program in ProgramIterator::new(kernel.file, &kernel.header) {
-        match program {
-            Ok(program) => {
-                if program.program_type == ProgramType::Dynamic {
-                    writeln!(printer, "Dynamic Table Found: {:#?}", program);
-                    let dynamic_table = ProgramDynamicEntryIterator::new(kernel.file, &kernel.header, &program);
-                    for dynamic_entry in dynamic_table {
-                        match dynamic_entry {
-                            Ok(entry) => {writeln!(printer, "Dynamic Table Entry: {:#?}", entry);},
-                            Err(error) => {writeln!(printer, "Dynamic Table Error: {}", error);},
-                        }
-                    }
-                }
-            },
-            Err(_) => {},
-        }
-    }
+    writeln!(printer, "\n=== PROGRAM DYNAMIC SECTION ===\n");
+    kernel.programs()
+    .filter(|result| result.is_ok())
+    .map(|result| result.unwrap())
+    .filter(|program| program.program_type == ProgramType::Dynamic)
+    .for_each(|program| {
+        writeln!(printer, "Dynamic Table Found: {:#?}", program);
+        ProgramDynamicEntryIterator::new(kernel.file, &kernel.header, &program)
+        .for_each(|result| {
+            match result {
+                Ok(entry) => {writeln!(printer, "Dynamic Table Entry: {:#?}", entry);},
+                Err(error) => {writeln!(printer, "Dynamic Table Error: {}", error);},
+            }
+        });
+    });
+
+    writeln!(printer, "\n=== RELOCATION TABLE ===\n");
+    kernel.sections()
+    .filter(|result| result.is_ok())
+    .map(|result| result.unwrap())
+    .filter(|section| section.section_type == SectionType::ExplicitRelocationTable)
+    .for_each(|section| {
+        writeln!(printer, "Explicit Relocation Section Found: {:#?}", section);
+        RelocationEntryIterator::new(kernel.file, kernel.header.bit_width, kernel.header.endianness, RelocationType::Explicit, section.file_size, section.file_offset)
+        .for_each(|result| {
+            match result {
+                Ok(reloc) => {writeln!(printer, "Relocation Table Entry: {:?}", reloc);},
+                Err(error) => {writeln!(printer, "Relocation Table Error: {}", error);}
+            }
+        });
+    });
 
     // BOOT LOAD
     let pml4_knenv: *mut u8;
@@ -274,29 +286,35 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                     //Return to bottom of screen
                     printer.end_down();
                     //Execute command and reset input stack
-                    let mut buffer = [' '; F1_INPUT_LENGTH];
-                    let command = &inputter.to_chararray(&mut buffer).iter().collect::<String>();
-                    let return_code = command_processor(&mut printer, &system_table_boot, command);
-                    inputter.flush(whitespace);
-                    //Check return code
-                    match return_code {
-                        0x00 => { //Continue
-                        },
-                        0x01 => { //Boot
-                            break;
-                        },
-                        0x02 => { //Shutdown
-                            system_table_boot.boot_services().stall(5_000_000);
-                            system_table_boot.runtime_services().reset(ResetType::Shutdown, Status(0), None);
-                        },
-                        0x03 => { //Panic
-                            system_table_boot.boot_services().stall(5_000_000);
-                            panic!("Manually called panic.");
-                        },
-                        _    => { //Unrecognized
-                            panic!("Unexpected return code.");
-                        },
+                    let mut buffer = [0u8; F1_INPUT_LENGTH*4];
+                    match inputter.to_str(&mut buffer) {
+                        Ok(command) => {
+                            let return_code = command_processor(&mut printer, &system_table_boot, command);
+                            //Check return code
+                            match return_code {
+                                0x00 => { //Continue
+                                },
+                                0x01 => { //Boot
+                                    break;
+                                },
+                                0x02 => { //Shutdown
+                                    system_table_boot.boot_services().stall(5_000_000);
+                                    system_table_boot.runtime_services().reset(ResetType::Shutdown, Status(0), None);
+                                },
+                                0x03 => { //Panic
+                                    system_table_boot.boot_services().stall(5_000_000);
+                                    panic!("Manually called panic.");
+                                },
+                                _    => { //Unrecognized
+                                    panic!("Unexpected return code.");
+                                },
+                            }
+                        }
+                        Err(error) => {
+                            writeln!(printer, "{}", error);
+                        }
                     }
+                    inputter.flush(whitespace);
                 }
                 //User has typed a character
                 else {

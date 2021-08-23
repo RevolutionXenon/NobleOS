@@ -15,11 +15,12 @@
 //Modules
 pub mod font_handler;
 
+use core::fmt::Error;
 //Imports
 use core::fmt::Write;
-use core::fmt::Result;
 use core::fmt::Arguments;
 use core::ptr::write_volatile;
+use core::str;
 use crate::font_handler::retrieve_font_bitmap;
 
 //Constants
@@ -244,7 +245,7 @@ PrintWindow<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, LINES, HEIGHT, WIDTH, Y, 
     pub fn new(screen: Renderer<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH>, write_whitespace: Character<SCREEN_DEPTH>, line_whitespace: Character<SCREEN_DEPTH>) -> Self{
         PrintWindow{
             screen,
-            print_buffer: [[write_whitespace; WIDTH]; LINES],
+            print_buffer: [[line_whitespace; WIDTH]; LINES],
             print_y: LINES - HEIGHT,
             print_x: 0,
             write_whitespace,
@@ -379,17 +380,17 @@ PrintWindow<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, LINES, HEIGHT, WIDTH, Y, 
 //Write Impementation
 impl <const SCREEN_HEIGHT: usize, const SCREEN_WIDTH: usize, const SCREEN_DEPTH: usize, const LINES: usize, const HEIGHT: usize, const WIDTH: usize, const Y: usize, const X: usize>
 Write for PrintWindow<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, LINES, HEIGHT, WIDTH, Y, X> {
-    fn write_str(&mut self, string: &str) -> Result {
+    fn write_str(&mut self, string: &str) -> Result<(), Error> {
         self.push(string, self.write_whitespace);
         return Ok(());
     }
 
-    fn write_char(&mut self, codepoint: char) -> Result {
+    fn write_char(&mut self, codepoint: char) -> Result<(), Error> {
         self.push(codepoint.encode_utf8(&mut [0; 4]), self.write_whitespace);
         return Ok(());
     }
 
-    fn write_fmt(mut self: &mut Self, arguments: Arguments<'_>) -> Result {
+    fn write_fmt(mut self: &mut Self, arguments: Arguments<'_>) -> Result<(), Error> {
         let r = core::fmt::write(&mut self, arguments);
         self.render();
         return r;
@@ -399,14 +400,14 @@ Write for PrintWindow<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, LINES, HEIGHT, 
 
 // INPUT WINDOW
 //Struct
-pub struct InputWindow<const SCREEN_HEIGHT: usize, const SCREEN_WIDTH: usize, const SCREEN_DEPTH: usize, const LENGTH: usize, const WIDTH: usize, const Y: usize, const X: usize> {
+pub struct InputWindow<const SCREEN_HEIGHT: usize, const SCREEN_WIDTH: usize, const SCREEN_DEPTH: usize, const LENGTH: usize, const WIDTH: usize, const Y: usize, const X: usize> where [(); LENGTH*4]: {
     screen:           Renderer<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH>,
     input_buffer:     [Character<SCREEN_DEPTH>; LENGTH],
     input_p:          usize,
 }
 //General Implementation
-impl<const SCREEN_HEIGHT: usize, const SCREEN_WIDTH: usize, const SCREEN_DEPTH: usize, const LENGTH: usize, const WIDTH: usize, const Y: usize, const X: usize>
-InputWindow<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, LENGTH, WIDTH, Y, X> {
+impl<const SCREEN_HEIGHT: usize, const SCREEN_WIDTH: usize, const SCREEN_DEPTH: usize, const LENGTH: usize, const WIDTH: usize, const Y: usize, const X: usize> 
+InputWindow<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, LENGTH, WIDTH, Y, X> where [(); LENGTH*4]: {
     // CONSTRUCTOR
     pub fn new(screen: Renderer<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH>, whitespace: Character<SCREEN_DEPTH>) -> Self {
         InputWindow {
@@ -482,6 +483,22 @@ InputWindow<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, LENGTH, WIDTH, Y, X> {
             buffer[i] = self.input_buffer[i].codepoint;
         }
         return &buffer[0..self.input_p];
+    }
+
+    //Return contents of the input stack as a string slice
+    pub fn to_str<'f>(&mut self, buffer: &'f mut [u8; LENGTH*4]) -> Result<&'f str, &'static str> {
+        let mut p: usize = 0;
+        for i in 0..self.input_p {
+            let c = self.input_buffer[i].codepoint;
+            let mut a = [0u8; 4];
+            let l = c.len_utf8();
+            char::encode_utf8(c, &mut a);
+            for j in 0..l {
+                buffer[p] = a[j];
+                p += l;
+            }
+        }
+        return str::from_utf8(&buffer[0..p]).map_err(|_| "Input: Error processing characters into string slice.");
     }
 
     //Return the length of the input stack
