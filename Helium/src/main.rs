@@ -11,19 +11,21 @@
 
 // HEADER
 //Flags
-#![feature(start)]
-#![feature(asm)]
 #![no_std]
 #![no_main]
+#![allow(unused_must_use)]
+#![feature(start)]
+#![feature(asm)]
 
 //Imports
 use photon::*;
 use gluon::*;
 use core::fmt::Write;
+#[cfg(not(test))]
 use core::panic::PanicInfo;
 
 //Constants
-const HELIUM_VERSION: &str = "vDEV-2021-08-15"; //CURRENT VERSION OF KERNEL
+const HELIUM_VERSION: &str = "vDEV-2021-08-24"; //CURRENT VERSION OF KERNEL
 
 
 // MAIN
@@ -63,6 +65,7 @@ pub extern "sysv64" fn _start() -> ! {
 
 // PANIC HANDLER
 //Panic Handler
+#[cfg(not(test))]
 #[panic_handler]
 fn panic_handler(panic_info: &PanicInfo) -> ! {
     unsafe {

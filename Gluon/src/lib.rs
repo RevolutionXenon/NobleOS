@@ -8,17 +8,19 @@
 // HEADER
 //Flags
 #![no_std]
+#![allow(non_camel_case_types)]
 
 //Imports
 use core::convert::TryFrom;
 use core::intrinsics::copy_nonoverlapping;
 use header::*;
 use program::*;
-use program_dynamic_entry::*;
 use section::*;
+use program_dynamic_entry::*;
+use relocation_entry::*;
 
 //Constants
-pub const GLUON_VERSION:  &    str   = "vDEV-2021-08-18";                                                //CURRENT VERSION OF GRAPHICS LIBRARY
+pub const GLUON_VERSION:  &    str   = "vDEV-2021-08-24";                                                //CURRENT VERSION OF GRAPHICS LIBRARY
 //                                                         SIGN PM5 PM4 PM3 PM2 PM1 OFFSET
 pub const PHYSICAL_MEMORY_PHYSICAL_OCTAL:        usize = 0o_________000__________________usize;          //PHYSICAL MEMORY PHYSICAL LOCATION PML4 OFFSET
 pub const PHYSICAL_MEMORY_PHYSICAL_POINTER: *mut u8    = 0o_000_000_000_000_000_000_0000_u64 as *mut u8; //PHYSICAL MEMORY PHYSICAL LOCATION POINTER
@@ -146,7 +148,7 @@ impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
     }
 
     //Load File Into Memory (Very Important to Allocate Memory First)
-    pub fn load(&mut self, location: *mut u8) -> Result<(), &'static str> {
+    pub unsafe fn load(&mut self, location: *mut u8) -> Result<(), &'static str> {
         let program_iterator = ProgramIterator::new(self.file, &self.header)
         .filter(|result| result.is_ok())
         .map(|result| result.unwrap())
@@ -157,22 +159,55 @@ impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
             let count = program.file_size as usize/BUFFER_SIZE;
             for i in 0..count {
                 self.file.read(program.file_offset as usize+i*BUFFER_SIZE, &mut buffer)?;
-                unsafe {copy_nonoverlapping(buffer.as_ptr(), location.add(program.virtual_address as usize + i*BUFFER_SIZE as usize), BUFFER_SIZE)}
+                copy_nonoverlapping(buffer.as_ptr(), location.add(program.virtual_address as usize + i*BUFFER_SIZE as usize), BUFFER_SIZE);
             }
             let leftover: usize = program.file_size as usize %BUFFER_SIZE;
             if leftover != 0 {
                 self.file.read(program.file_offset as usize + count*BUFFER_SIZE, &mut buffer[0..leftover])?;
-                unsafe {copy_nonoverlapping(buffer.as_ptr(), location.add(program.virtual_address as usize + count*BUFFER_SIZE as usize), leftover)}
+                copy_nonoverlapping(buffer.as_ptr(), location.add(program.virtual_address as usize + count*BUFFER_SIZE as usize), leftover);
             }
         }
         return Ok(())
     }
 
     //Do Relocation (Very Important to Load First) **NOT FINISHED**
-    pub fn relocate(&mut self, location: *mut u8) -> Result<(), &'static str> {
+    pub unsafe fn relocate(&mut self, loaded_location: *mut u8, reloc_location: *mut u8) -> Result<(), &'static str> {
+        //Ensure correct object type
         if self.header.object_type != ObjectType::Shared {return Err("ELF File: Relocation not yet supported for this object type.")}
-        
-        return Err("ELF File: Relocation function not yet finished.");
+        //Find relocation entries
+        let explicit_relocation_sections = self.sections()
+                .filter(|result| result.is_ok())
+                .map(|result| result.unwrap())
+                .filter(|section| section.section_type == SectionType::ExplicitRelocationTable);
+        //Match to file architecture
+        match self.header.architecture {
+            //x86-64 Relocation
+            InstructionSetArchitecture::EmX86_64 => {
+                for section in explicit_relocation_sections {
+                    let relocation_table = RelocationEntryIterator::new(self.file, self.header.bit_width, self.header.endianness, RelocationType::Explicit, section.file_size, section.file_offset)
+                    .filter(|result| result.is_ok())
+                    .map(|result| result.unwrap());
+                    for entry in relocation_table {
+                        /*const R_X86_64_NONE : u16 = 0;
+		                  const R_X86_64_64   : u16 = 1; // 64, S + A
+		                  const R_X86_64_PC32 : u16 = 2; // 32, S + A - P
+		                  const R_X86_64_GOT32: u16 = 3; // 32, G + A
+		                  const R_X86_64_PLT32: u16 = 4; // 32, L + A - P
+		                  const R_X86_64_COPY : u16 = 5;
+		                  const R_X86_64_GLOB_DAT : u16 = 6; // 64, S
+		                  const R_X86_64_JUMP_SLOT: u16 = 7; // 64, S
+		                  const R_X86_64_RELATIVE : u16 = 8; // 64, B + A */
+                        match entry.relocation_entry_type {
+                            RelocationEntryTypeX86_64::R_X86_64_NONE      => {},
+                            RelocationEntryTypeX86_64::R_X86_64_RELATIVE  => {*((loaded_location as u64 + entry.offset) as *mut u64) = (reloc_location as u64) + entry.addend.unwrap_or(0);},
+                            _ => {return Err("ELF File: Relocation entry type found which is not supported.")},
+                        }
+                    }
+                }
+                return Ok(());
+            },
+            _ => return Err("ELF File: Relocation not supported for this file's Instruction Set Architecture.")
+        }
     }
 }
 
@@ -842,7 +877,7 @@ pub mod relocation_entry {
     pub struct RelocationEntry {
         pub offset:                u64,
         pub symbol:                u32,
-        pub relocation_entry_type: RelocationEntryType,
+        pub relocation_entry_type: RelocationEntryTypeX86_64,
         pub addend:                Option<u64>,
     }
     impl RelocationEntry {
@@ -859,7 +894,7 @@ pub mod relocation_entry {
                     return Ok(Self {
                         offset: u32_fb(data[0x00..0x04].try_into().map_err( |_| "Relocation Entry: Error slicing offset.")?) as u64,
                         symbol: info >> 8,
-                        relocation_entry_type: RelocationEntryType::try_from(info & 0xFF).map_err( |_| "Relocation Entry: Invalid relocation entry type.")?,
+                        relocation_entry_type: RelocationEntryTypeX86_64::try_from(info & 0xFF).map_err( |_| "Relocation Entry: Invalid relocation entry type.")?,
                         addend: None,
                     });
                 },
@@ -869,7 +904,7 @@ pub mod relocation_entry {
                     return Ok(Self {
                         offset: u32_fb(data[0x00..0x04].try_into().map_err( |_| "Relocation Entry: Error slicing offset.")?) as u64,
                         symbol: info >> 8,
-                        relocation_entry_type: RelocationEntryType::try_from(info & 0xFF).map_err( |_| "Relocation Entry: Invalid relocation entry type.")?,
+                        relocation_entry_type: RelocationEntryTypeX86_64::try_from(info & 0xFF).map_err( |_| "Relocation Entry: Invalid relocation entry type.")?,
                         addend: Some(u32_fb(data[0x08..0x0C].try_into().map_err( |_| "Relocation Entry: Error slicing addend.")?) as u64),
                     });
                 },
@@ -878,8 +913,8 @@ pub mod relocation_entry {
                     let info: u64 = u64_fb(data[0x08..0x10].try_into().map_err( |_| "Relocation Entry: Error slicing info.")?);
                     return Ok(Self {
                         offset: u64_fb(data[0x00..0x08].try_into().map_err( |_| "Relocation Entry: Error slicing offset.")?),
-                        relocation_entry_type: RelocationEntryType::try_from((info>>32) as u32).map_err( |_| "Relocation Entry: Invalid relocation Entry Type.")?,
-                        symbol: (info & 0xFFFFFFFF) as u32,
+                        symbol: (info>>32) as u32,
+                        relocation_entry_type: RelocationEntryTypeX86_64::try_from((info & 0xFFFFFFFF) as u32).map_err( |_| "Relocation Entry: Invalid relocation Entry Type.")?,
                         addend: None,
                     });
                 },
@@ -888,8 +923,8 @@ pub mod relocation_entry {
                     let info: u64 = u64_fb(data[0x08..0x10].try_into().map_err( |_| "Relocation Entry: Error slicing info.")?);
                     return Ok(Self {
                         offset: u64_fb(data[0x00..0x08].try_into().map_err( |_| "Relocation Entry: Error slicing offset.")?),
-                        relocation_entry_type: RelocationEntryType::try_from((info>>32) as u32).map_err( |_| "Relocation Entry: Invalid relocation Entry Type.")?,
-                        symbol: (info & 0xFFFFFFFF) as u32,
+                        symbol: (info>>32) as u32,
+                        relocation_entry_type: RelocationEntryTypeX86_64::try_from((info & 0xFFFFFFFF) as u32).map_err( |_| "Relocation Entry: Invalid relocation Entry Type.")?,
                         addend: Some(u64_fb(data[0x10..0x18].try_into().map_err( |_| "Relocation Entry: Error slicing info.")?)),
                     });
                 },
@@ -965,12 +1000,12 @@ pub mod relocation_entry {
     }
 
     //ENUMS
-    //Relocation Entry Type (WARNING: x86-64 SPECIFIC)
+    //Relocation Entry Type (x86-64)
     numeric_enum!{
         #[repr(u32)]
         #[derive(Clone, Copy)]
         #[derive(Debug)]
-        pub enum RelocationEntryType {
+        pub enum RelocationEntryTypeX86_64 {
             R_X86_64_NONE            = 0x00,
             R_X86_64_64              = 0x01,
             R_X86_64_PC32            = 0x02,

@@ -30,6 +30,7 @@ use gluon::program_dynamic_entry::*;
 use gluon::relocation_entry::*;
 use core::cell::RefCell;
 use core::fmt::Write;
+#[cfg(not(test))]
 use core::panic::PanicInfo;
 use core::ptr;
 use core::ptr::read_volatile;
@@ -52,7 +53,7 @@ use uefi::table::runtime::ResetType;
 use x86_64::registers::control::*;
 
 //Constants
-const HYDROGEN_VERSION: & str = "vDEV-2021-08-18"; //CURRENT VERSION OF BOOTLOADER
+const HYDROGEN_VERSION: & str = "vDEV-2021-08-24"; //CURRENT VERSION OF BOOTLOADER
 
 
 // MAIN
@@ -180,14 +181,26 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     writeln!(printer, "Kernel Section Header Number:       0x{:16X}", kernel.header.section_header_number);
     writeln!(printer, "Kernel Section Header String Index: 0x{:16X}", kernel.header.string_section_index);
     writeln!(printer, "Kernel Code Size:                   0x{:16X}", kernel.program_memory_size());
-    //Allocate memory for code
+    //Allocate memory for kernel
     let kernel_stack_size: usize = 16*MIB;
     let kernel_total_size: usize = kernel.program_memory_size() as usize + kernel_stack_size;
     let kernel_physical: *mut u8 = unsafe {allocate_memory(boot_services, MemoryType::LOADER_CODE, kernel_total_size, PAGE_SIZE_4KIB as usize)};
-    //Load code into memory
-    kernel.load(kernel_physical);
-    //Check
-    writeln!(printer, "\n=== PROGRAMS ===\n");
+    //Load kernel into memory
+    writeln!(printer, "\n=== KERNEL LOADING ===\n");
+    unsafe {
+        match kernel.load(kernel_physical) {
+            Ok(()) => {
+                writeln!(printer, "Kernel successfully loaded.");
+                match kernel.relocate(kernel_physical, KERNEL_VIRTUAL_POINTER) {
+                    Ok(()) => {writeln!(printer, "Kernel successfully relocated.");},
+                    Err(error) => {writeln!(printer, "{}", error);},
+                }
+            },
+            Err(error) => {writeln!(printer, "{}", error);}
+        }
+    }
+    //Print diagnostic info
+    /*writeln!(printer, "\n=== PROGRAMS ===\n");
     let mut pi = 0;
     for program in kernel.programs() {
         match program {
@@ -205,7 +218,6 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         };
         si += 1;
     }
-    //Relocation
     writeln!(printer, "\n=== PROGRAM DYNAMIC SECTION ===\n");
     kernel.programs()
     .filter(|result| result.is_ok())
@@ -221,7 +233,6 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
             }
         });
     });
-
     writeln!(printer, "\n=== RELOCATION TABLE ===\n");
     kernel.sections()
     .filter(|result| result.is_ok())
@@ -236,7 +247,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                 Err(error) => {writeln!(printer, "Relocation Table Error: {}", error);}
             }
         });
-    });
+    });*/
 
     // BOOT LOAD
     let pml4_knenv: *mut u8;
@@ -371,6 +382,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
 static mut PHYSICAL_FRAME_POINTER: *mut u8 = 0 as *mut u8;
 
 //Panic Handler
+#[cfg(not(test))]
 #[panic_handler]
 fn panic_handler(panic_info: &PanicInfo) -> ! {
     unsafe {
