@@ -24,105 +24,158 @@ use core::str;
 use crate::font_handler::retrieve_font_bitmap;
 
 //Constants
-pub const PHOTON_VERSION: & str = "vDEV-2021-08-15"; //CURRENT VERSION OF GRAPHICS LIBRARY
+pub const PHOTON_VERSION: & str = "vDEV-2021-08-26"; //CURRENT VERSION OF GRAPHICS LIBRARY
 
 
-// CHARACTER
-//Struct
+// TRAITS
+//Color Format
+pub trait ColorFormat {
+    fn render_data(&self) -> &[u8];
+    fn stride() -> usize;
+}
+
+//Character Format
+pub trait CharacterFormat<Color: ColorFormat> {
+    fn get_codepoint(&self) -> char;
+    fn set_codepoint(&mut self, codepoint: char);
+}
+
+//Pixel Renderer
+pub trait PixelRenderer<Color: ColorFormat> {
+    unsafe fn render_pixel(&self, color: Color, y: usize, x: usize);
+    unsafe fn render_line(&self, line: &[Color], y: usize, x: usize);
+    unsafe fn render_image(&self, image: &[&[Color]], y: usize, x: usize);
+    unsafe fn render_screen(&self, color: Color);
+}
+
+//Character Renderer
+pub trait CharacterRenderer<Color: ColorFormat, Character: CharacterFormat<Color>> {
+    fn render_character(&self, character: Character, y: usize, x: usize);
+}
+
+
+// SPECIFIC IMPLEMENTATIONS
+//Color: BGRX
+#[derive(Default)]
 #[derive(Copy, Clone)]
-pub struct Character<const DEPTH: usize> {
-    codepoint:      char,
-    foreground:     [u8; DEPTH],
-    background:     [u8; DEPTH],
+pub struct ColorBGRX {
+    data: [u8;3]
 }
-//General Implementation
-impl<const DEPTH: usize> Character<DEPTH> {
-    // CONSTRUCTOR
-    pub fn new(codepoint: char, foreground: [u8;DEPTH], background:  [u8;DEPTH]) -> Self {
-        Character {
-            codepoint,
-            foreground,
-            background,
-        }
+impl ColorBGRX                 {
+    pub const fn new(red: u8, green: u8, blue: u8) -> Self {
+        Self {data: [blue, green, red],}
     }
 }
-
-
-// SCREEN
-//Struct
-#[derive(Clone, Copy)]
-pub struct Renderer<const HEIGHT: usize, const WIDTH: usize, const DEPTH: usize> {
-    pointer: *mut u8,
+impl ColorFormat for ColorBGRX {
+    fn render_data(&self) -> &[u8] {&self.data}
+    fn stride() -> usize {4}
 }
-//General Implementation
-impl<const HEIGHT: usize, const WIDTH: usize, const DEPTH: usize> 
-Renderer<HEIGHT, WIDTH, DEPTH> {
-    // CONSTRUCTOR
-    pub fn new(pointer: *mut u8) -> Self {
-        Renderer{
-            pointer,
+
+//Character: Two Tone
+#[derive(Copy, Clone)]
+pub struct CharacterTwoTone<Color: ColorFormat> {
+    pub codepoint:  char,
+    pub foreground: Color,
+    pub background: Color,
+}
+impl<Color: ColorFormat> CharacterFormat<Color> for CharacterTwoTone<Color> {
+    fn get_codepoint(&self) -> char {self.codepoint}
+    fn set_codepoint(&mut self, codepoint: char) {self.codepoint = codepoint;}
+}
+
+//Pixel Render: Height then Width then Depth
+pub struct PixelRendererHWD {
+    pub pointer: *mut u8,
+    pub height:       usize,
+    pub width:        usize,
+}
+impl<Color: ColorFormat+Clone+Copy> PixelRenderer<Color> for PixelRendererHWD {
+    unsafe fn render_pixel(&self, color: Color, y: usize, x: usize) {
+        if !(y<self.height && x<self.width) {return};
+        let position: *mut u8 = self.pointer.add((y*self.width + x)*Color::stride());
+        let render_data = color.render_data();
+        for i in 0..render_data.len() {
+            write_volatile(position.add(i), render_data[i]);
         }
     }
-
-    // BASIC FUNCTION
-    //Render character to physical screen
-    pub fn render_character(&mut self, character: Character<DEPTH>, y: usize, x: usize) {
-        //Check valid character position
-        if y*16 >= HEIGHT || x*16 >= WIDTH {
-            return;
+    unsafe fn render_line(&self, line: &[Color], y: usize, x: usize) {
+        let position: *mut u8 = self.pointer.add((y*self.width + x)*Color::stride());
+        for i in 0..line.len() {
+            let render_data = line[i].render_data();
+            for j in 0..render_data.len() {
+                write_volatile(position.add(i*Color::stride()+j), render_data[j]);
+            }
         }
-        //Find bitmap
-        let bitmap = retrieve_font_bitmap(&character.codepoint);
-        //Loop through bitmap
-        for byte_row in 0..16 {
-            for byte_column in 0..2 {
-                for bit in 0..8 {
-                    //Get position of of pixel in width*height space
-                    let pixel_index = (y*16 + byte_row)*WIDTH + (x*16 + byte_column*8 + bit);
-                    //Get color from bitmap bit and Character
-                    let color: [u8; DEPTH] = 
-                        if bitmap[byte_row*2 + byte_column] & (1 << bit) != 0{character.foreground}
-                        else {character.background};
-                    //Write color to screen
-                    unsafe{
-                        for i in 0..DEPTH {
-                            write_volatile(
-                                self.pointer.add(pixel_index*DEPTH + i),
-                                color[i]
-                            );
-                        }
-                    }
-                }
+    }
+    unsafe fn render_image(&self, image: &[&[Color]], y: usize, x: usize) {
+        for i in 0..image.len() {
+            self.render_line(image[i], y, x)
+        }
+    }
+    unsafe fn render_screen(&self, color: Color) {
+        for y in 0..self.height {
+            for x in 0..self.width {
+                self.render_pixel(color, y, x);
             }
         }
     }
 }
 
-
-// CHARACTER FRAME
-//Struct
-pub struct CharacterFrame<const SCREEN_HEIGHT: usize, const SCREEN_WIDTH: usize, const SCREEN_DEPTH: usize, const HEIGHT: usize, const WIDTH: usize> {
-    screen:          Renderer<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH>,
-    character_frame: [[Character<SCREEN_DEPTH>; WIDTH]; HEIGHT]
+//Character Renderer: Two Tone Characters, 16x16 Pixel Grid
+pub struct CharacterTwoToneRenderer16x16<Color: ColorFormat+Default+Copy>                                                                                            {
+    pub renderer: *const dyn PixelRenderer<Color>,
+    pub height:           usize,
+    pub width:            usize,
+    pub y:                usize,
+    pub x:                usize,
 }
-//General Implementation
-impl<const SCREEN_HEIGHT: usize, const SCREEN_WIDTH: usize, const SCREEN_DEPTH: usize, const HEIGHT: usize, const WIDTH: usize> 
-CharacterFrame<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, HEIGHT, WIDTH> {
+impl                                    <Color: ColorFormat+Default+Copy> CharacterRenderer<Color, CharacterTwoTone<Color>> for CharacterTwoToneRenderer16x16<Color> {
+    fn render_character(&self, character: CharacterTwoTone<Color>, y: usize, x: usize) {
+        //Find bitmap
+        let bitmap = retrieve_font_bitmap(character.codepoint);
+        //Loop through bitmap
+        for i in 0..16 {
+            let mut line = [Color::default();16];
+            for j in 0..2 {
+                for k in 0..8 {
+                    let color = match bitmap[i*2 + j] & (1 << k) != 0 {
+                        true => character.foreground,
+                        false => character.background,
+                    };
+                    line[j*8+k] = color;
+                    //unsafe {self.renderer.render_pixel(h, y*16+i, x*16+j*8+k);}
+                }
+            }
+            unsafe {(*self.renderer).render_line(&line, (y<<4) + i + self.y, (x<<4) + self.x);}
+        }
+    }
+}
+
+
+// WINDOW STRUCTS
+//Frame of Fixed Dimensions
+pub struct FrameWindow<'s, const HEIGHT: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>+Clone+Copy>                                                  {
+    renderer: &'s dyn CharacterRenderer<Color, Character>,
+    character_frame:  [[Character; WIDTH]; HEIGHT],
+    y:                usize,
+    x:                usize,
+}
+impl                  <'s, const HEIGHT: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>+Clone+Copy> FrameWindow<'s, HEIGHT, WIDTH, Color, Character> {
     //CONSTRUCTOR
-    pub fn new(screen: Renderer<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH>, whitespace: Character<SCREEN_DEPTH>) -> Self {
-        CharacterFrame{
-            screen,
-            character_frame: [[whitespace; WIDTH]; HEIGHT]
+    pub fn new(renderer: &'s dyn CharacterRenderer<Color, Character>, whitespace: Character, y: usize, x: usize) -> Self {
+        FrameWindow{
+            renderer,
+            character_frame: [[whitespace; WIDTH]; HEIGHT],
+            y,
+            x,
         }
     }
 
     // BASIC FUNCTION
     //Place Character in Frame
-    pub fn place(&mut self, character: Character<SCREEN_DEPTH>, y: usize, x: usize) {
+    pub fn place(&mut self, character: Character, y: usize, x: usize) {
         //Check valid character position
-        if y >= HEIGHT || x >= WIDTH {
-            return;
-        }
+        if !(y < HEIGHT && x < WIDTH) {return;}
         //Set character
         self.character_frame[y][x] = character;
     }
@@ -132,87 +185,87 @@ CharacterFrame<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, HEIGHT, WIDTH> {
     pub fn render(&mut self) {
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
-                self.screen.render_character(self.character_frame[y][x], y, x);
+                self.renderer.render_character(self.character_frame[y][x], y+self.y, x+self.x);
             }
         }
     }
 
     //Draw character to characterframe screen and render it to physical screen
-    pub fn character_place_render(&mut self, character: Character<SCREEN_DEPTH>, y: usize, x: usize) {
+    pub fn character_place_render(&mut self, character: Character, y: usize, x: usize) {
         self.place(character, y, x);
-        self.screen.render_character(character, y, x);
+        self.renderer.render_character(character, y, x);
     }
 
     //Horizontal Line
-    pub fn horizontal_line(&mut self, y: usize, x1: usize, x2:usize, whitespace: Character<SCREEN_DEPTH>) {
+    pub fn horizontal_line(&mut self, y: usize, x1: usize, x2:usize, whitespace: Character) {
         {
-            let check: char = self.character_frame[y][x1].codepoint;
-            let write = match check {
+            let check = self.character_frame[y][x1];
+            let write = match check.get_codepoint() {
                 '═' => '═', '║' => '╠', '╔' => '╔', '╗' => '╦',
                 '╚' => '╚', '╝' => '╩', '╞' => '╞', '╠' => '╠',
                 '╡' => '═', '╣' => '╬', '╥' => '╔', '╦' => '╦',
                 '╨' => '╚', '╩' => '╩', '╬' => '╬',  _  => '╞',
             };
-            self.character_frame[y][x1] = Character::new(write, whitespace.foreground, whitespace.background);
+            self.character_frame[y][x1] = {let mut replace = whitespace.clone(); replace.set_codepoint(write); replace};
         }
         for x in x1+1..x2 {
-            let check: char = self.character_frame[y][x].codepoint;
-            let write = match check {
+            let check = self.character_frame[y][x];
+            let write = match check.get_codepoint() {
                 '═' => '═', '║' => '╬', '╔' => '╦', '╗' => '╦',
                 '╚' => '╩', '╝' => '╩', '╞' => '═', '╠' => '╬',
                 '╡' => '═', '╣' => '╬', '╥' => '╦', '╦' => '╦',
                 '╨' => '╩', '╩' => '╩', '╬' => '╬',  _  => '═',
             };
-            self.character_frame[y][x] = Character::new(write, whitespace.foreground, whitespace.background);
+            self.character_frame[y][x] = {let mut replace = whitespace.clone(); replace.set_codepoint(write); replace};
         }
         {
-            let check: char = self.character_frame[y][x2].codepoint;
-            let write = match check {
+            let check = self.character_frame[y][x2];
+            let write = match check.get_codepoint() {
                 '═' => '═', '║' => '╣', '╔' => '╦', '╗' => '╗',
                 '╚' => '╩', '╝' => '╝', '╞' => '═', '╠' => '╬',
                 '╡' => '╡', '╣' => '╣', '╥' => '╗', '╦' => '╦',
                 '╨' => '╝', '╩' => '╩', '╬' => '╬',  _  => '╡',
             };
-            self.character_frame[y][x2] = Character::new(write, whitespace.foreground, whitespace.background);
+            self.character_frame[y][x2] = {let mut replace = whitespace.clone(); replace.set_codepoint(write); replace};
         }
     }
 
     //Vertical Line
-    pub fn vertical_line(&mut self, x: usize, y1: usize, y2:usize, whitespace: Character<SCREEN_DEPTH>) {
+    pub fn vertical_line(&mut self, x: usize, y1: usize, y2:usize, whitespace: Character) {
         {
-            let check: char = self.character_frame[y1][x].codepoint;
-            let write = match check {
+            let check = self.character_frame[y1][x];
+            let write = match check.get_codepoint() {
                 '═' => '╦', '║' => '║', '╔' => '╔', '╗' => '╗',
                 '╚' => '╠', '╝' => '╣', '╞' => '╔', '╠' => '╠',
                 '╡' => '╗', '╣' => '╣', '╥' => '╥', '╦' => '╦', 
                 '╨' => '║', '╩' => '╬', '╬' => '╬',  _  => '╥',
             };
-            self.character_frame[y1][x] = Character::new(write, whitespace.foreground, whitespace.background);
+            self.character_frame[y1][x] = {let mut replace = whitespace.clone(); replace.set_codepoint(write); replace};
         }
         for y in y1+1..y2 {
-            let check: char = self.character_frame[y][x].codepoint;
-            let write = match check {
+            let check = self.character_frame[y][x];
+            let write = match check.get_codepoint() {
                 '═' => '╬', '║' => '║', '╔' => '╠', '╗' => '╣',
                 '╚' => '╠', '╝' => '╣', '╞' => '╠', '╠' => '╠',
                 '╡' => '╣', '╣' => '╣', '╥' => '║', '╦' => '╬',
                 '╨' => '║', '╩' => '╬', '╬' => '╬',  _  => '║',
             };
-            self.character_frame[y][x] = Character::new(write, whitespace.foreground, whitespace.background);
+            self.character_frame[y][x] = {let mut replace = whitespace.clone(); replace.set_codepoint(write); replace};
         }
         {
-            let check: char = self.character_frame[y2][x].codepoint;
-            let write = match check {
+            let check = self.character_frame[y2][x];
+            let write = match check.get_codepoint() {
                 '═' => '╩', '║' => '║', '╔' => '╠', '╗' => '╣',
                 '╚' => '╚', '╝' => '╝', '╞' => '╚', '╠' => '╠',
                 '╡' => '╝', '╣' => '╣', '╥' => '║', '╦' => '╬',
                 '╨' => '╨', '╩' => '╩', '╬' => '╬',  _  => '╨',
             };
-            self.character_frame[y2][x] = Character::new(write, whitespace.foreground, whitespace.background);
+            self.character_frame[y2][x] = {let mut replace = whitespace.clone(); replace.set_codepoint(write); replace};
         }
     }
 
     //Place string in arbitrary location on screen
-    pub fn horizontal_string(&mut self, string: &str, y: usize, x: usize, whitespace: Character<SCREEN_DEPTH>) {
+    pub fn horizontal_string(&mut self, string: &str, y: usize, x: usize, whitespace: Character) {
         if y >= HEIGHT {return;}
         let mut p = x;
         //Place characters on screen
@@ -220,42 +273,42 @@ CharacterFrame<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, HEIGHT, WIDTH> {
             //Check validity
             if p >= WIDTH {return;}
             //Draw
-            self.character_frame[y][p] = Character::new(c, whitespace.foreground, whitespace.background);
+            self.character_frame[y][p] = {let mut replace = whitespace.clone(); replace.set_codepoint(c); replace};
             //Move Position
             p += 1;
         }
     }
 }
 
-
-// PRINT WINDOW
-//Struct
-pub struct PrintWindow<const SCREEN_HEIGHT: usize, const SCREEN_WIDTH: usize, const SCREEN_DEPTH: usize, const LINES: usize, const HEIGHT: usize, const WIDTH: usize, const Y: usize, const X: usize> {
-    screen:           Renderer<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH>,
-    print_buffer:     [[Character<SCREEN_DEPTH>; WIDTH]; LINES],
-    print_y:          usize,
-    print_x:          usize,
-    write_whitespace: Character<SCREEN_DEPTH>,
-    line_whitespace:  Character<SCREEN_DEPTH>,
+//Print Window of Fixed Dimensions
+pub struct PrintWindow<const LINES: usize, const HEIGHT: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>+Clone+Copy>                                                                   {
+    screen:   *const dyn CharacterRenderer<Color, Character>,
+    print_buffer:         [[Character; WIDTH]; LINES],
+    print_y:              usize,
+    print_x:              usize,
+    pub write_whitespace: Character,
+    pub line_whitespace:  Character,
+    pub y:                usize,
+    pub x:                usize,
 }
-//General Implementation
-impl<const SCREEN_HEIGHT: usize, const SCREEN_WIDTH: usize, const SCREEN_DEPTH: usize, const LINES: usize, const HEIGHT: usize, const WIDTH: usize, const Y: usize, const X: usize>
-PrintWindow<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, LINES, HEIGHT, WIDTH, Y, X> {
+impl                  <const LINES: usize, const HEIGHT: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>+Clone+Copy>           PrintWindow<LINES, HEIGHT, WIDTH, Color, Character> {
     //CONSTRUCTOR
-    pub fn new(screen: Renderer<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH>, write_whitespace: Character<SCREEN_DEPTH>, line_whitespace: Character<SCREEN_DEPTH>) -> Self{
+    pub fn new(character_renderer: *const dyn CharacterRenderer<Color, Character>, write_whitespace: Character, line_whitespace: Character, y: usize, x: usize) -> Self{
         PrintWindow{
-            screen,
+            screen: character_renderer,
             print_buffer: [[line_whitespace; WIDTH]; LINES],
             print_y: LINES - HEIGHT,
             print_x: 0,
             write_whitespace,
             line_whitespace,
+            y,
+            x,
         }
     }
 
     // BASIC FUNCTION
     //Input string to print buffer
-    pub fn push(&mut self, string: &str, whitespace: Character<SCREEN_DEPTH>) -> bool {
+    pub fn push(&mut self, string: &str, whitespace: Character) -> bool {
         let mut render:bool = false;
         //begin writing to the buffer
         for codepoint in string.chars() {
@@ -265,7 +318,7 @@ PrintWindow<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, LINES, HEIGHT, WIDTH, Y, 
             let end_forward = self.print_x >= WIDTH;
             let end_backward = self.print_x <= 0;
             //move to next line (line feed, carriage return, end of line moving forward)
-            if (control_newline || end_forward) &! control_backwards {
+            if (control_newline || end_forward) && !control_backwards {
                 //reset xbuffer
                 self.print_x=0;
                 //move buffer up
@@ -302,7 +355,7 @@ PrintWindow<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, LINES, HEIGHT, WIDTH, Y, 
             //print character (not: line Feed, carriage return, backspace)
             if !control {
                 //place character
-                self.print_buffer[LINES - 1][self.print_x] = Character::new(codepoint, whitespace.foreground, whitespace.background);
+                self.print_buffer[LINES - 1][self.print_x] = {let mut clone = whitespace.clone(); clone.set_codepoint(codepoint); clone};
                 //move xbuffer right
                 self.print_x = self.print_x + 1;
             }
@@ -315,13 +368,13 @@ PrintWindow<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, LINES, HEIGHT, WIDTH, Y, 
     pub fn render(&mut self) {
         for y in 0..HEIGHT {
             for x in 0..WIDTH {
-                self.screen.render_character(self.print_buffer[self.print_y+y][x], Y+y, X+x);
+                unsafe{& *self.screen}.render_character(self.print_buffer[self.print_y+y][x], y+self.y, x+self.x);
             }
         }
     }
 
     //Input string to print buffer, draw it to characterframe, and render it to physical screen
-    pub fn push_render(&mut self, character: &str, whitespace: Character<SCREEN_DEPTH>) {
+    pub fn push_render(&mut self, character: &str, whitespace: Character) {
         if self.push(character, whitespace) {self.render()}
     }
     
@@ -377,9 +430,7 @@ PrintWindow<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, LINES, HEIGHT, WIDTH, Y, 
         self.render();
     }
 }
-//Write Impementation
-impl <const SCREEN_HEIGHT: usize, const SCREEN_WIDTH: usize, const SCREEN_DEPTH: usize, const LINES: usize, const HEIGHT: usize, const WIDTH: usize, const Y: usize, const X: usize>
-Write for PrintWindow<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, LINES, HEIGHT, WIDTH, Y, X> {
+impl                  <const LINES: usize, const HEIGHT: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>+Clone+Copy> Write for PrintWindow<LINES, HEIGHT, WIDTH, Color, Character> {
     fn write_str(&mut self, string: &str) -> Result<(), Error> {
         self.push(string, self.write_whitespace);
         return Ok(());
@@ -397,37 +448,37 @@ Write for PrintWindow<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, LINES, HEIGHT, 
     }
 }
 
-
-// INPUT WINDOW
-//Struct
-pub struct InputWindow<const SCREEN_HEIGHT: usize, const SCREEN_WIDTH: usize, const SCREEN_DEPTH: usize, const LENGTH: usize, const WIDTH: usize, const Y: usize, const X: usize> where [(); LENGTH*4]: {
-    screen:           Renderer<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH>,
-    input_buffer:     [Character<SCREEN_DEPTH>; LENGTH],
-    input_p:          usize,
+//Input Window
+pub struct InputWindow<'s, const LENGTH: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>+Copy+Clone>                                                  where [(); LENGTH*4]: {
+    screen: &'s dyn CharacterRenderer<Color, Character>,
+    input_buffer:   [Character; LENGTH],
+    input_p:        usize,
+    y:              usize,
+    x:              usize,
 }
-//General Implementation
-impl<const SCREEN_HEIGHT: usize, const SCREEN_WIDTH: usize, const SCREEN_DEPTH: usize, const LENGTH: usize, const WIDTH: usize, const Y: usize, const X: usize> 
-InputWindow<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, LENGTH, WIDTH, Y, X> where [(); LENGTH*4]: {
+impl                  <'s, const LENGTH: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>+Copy+Clone> InputWindow<'s, LENGTH, WIDTH, Color, Character> where [(); LENGTH*4]: {
     // CONSTRUCTOR
-    pub fn new(screen: Renderer<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH>, whitespace: Character<SCREEN_DEPTH>) -> Self {
+    pub fn new(character_renderer: &'s dyn CharacterRenderer<Color, Character>, whitespace: Character, y: usize, x: usize) -> Self {
         InputWindow {
-            screen,
+            screen: character_renderer,
             input_buffer: [whitespace; LENGTH],
             input_p: 0,
+            y,
+            x,
         }
     }
 
     // BASIC FUNCTION
     //Input character to input stack
-    pub fn push(&mut self, character: Character<SCREEN_DEPTH>, whitespace: Character<SCREEN_DEPTH>) -> usize {
+    pub fn push(&mut self, character: Character, whitespace: Character) -> usize {
         let mut render:usize = 0;
         //control character booleans
-        let control:bool = (character.codepoint as u32) < 0x20;                            //Determines if character is a control character
-        let control_newline:bool = character.codepoint=='\n' || character.codepoint=='\r'; //Determines if character is a newline character
-        let printable:bool = !control || control_newline;                                  //Determines if a character is printable
-        let control_backwards:bool = character.codepoint=='\x08';                          //Determines if character types backwards (i.e. backspace)
-        let end_forward:bool = self.input_p >= self.input_buffer.len();                    //Determines if the end of the stack is reached and position can no longer move forward
-        let end_backward:bool = self.input_p <= 0;                                         //Determines if the beginning of the stack is reached and position can no longer move backwards
+        let control:bool = (character.get_codepoint() as u32) < 0x20;                                  //Determines if character is a control character
+        let control_newline:bool = character.get_codepoint()=='\n' || character.get_codepoint()=='\r'; //Determines if character is a newline character
+        let printable:bool = !control || control_newline;                                              //Determines if a character is printable
+        let control_backwards:bool = character.get_codepoint()=='\x08';                                //Determines if character types backwards (i.e. backspace)
+        let end_forward:bool = self.input_p >= self.input_buffer.len();                                //Determines if the end of the stack is reached and position can no longer move forward
+        let end_backward:bool = self.input_p <= 0;                                                     //Determines if the beginning of the stack is reached and position can no longer move backwards
         //add printable character to stack
         if printable && !end_forward {
             self.input_buffer[self.input_p] = character;
@@ -445,31 +496,31 @@ InputWindow<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, LENGTH, WIDTH, Y, X> wher
 
     // HIGHER FUNCTIONS
     //Input character to input stack and render it
-    pub fn push_render(&mut self, character: Character<SCREEN_DEPTH>, whitespace: Character<SCREEN_DEPTH>) {
+    pub fn push_render(&mut self, character: Character, whitespace: Character) {
         let p: usize = self.push(character, whitespace);
         if p % WIDTH == 0 || p % WIDTH == WIDTH - 1 {
             self.render(whitespace);
         }
         else {
-            self.screen.render_character(self.input_buffer[p%WIDTH], Y, X+p);
+            self.screen.render_character(self.input_buffer[p%WIDTH], self.y, p+self.x);
         }
     }
 
     //Render entire inputstack
-    pub fn render(&mut self, whitespace: Character<SCREEN_DEPTH>) {
+    pub fn render(&mut self, whitespace: Character) {
         let overhang: usize = self.input_buffer.len() % WIDTH;
         let full: usize = self.input_buffer.len() - overhang;
         let line_width: usize = if self.input_p < full {WIDTH} else {overhang};
         for x in 0..line_width {
-            self.screen.render_character(self.input_buffer[self.input_p/WIDTH+x], Y, X + x);
+            self.screen.render_character(self.input_buffer[self.input_p/WIDTH+x], self.y, x+self.x);
         }
         for x in line_width..WIDTH {
-            self.screen.render_character(whitespace, Y, X+x)
+            self.screen.render_character(whitespace, self.y, x+self.x)
         }
     }
 
     //Remove all information from input stack and replace with Character given
-    pub fn flush(&mut self, whitespace: Character<SCREEN_DEPTH>) {
+    pub fn flush(&mut self, whitespace: Character) {
         for i in 0..LENGTH {
             self.input_buffer[i] = whitespace;
         }
@@ -480,7 +531,7 @@ InputWindow<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, LENGTH, WIDTH, Y, X> wher
     //Return contents of the input stack as char array
     pub fn to_chararray<'f>(&mut self, buffer: &'f mut [char; LENGTH]) -> &'f [char] {
         for i in 0..LENGTH {
-            buffer[i] = self.input_buffer[i].codepoint;
+            buffer[i] = self.input_buffer[i].get_codepoint();
         }
         return &buffer[0..self.input_p];
     }
@@ -489,7 +540,7 @@ InputWindow<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, LENGTH, WIDTH, Y, X> wher
     pub fn to_str<'f>(&mut self, buffer: &'f mut [u8; LENGTH*4]) -> Result<&'f str, &'static str> {
         let mut p: usize = 0;
         for i in 0..self.input_p {
-            let c = self.input_buffer[i].codepoint;
+            let c = self.input_buffer[i].get_codepoint();
             let mut a = [0u8; 4];
             let l = c.len_utf8();
             char::encode_utf8(c, &mut a);
@@ -510,15 +561,14 @@ InputWindow<SCREEN_HEIGHT, SCREEN_WIDTH, SCREEN_DEPTH, LENGTH, WIDTH, Y, X> wher
 
 // SPECIFIC COLOR FORMATS
 //Pixel Format: Blue, Green, Red, Reserved
-pub const BGRX_DEPTH:     usize            = 4;                        //BIT DEPTH
-pub const COLOR_BLK_BGRX: [u8; BGRX_DEPTH] = [0x00, 0x00, 0x00, 0x00]; //BLACK
-pub const COLOR_RED_BGRX: [u8; BGRX_DEPTH] = [0x00, 0x00, 0xFF, 0x00]; //RED
-pub const COLOR_GRN_BGRX: [u8; BGRX_DEPTH] = [0x00, 0xFF, 0x00, 0x00]; //GREEN
-pub const COLOR_BLU_BGRX: [u8; BGRX_DEPTH] = [0xFF, 0x00, 0x00, 0x00]; //BLUE
-pub const COLOR_CYN_BGRX: [u8; BGRX_DEPTH] = [0xFF, 0xFF, 0x00, 0x00]; //CYAN
-pub const COLOR_MGT_BGRX: [u8; BGRX_DEPTH] = [0xFF, 0x00, 0xFF, 0x00]; //MAGENTA
-pub const COLOR_YLW_BGRX: [u8; BGRX_DEPTH] = [0x00, 0xFF, 0xFF, 0x00]; //YELLOW
-pub const COLOR_WHT_BGRX: [u8; BGRX_DEPTH] = [0xFF, 0xFF, 0xFF, 0x00]; //COLOR PURE WHITE
+pub const COLOR_BGRX_BLACK:   ColorBGRX = ColorBGRX::new(0x00, 0x00, 0x00); //BLACK
+pub const COLOR_BGRX_RED:     ColorBGRX = ColorBGRX::new(0xFF, 0x00, 0x00); //RED
+pub const COLOR_BGRX_GREEN:   ColorBGRX = ColorBGRX::new(0x00, 0xFF, 0x00); //GREEN
+pub const COLOR_BGRX_BLUE:    ColorBGRX = ColorBGRX::new(0x00, 0x00, 0xFF); //BLUE
+pub const COLOR_BGRX_TEAL:    ColorBGRX = ColorBGRX::new(0x00, 0xFF, 0xFF); //TEAL
+pub const COLOR_BGRX_MAGENTA: ColorBGRX = ColorBGRX::new(0xFF, 0x00, 0xFF); //MAGENTA
+pub const COLOR_BGRX_YELLOW:  ColorBGRX = ColorBGRX::new(0xFF, 0xFF, 0x00); //YELLOW
+pub const COLOR_BGRX_WHITE:   ColorBGRX = ColorBGRX::new(0xFF, 0xFF, 0xFF); //WHITE
 
 
 // SPECIFIC RESOLUTIONS

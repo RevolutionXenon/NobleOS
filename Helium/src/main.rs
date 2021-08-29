@@ -16,16 +16,21 @@
 #![allow(unused_must_use)]
 #![feature(start)]
 #![feature(asm)]
+#![feature(once_cell)]
 
 //Imports
 use photon::*;
 use gluon::*;
-use core::fmt::Write;
+use core::{fmt::Write};
 #[cfg(not(test))]
 use core::panic::PanicInfo;
 
 //Constants
 const HELIUM_VERSION: &str = "vDEV-2021-08-24"; //CURRENT VERSION OF KERNEL
+static WHITESPACE:    CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
+static BLACKSPACE:   CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
+static BLUESPACE:     CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE,  background: COLOR_BGRX_BLACK};
+static REDSPACE:      CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_RED, background: COLOR_BGRX_BLACK};
 
 
 // MAIN
@@ -33,30 +38,30 @@ const HELIUM_VERSION: &str = "vDEV-2021-08-24"; //CURRENT VERSION OF KERNEL
 #[no_mangle]
 pub extern "sysv64" fn _start() -> ! {
     // GRAPHICS SETUP
-    //Screen variables
     //Screen Variables
-    let whitespace = Character::<BGRX_DEPTH>::new(' ', COLOR_WHT_BGRX, COLOR_BLK_BGRX);
-    let redspace   = Character::<BGRX_DEPTH>::new(' ', COLOR_RED_BGRX, COLOR_BLK_BGRX);
-    let renderer = Renderer::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH>::new(FRAME_BUFFER_VIRTUAL_POINTER);
-    let mut frame = CharacterFrame::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_FRAME_HEIGHT, F1_FRAME_WIDTH>::new(renderer, whitespace);
-    let mut printer = PrintWindow::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_PRINT_LINES, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, F1_PRINT_Y, F1_PRINT_X>::new(renderer, whitespace, whitespace);
-    let mut inputter = InputWindow::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_INPUT_LENGTH, F1_INPUT_WIDTH, F1_INPUT_Y, F1_INPUT_X>::new(renderer, whitespace);
+    let pixel_renderer: PixelRendererHWD = PixelRendererHWD {pointer: FRAME_BUFFER_VIRTUAL_POINTER, height: F1_SCREEN_HEIGHT, width: F1_SCREEN_WIDTH};
+    let character_renderer: CharacterTwoToneRenderer16x16<ColorBGRX> = CharacterTwoToneRenderer16x16::<ColorBGRX> {renderer: &pixel_renderer, height: F1_FRAME_HEIGHT, width: F1_FRAME_WIDTH, y: 0, x: 0};
+    let mut frame: FrameWindow::<F1_FRAME_HEIGHT, F1_FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = FrameWindow::<F1_FRAME_HEIGHT, F1_FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, WHITESPACE, 0, 0);
+    let mut inputter: InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, WHITESPACE, F1_INPUT_Y, F1_INPUT_X);
+    let mut printer: PrintWindow::<F1_PRINT_LINES, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = PrintWindow::<F1_PRINT_LINES, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, WHITESPACE, WHITESPACE, F1_PRINT_Y, F1_PRINT_X);
+    unsafe {PANIC_WRITE_POINTER = Some(&mut printer as &mut dyn Write as *mut dyn Write)};
     //User Interface initialization
-    frame.horizontal_line(F1_PRINT_Y-1, 0,                         F1_FRAME_WIDTH-1,  redspace);
-    frame.horizontal_line(F1_INPUT_Y-1, 0,                         F1_FRAME_WIDTH-1,  redspace);
-    frame.horizontal_line(F1_INPUT_Y+1, 0,                         F1_FRAME_WIDTH-1,  redspace);
-    frame.vertical_line(  0,                         F1_PRINT_Y-1, F1_INPUT_Y+1,  redspace);
-    frame.vertical_line(  F1_FRAME_WIDTH-1, F1_PRINT_Y-1, F1_INPUT_Y+1,  redspace);
-    frame.horizontal_string("NOBLE OS",      0, 0,                                                   redspace);
-    frame.horizontal_string("HELIUM KERNEL", 0, F1_FRAME_WIDTH - 14 - HELIUM_VERSION.len(), redspace);
-    frame.horizontal_string(HELIUM_VERSION,  0, F1_FRAME_WIDTH -      HELIUM_VERSION.len(), redspace);
+    frame.horizontal_line(F1_PRINT_Y-1, 0,                         F1_FRAME_WIDTH-1,  REDSPACE);
+    frame.horizontal_line(F1_INPUT_Y-1, 0,                         F1_FRAME_WIDTH-1,  REDSPACE);
+    frame.horizontal_line(F1_INPUT_Y+1, 0,                         F1_FRAME_WIDTH-1,  REDSPACE);
+    frame.vertical_line(  0,                         F1_PRINT_Y-1, F1_INPUT_Y+1,  REDSPACE);
+    frame.vertical_line(  F1_FRAME_WIDTH-1, F1_PRINT_Y-1, F1_INPUT_Y+1,  REDSPACE);
+    frame.horizontal_string("NOBLE OS",      0, 0,                                                   REDSPACE);
+    frame.horizontal_string("HELIUM KERNEL", 0, F1_FRAME_WIDTH - 14 - HELIUM_VERSION.len(), REDSPACE);
+    frame.horizontal_string(HELIUM_VERSION,  0, F1_FRAME_WIDTH -      HELIUM_VERSION.len(), REDSPACE);
     frame.render();
     writeln!(printer, "Welcome to Noble OS");
     writeln!(printer, "Helium Kernel           {}", HELIUM_VERSION);
     writeln!(printer, "Photon Graphics Library {}", PHOTON_VERSION);
     writeln!(printer, "Gluon Memory Library    {}", GLUON_VERSION);
-    
+
     // HALT COMPUTER
+    panic!();
     writeln!(printer, "Halt reached.");
     unsafe {asm!("HLT");}
     loop{}
@@ -64,18 +69,16 @@ pub extern "sysv64" fn _start() -> ! {
 
 
 // PANIC HANDLER
+//Panic Variables
+static mut PANIC_WRITE_POINTER: Option<*mut dyn Write> = None;
+
 //Panic Handler
 #[cfg(not(test))]
 #[panic_handler]
 fn panic_handler(panic_info: &PanicInfo) -> ! {
     unsafe {
-        let whitespace = Character::<BGRX_DEPTH>::new(' ', COLOR_WHT_BGRX, COLOR_BLK_BGRX);
-            let blackspace = Character::<BGRX_DEPTH>::new(' ', COLOR_BLK_BGRX, COLOR_WHT_BGRX);
-            let renderer = Renderer::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH>::new(FRAME_BUFFER_VIRTUAL_POINTER);
-            let mut printer = PrintWindow::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_PRINT_HEIGHT, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, F1_PRINT_Y, F1_PRINT_X>::new(renderer, blackspace, whitespace);
-            printer.push_render("KERNEL PANIC!\n", blackspace);
-            writeln!(printer, "{}", panic_info);
-        
+        let printer = &mut *PANIC_WRITE_POINTER.unwrap();
+        writeln!(printer, "{}", panic_info);
         asm!("HLT");
         loop {}
     }

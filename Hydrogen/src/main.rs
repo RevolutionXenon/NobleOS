@@ -53,7 +53,7 @@ use uefi::table::runtime::ResetType;
 use x86_64::registers::control::*;
 
 //Constants
-const HYDROGEN_VERSION: & str = "vDEV-2021-08-24"; //CURRENT VERSION OF BOOTLOADER
+const HYDROGEN_VERSION: & str = "vDEV-2021-08-26"; //CURRENT VERSION OF BOOTLOADER
 
 
 // MAIN
@@ -76,15 +76,16 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     let graphics_output_protocol = graphics_output_protocol.expect("Graphics Output Protocol initialization failed at unsafe cell");
     let graphics_output_protocol = unsafe {&mut *graphics_output_protocol.get()};
     let graphics_frame_pointer = graphics_output_protocol.frame_buffer().as_mut_ptr();
-    unsafe {PHYSICAL_FRAME_POINTER = graphics_frame_pointer};
     //Screen Variables
-    let whitespace = Character::<BGRX_DEPTH>::new(' ', COLOR_WHT_BGRX, COLOR_BLK_BGRX);
-    let _blackspace = Character::<BGRX_DEPTH>::new(' ', COLOR_BLK_BGRX, COLOR_WHT_BGRX);
-    let bluespace  = Character::<BGRX_DEPTH>::new(' ', COLOR_BLU_BGRX, COLOR_BLK_BGRX);
-    let renderer = Renderer::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH>::new(graphics_frame_pointer);
-    let mut frame = CharacterFrame::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_FRAME_HEIGHT, F1_FRAME_WIDTH>::new(renderer, whitespace);
-    let mut printer = PrintWindow::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_PRINT_LINES, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, F1_PRINT_Y, F1_PRINT_X>::new(renderer, whitespace, whitespace);
-    let mut inputter = InputWindow::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_INPUT_LENGTH, F1_INPUT_WIDTH, F1_INPUT_Y, F1_INPUT_X>::new(renderer, whitespace);
+    let whitespace:         CharacterTwoTone::<ColorBGRX>                                                                          = CharacterTwoTone::<ColorBGRX>              {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
+    let _blackspace:        CharacterTwoTone::<ColorBGRX>                                                                          = CharacterTwoTone::<ColorBGRX>              {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
+    let bluespace:          CharacterTwoTone::<ColorBGRX>                                                                          = CharacterTwoTone::<ColorBGRX>              {codepoint: ' ', foreground: COLOR_BGRX_BLUE,  background: COLOR_BGRX_BLACK};
+    let pixel_renderer:     PixelRendererHWD                                                                                       = PixelRendererHWD                           {pointer: graphics_frame_pointer, height: F1_SCREEN_HEIGHT, width: F1_SCREEN_WIDTH};
+    let character_renderer: CharacterTwoToneRenderer16x16<ColorBGRX>                                                               = CharacterTwoToneRenderer16x16::<ColorBGRX> {renderer: &pixel_renderer, height: F1_FRAME_HEIGHT, width: F1_FRAME_WIDTH, y: 0, x: 0};
+    let mut frame:          FrameWindow::<F1_FRAME_HEIGHT, F1_FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>                 = FrameWindow::<F1_FRAME_HEIGHT, F1_FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>                ::new(&character_renderer, whitespace, 0, 0);
+    let mut printer:        PrintWindow::<F1_PRINT_LINES, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = PrintWindow::<F1_PRINT_LINES, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, whitespace, whitespace, F1_PRINT_Y, F1_PRINT_X);
+    let mut inputter:       InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>                 = InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>                ::new(&character_renderer, whitespace, F1_INPUT_Y, F1_INPUT_X);
+    unsafe {PANIC_WRITE_POINTER = Some(&mut printer as &mut dyn Write as *mut dyn Write)};
     //Graphics Output Protocol set graphics mode
     set_graphics_mode(graphics_output_protocol);
     let _st = graphics_output_protocol.current_mode_info().stride();
@@ -270,7 +271,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         let pml3_kernl = create_pml3_offset_4kib(boot_services, kernel_physical, kernel_total_size);
         writeln!(printer, "PML3 KERNL: 0o{0:016o} 0x{0:016X}", pml3_kernl as usize);
         //Page Map Level 3: Frame Buffer
-        let pml3_frame = create_pml3_offset_2mib(boot_services, graphics_frame_pointer, F1_SCREEN_HEIGHT*F1_SCREEN_WIDTH*BGRX_DEPTH);
+        let pml3_frame = create_pml3_offset_2mib(boot_services, graphics_frame_pointer, F1_SCREEN_HEIGHT*F1_SCREEN_WIDTH*ColorBGRX::stride());
         writeln!(printer, "PML3 FRAME: 0o{0:016o} 0x{0:016X}", pml3_frame as usize);
         //Write PML4 Entries
         write_pte(pml4_knenv, pml3_efiph, PHYSICAL_MEMORY_PHYSICAL_OCTAL, PAGE_SIZE_4KIB, false, false, false, false, false, true);
@@ -329,7 +330,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                 }
                 //User has typed a character
                 else {
-                    inputter.push_render(Character::new(input_char, COLOR_WHT_BGRX, COLOR_BLK_BGRX), whitespace);
+                    inputter.push_render(CharacterTwoTone::<ColorBGRX>{codepoint: input_char, foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK}, whitespace);
                 }
             }
             //Modifier or Control Key
@@ -379,21 +380,15 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
 
 // PANIC HANDLER
 //Panic Variables
-static mut PHYSICAL_FRAME_POINTER: *mut u8 = 0 as *mut u8;
+static mut PANIC_WRITE_POINTER: Option<*mut dyn Write> = None;
 
 //Panic Handler
 #[cfg(not(test))]
 #[panic_handler]
 fn panic_handler(panic_info: &PanicInfo) -> ! {
     unsafe {
-        if PHYSICAL_FRAME_POINTER != 0 as *mut u8 {
-            let renderer = Renderer::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH>::new(PHYSICAL_FRAME_POINTER);
-            let whitespace = Character::<BGRX_DEPTH>::new(' ', COLOR_WHT_BGRX, COLOR_BLK_BGRX);
-            let blackspace = Character::<BGRX_DEPTH>::new(' ', COLOR_BLK_BGRX, COLOR_WHT_BGRX);
-            let mut printer = PrintWindow::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_PRINT_HEIGHT, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, F1_PRINT_Y, F1_PRINT_X>::new(renderer, blackspace, whitespace);
-            printer.push_render("BOOTLOADER PANIC!\n", blackspace);
-            writeln!(printer, "{}", panic_info);
-        }
+        let printer = &mut *PANIC_WRITE_POINTER.unwrap();
+        writeln!(printer, "{}", panic_info);
         asm!("HLT");
         loop {}
     }
@@ -402,7 +397,7 @@ fn panic_handler(panic_info: &PanicInfo) -> ! {
 
 // UEFI FUNCTIONS
 //Read a UEFI error status as a string
-fn uefi_error_readout(error: Status) -> &'static str{
+fn uefi_error_readout(error: Status) -> &'static str {
     match error {
         Status::SUCCESS               => "UEFI Success.",
         Status::WARN_UNKNOWN_GLYPH    => "UEFI Warning: Unknown Glyph.",
@@ -451,10 +446,11 @@ fn uefi_error_readout(error: Status) -> &'static str{
 
 //Set a larger graphics mode
 fn set_graphics_mode(gop: &mut GraphicsOutput) {
-    let mode:Mode = gop.modes().map(|mode| mode.expect("Graphics Output Protocol query of available modes failed.")).find(|mode| {
-            let info = mode.info();
-            info.resolution() == (F1_SCREEN_WIDTH, F1_SCREEN_HEIGHT)
-        }).unwrap();
+    let mode:Mode = gop.modes()
+    .map(|mode| mode.expect("Graphics Output Protocol query of available modes failed.")).find(|mode| {
+        let info = mode.info();
+        info.resolution() == (F1_SCREEN_WIDTH, F1_SCREEN_HEIGHT)
+    }).unwrap();
     gop.set_mode(&mode).expect_success("Graphics Output Protocol set mode failed.");
 }
 
