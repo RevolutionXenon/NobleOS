@@ -1,8 +1,8 @@
 pub fn retrieve_font_bitmap(codepoint: char) -> &'static [u8] {
-    if        '\u{0000}' <= codepoint && codepoint <= '\u{007F}' {
+    if        ('\u{0000}'..='\u{007F}').contains(&codepoint) {
         //0000-007F: C0 Control and Basic Latin
-        &C0_CONTROLS_AND_BASIC_LATIN[((codepoint as usize-0x0000)*32) .. ((codepoint as usize-0x0000)*32)+32]
-    } else if '\u{2500}' <= codepoint && codepoint <= '\u{257F}' {
+        &C0_CONTROLS_AND_BASIC_LATIN[((codepoint as usize       )*32) .. ((codepoint as usize       )*32)+32]
+    } else if ('\u{2500}'..='\u{257F}').contains(&codepoint) {
         //2500-257F: Box Drawing
         &BOX_DRAWING                [((codepoint as usize-0x2500)*32) .. ((codepoint as usize-0x2500)*32)+32]
     } else {

@@ -9,11 +9,12 @@
 //Flags
 #![no_std]
 #![allow(incomplete_features)]
+#![allow(clippy::missing_safety_doc)]
 #![feature(const_generics)]
 #![feature(const_evaluatable_checked)]
 
 //Modules
-pub mod font_handler;
+pub mod font_16_16;
 
 use core::fmt::Error;
 //Imports
@@ -21,10 +22,10 @@ use core::fmt::Write;
 use core::fmt::Arguments;
 use core::ptr::write_volatile;
 use core::str;
-use crate::font_handler::retrieve_font_bitmap;
+use crate::font_16_16::retrieve_font_bitmap;
 
 //Constants
-pub const PHOTON_VERSION: & str = "vDEV-2021-08-26"; //CURRENT VERSION OF GRAPHICS LIBRARY
+pub const PHOTON_VERSION: & str = "vDEV-2021-08-29"; //CURRENT VERSION OF GRAPHICS LIBRARY
 
 
 // TRAITS
@@ -94,22 +95,18 @@ impl<Color: ColorFormat+Clone+Copy> PixelRenderer<Color> for PixelRendererHWD {
         if !(y<self.height && x<self.width) {return};
         let position: *mut u8 = self.pointer.add((y*self.width + x)*Color::stride());
         let render_data = color.render_data();
-        for i in 0..render_data.len() {
-            write_volatile(position.add(i), render_data[i]);
+        for (i, byte) in render_data.iter().enumerate() {
+            write_volatile(position.add(i), *byte);
         }
     }
     unsafe fn render_line(&self, line: &[Color], y: usize, x: usize) {
-        let position: *mut u8 = self.pointer.add((y*self.width + x)*Color::stride());
-        for i in 0..line.len() {
-            let render_data = line[i].render_data();
-            for j in 0..render_data.len() {
-                write_volatile(position.add(i*Color::stride()+j), render_data[j]);
-            }
+        for (i, pixel) in line.iter().enumerate() {
+            self.render_pixel(*pixel, y, x+i)
         }
     }
     unsafe fn render_image(&self, image: &[&[Color]], y: usize, x: usize) {
-        for i in 0..image.len() {
-            self.render_line(image[i], y, x)
+        for (i, line) in image.iter().enumerate() {
+            self.render_line(*line, y+i, x)
         }
     }
     unsafe fn render_screen(&self, color: Color) {
@@ -206,7 +203,7 @@ impl                  <'s, const HEIGHT: usize, const WIDTH: usize, Color: Color
                 '╡' => '═', '╣' => '╬', '╥' => '╔', '╦' => '╦',
                 '╨' => '╚', '╩' => '╩', '╬' => '╬',  _  => '╞',
             };
-            self.character_frame[y][x1] = {let mut replace = whitespace.clone(); replace.set_codepoint(write); replace};
+            self.character_frame[y][x1] = {let mut replace = whitespace; replace.set_codepoint(write); replace};
         }
         for x in x1+1..x2 {
             let check = self.character_frame[y][x];
@@ -216,7 +213,7 @@ impl                  <'s, const HEIGHT: usize, const WIDTH: usize, Color: Color
                 '╡' => '═', '╣' => '╬', '╥' => '╦', '╦' => '╦',
                 '╨' => '╩', '╩' => '╩', '╬' => '╬',  _  => '═',
             };
-            self.character_frame[y][x] = {let mut replace = whitespace.clone(); replace.set_codepoint(write); replace};
+            self.character_frame[y][x] = {let mut replace = whitespace; replace.set_codepoint(write); replace};
         }
         {
             let check = self.character_frame[y][x2];
@@ -226,7 +223,7 @@ impl                  <'s, const HEIGHT: usize, const WIDTH: usize, Color: Color
                 '╡' => '╡', '╣' => '╣', '╥' => '╗', '╦' => '╦',
                 '╨' => '╝', '╩' => '╩', '╬' => '╬',  _  => '╡',
             };
-            self.character_frame[y][x2] = {let mut replace = whitespace.clone(); replace.set_codepoint(write); replace};
+            self.character_frame[y][x2] = {let mut replace = whitespace; replace.set_codepoint(write); replace};
         }
     }
 
@@ -240,7 +237,7 @@ impl                  <'s, const HEIGHT: usize, const WIDTH: usize, Color: Color
                 '╡' => '╗', '╣' => '╣', '╥' => '╥', '╦' => '╦', 
                 '╨' => '║', '╩' => '╬', '╬' => '╬',  _  => '╥',
             };
-            self.character_frame[y1][x] = {let mut replace = whitespace.clone(); replace.set_codepoint(write); replace};
+            self.character_frame[y1][x] = {let mut replace = whitespace; replace.set_codepoint(write); replace};
         }
         for y in y1+1..y2 {
             let check = self.character_frame[y][x];
@@ -250,7 +247,7 @@ impl                  <'s, const HEIGHT: usize, const WIDTH: usize, Color: Color
                 '╡' => '╣', '╣' => '╣', '╥' => '║', '╦' => '╬',
                 '╨' => '║', '╩' => '╬', '╬' => '╬',  _  => '║',
             };
-            self.character_frame[y][x] = {let mut replace = whitespace.clone(); replace.set_codepoint(write); replace};
+            self.character_frame[y][x] = {let mut replace = whitespace; replace.set_codepoint(write); replace};
         }
         {
             let check = self.character_frame[y2][x];
@@ -260,7 +257,7 @@ impl                  <'s, const HEIGHT: usize, const WIDTH: usize, Color: Color
                 '╡' => '╝', '╣' => '╣', '╥' => '║', '╦' => '╬',
                 '╨' => '╨', '╩' => '╩', '╬' => '╬',  _  => '╨',
             };
-            self.character_frame[y2][x] = {let mut replace = whitespace.clone(); replace.set_codepoint(write); replace};
+            self.character_frame[y2][x] = {let mut replace = whitespace; replace.set_codepoint(write); replace};
         }
     }
 
@@ -273,7 +270,7 @@ impl                  <'s, const HEIGHT: usize, const WIDTH: usize, Color: Color
             //Check validity
             if p >= WIDTH {return;}
             //Draw
-            self.character_frame[y][p] = {let mut replace = whitespace.clone(); replace.set_codepoint(c); replace};
+            self.character_frame[y][p] = {let mut replace = whitespace; replace.set_codepoint(c); replace};
             //Move Position
             p += 1;
         }
@@ -316,7 +313,7 @@ impl                  <const LINES: usize, const HEIGHT: usize, const WIDTH: usi
             let control_newline = codepoint=='\n' || codepoint=='\r';
             let control_backwards = codepoint=='\x08';
             let end_forward = self.print_x >= WIDTH;
-            let end_backward = self.print_x <= 0;
+            let end_backward = self.print_x == 0;
             //move to next line (line feed, carriage return, end of line moving forward)
             if (control_newline || end_forward) && !control_backwards {
                 //reset xbuffer
@@ -348,19 +345,19 @@ impl                  <const LINES: usize, const HEIGHT: usize, const WIDTH: usi
             //unprint character (backspace)
             if control_backwards {
                 //move xbuffer back one
-                self.print_x = self.print_x - 1;
+                self.print_x -= 1;
                 //remove character
                 self.print_buffer[LINES - 1][self.print_x] = whitespace;
             }
             //print character (not: line Feed, carriage return, backspace)
             if !control {
                 //place character
-                self.print_buffer[LINES - 1][self.print_x] = {let mut clone = whitespace.clone(); clone.set_codepoint(codepoint); clone};
+                self.print_buffer[LINES - 1][self.print_x] = {let mut clone = whitespace; clone.set_codepoint(codepoint); clone};
                 //move xbuffer right
-                self.print_x = self.print_x + 1;
+                self.print_x += 1;
             }
         }
-        return render;
+        render
     }
 
     // HIGHER FUNCTIONS
@@ -433,18 +430,18 @@ impl                  <const LINES: usize, const HEIGHT: usize, const WIDTH: usi
 impl                  <const LINES: usize, const HEIGHT: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>+Clone+Copy> Write for PrintWindow<LINES, HEIGHT, WIDTH, Color, Character> {
     fn write_str(&mut self, string: &str) -> Result<(), Error> {
         self.push(string, self.write_whitespace);
-        return Ok(());
+        Ok(())
     }
 
     fn write_char(&mut self, codepoint: char) -> Result<(), Error> {
         self.push(codepoint.encode_utf8(&mut [0; 4]), self.write_whitespace);
-        return Ok(());
+        Ok(())
     }
 
     fn write_fmt(mut self: &mut Self, arguments: Arguments<'_>) -> Result<(), Error> {
         let r = core::fmt::write(&mut self, arguments);
         self.render();
-        return r;
+        r
     }
 }
 
@@ -478,20 +475,20 @@ impl                  <'s, const LENGTH: usize, const WIDTH: usize, Color: Color
         let printable:bool = !control || control_newline;                                              //Determines if a character is printable
         let control_backwards:bool = character.get_codepoint()=='\x08';                                //Determines if character types backwards (i.e. backspace)
         let end_forward:bool = self.input_p >= self.input_buffer.len();                                //Determines if the end of the stack is reached and position can no longer move forward
-        let end_backward:bool = self.input_p <= 0;                                                     //Determines if the beginning of the stack is reached and position can no longer move backwards
+        let end_backward:bool = self.input_p == 0;                                                     //Determines if the beginning of the stack is reached and position can no longer move backwards
         //add printable character to stack
         if printable && !end_forward {
             self.input_buffer[self.input_p] = character;
             render = self.input_p;
-            self.input_p = self.input_p + 1;
+            self.input_p += 1;
         }
         //backspace handling
         else if control_backwards && !end_backward {
-            self.input_p = self.input_p - 1;
+            self.input_p -= 1;
             render = self.input_p;
             self.input_buffer[self.input_p] = whitespace;
         }
-        return render;
+        render
     }
 
     // HIGHER FUNCTIONS
@@ -530,10 +527,10 @@ impl                  <'s, const LENGTH: usize, const WIDTH: usize, Color: Color
 
     //Return contents of the input stack as char array
     pub fn to_chararray<'f>(&mut self, buffer: &'f mut [char; LENGTH]) -> &'f [char] {
-        for i in 0..LENGTH {
-            buffer[i] = self.input_buffer[i].get_codepoint();
+        for (i, pos) in buffer.iter_mut().enumerate().take(LENGTH) {
+            *pos = self.input_buffer[i].get_codepoint();
         }
-        return &buffer[0..self.input_p];
+        &buffer[0..self.input_p]
     }
 
     //Return contents of the input stack as a string slice
@@ -544,8 +541,8 @@ impl                  <'s, const LENGTH: usize, const WIDTH: usize, Color: Color
             let mut a = [0u8; 4];
             let l = c.len_utf8();
             char::encode_utf8(c, &mut a);
-            for j in 0..l {
-                buffer[p] = a[j];
+            for j in a.iter().take(l) {
+                buffer[p] = *j;
                 p += l;
             }
         }
@@ -553,8 +550,8 @@ impl                  <'s, const LENGTH: usize, const WIDTH: usize, Color: Color
     }
 
     //Return the length of the input stack
-    pub fn len(&self) -> usize {
-        return self.input_buffer.len();
+    pub fn length(&self) -> usize {
+        self.input_buffer.len()
     }
 }
 

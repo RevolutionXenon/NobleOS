@@ -9,6 +9,8 @@
 //Flags
 #![no_std]
 #![allow(non_camel_case_types)]
+#![allow(clippy::inconsistent_digit_grouping)]
+#![allow(clippy::missing_safety_doc)]
 
 //Imports
 use core::convert::TryFrom;
@@ -16,11 +18,10 @@ use core::intrinsics::copy_nonoverlapping;
 use header::*;
 use program::*;
 use section::*;
-use program_dynamic_entry::*;
 use relocation_entry::*;
 
 //Constants
-pub const GLUON_VERSION:  &    str   = "vDEV-2021-08-24";                                                //CURRENT VERSION OF GRAPHICS LIBRARY
+pub const GLUON_VERSION: &str = "vDEV-2021-08-24";                                                       //CURRENT VERSION OF GRAPHICS LIBRARY
 //                                                         SIGN PM5 PM4 PM3 PM2 PM1 OFFSET
 pub const PHYSICAL_MEMORY_PHYSICAL_OCTAL:        usize = 0o_________000__________________usize;          //PHYSICAL MEMORY PHYSICAL LOCATION PML4 OFFSET
 pub const PHYSICAL_MEMORY_PHYSICAL_POINTER: *mut u8    = 0o_000_000_000_000_000_000_0000_u64 as *mut u8; //PHYSICAL MEMORY PHYSICAL LOCATION POINTER
@@ -101,10 +102,10 @@ impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
             buffer}
         )?;
         //Return
-        return Ok(ELFFile {
-            file: file,
+        Ok(ELFFile {
+            file,
             header: file_header,
-        });
+        })
     }
 
     // ITERATORS
@@ -124,27 +125,22 @@ impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
         let mut program_highest_address: u64 = 0x0000_0000_0000_0000;
         let mut loadable_found: bool = false;
         //Loop over program headers
-        for program in ProgramIterator::new(self.file, &self.header) {
-            match program {
-                Ok(program) => {
-                    //Check if program segment is loadable
-                    if program.program_type == program::ProgramType::Loadable {
-                        loadable_found = true;
-                        //Check if minimum virtual address needs adjusting
-                        if program.virtual_address < program_lowest_address {
-                            program_lowest_address = program.virtual_address;
-                        }
-                        //Check if maximum virtual address needs adjusting
-                        if program.virtual_address + program.memory_size > program_highest_address {
-                            program_highest_address = program.virtual_address + program.memory_size;
-                        }
-                    }
+        for program in ProgramIterator::new(self.file, &self.header).flatten() {
+            //Check if program segment is loadable
+            if program.program_type == program::ProgramType::Loadable {
+                loadable_found = true;
+                //Check if minimum virtual address needs adjusting
+                if program.virtual_address < program_lowest_address {
+                    program_lowest_address = program.virtual_address;
                 }
-                Err(_) => {},
+                //Check if maximum virtual address needs adjusting
+                if program.virtual_address + program.memory_size > program_highest_address {
+                    program_highest_address = program.virtual_address + program.memory_size;
+                }
             }
         }
         //Return
-        return if loadable_found {program_highest_address - program_lowest_address} else {0};
+        if loadable_found {program_highest_address - program_lowest_address} else {0}
     }
 
     //Load File Into Memory (Very Important to Allocate Memory First)
@@ -167,7 +163,8 @@ impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
                 copy_nonoverlapping(buffer.as_ptr(), location.add(program.virtual_address as usize + count*BUFFER_SIZE as usize), leftover);
             }
         }
-        return Ok(())
+        //Return
+        Ok(())
     }
 
     //Do Relocation (Very Important to Load First) **NOT FINISHED**
@@ -204,9 +201,11 @@ impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
                         }
                     }
                 }
-                return Ok(());
+                //Return
+                Ok(())
             },
-            _ => return Err("ELF File: Relocation not supported for this file's Instruction Set Architecture.")
+            //Return Error
+            _ => Err("ELF File: Relocation not supported for this file's Instruction Set Architecture.")
         }
     }
 }
@@ -256,7 +255,7 @@ pub mod header {
                 Endianness::Little => (u16::from_le_bytes, u32::from_le_bytes, u64::from_le_bytes),
                 Endianness::Big    => (u16::from_be_bytes, u32::from_be_bytes, u64::from_be_bytes),
             };
-            return Result::Ok(Header {
+            Result::Ok(Header {
                 bit_width:                                   BitWidth::try_from(       bytes[0x04]                           ).map_err(|_| "ELF File Header: Invalid Bit Width (ei_class).")?,
                 endianness,
                 ident_version:                           IdentVersion::try_from(       bytes[0x06]                           ).map_err(|_| "ELF File Header: Invalid Ident Version (ei_version).")?,
@@ -274,7 +273,8 @@ pub mod header {
                 program_header_number:                                          u16_fb(bytes[0x38..0x3A].try_into().unwrap()),
                 section_header_entry_size:                                match u16_fb(bytes[0x3A..0x3C].try_into().unwrap()) {0x40 => 0x40, _ => return Err("ELF File Header: Invalid Section Header Entry Size (e_shentsize).")},
                 section_header_number:                                          u16_fb(bytes[0x3C..0x3E].try_into().unwrap()),
-                string_section_index:                                     match u16_fb(bytes[0x3E..0x40].try_into().unwrap()) {a => if a < u16_fb(bytes[0x3C..0x3E].try_into().unwrap()){a} else {return Err("ELF File Header: Invalid String Section Index (e_shstrndx) according to Section Header Number (e_shnum).")}},
+                string_section_index:                             {let a: u16 = u16_fb(bytes[0x3E..0x40].try_into().unwrap()); 
+                                                                         if a < u16_fb(bytes[0x3C..0x3E].try_into().unwrap()) {a} else {return Err("ELF File Header: Invalid String Section Index (e_shstrndx) according to Section Header Number (e_shnum).")}},
             })
         }
     }
@@ -459,7 +459,7 @@ pub mod program {
         //Constructor
         pub fn new(file: &'a LR, file_header: &Header) -> Self{
             Self {
-                file:           file,
+                file,
                 bit_width:      file_header.bit_width,
                 endianness:     file_header.endianness,
                 base_offset:    file_header.program_header_offset,
@@ -520,7 +520,7 @@ pub mod program {
                 Endianness::Little => (u16::from_le_bytes, u32::from_le_bytes, u64::from_le_bytes),
                 Endianness::Big    => (u16::from_be_bytes, u32::from_be_bytes, u64::from_be_bytes),
             };
-            return match bit_width {
+            match bit_width {
                 BitWidth::W32 => {
                     if data.len() != 0x20 {return Err("Program: Incorrect data length for 32-bit program.")}
                     Ok(Self {
@@ -595,7 +595,7 @@ pub mod section {
         //Constructor
         pub fn new(file: &'a LR, file_header: &Header) -> Self{
             Self {
-                file:           file,
+                file,
                 bit_width:      file_header.bit_width,
                 endianness:     file_header.endianness,
                 base_offset:    file_header.section_header_offset,
@@ -658,7 +658,7 @@ pub mod section {
                 Endianness::Little => (u16::from_le_bytes, u32::from_le_bytes, u64::from_le_bytes),
                 Endianness::Big    => (u16::from_be_bytes, u32::from_be_bytes, u64::from_be_bytes),
             };
-            return match bit_width {
+            match bit_width {
                 BitWidth::W32 => {
                     if data.len() != 0x28 {return Err("Section: Incorrect data length for 32-bit section.")};
                     Ok(Self {
@@ -747,7 +747,7 @@ pub mod program_dynamic_entry {
         //Constructor
         pub fn new(file: &'a LR, file_header: &Header, program_header: &Program) -> Self{
             ProgramDynamicEntryIterator {
-                file:           file,
+                file,
                 bit_width:      file_header.bit_width,
                 endianness:     file_header.endianness,
                 base_offset:    program_header.file_offset,
@@ -781,10 +781,7 @@ pub mod program_dynamic_entry {
             }
             else {
                 let entry = self.entry();
-                match entry {
-                    Ok(e) => if e.entry_type == ProgramDynamicEntryType::Null {return None}
-                    Err(_) => (),
-                }
+                if let Ok(e) = entry {if e.entry_type == ProgramDynamicEntryType::Null {return None}}
                 self.entry_position += 1;
                 Some(entry)
             }
@@ -891,42 +888,42 @@ pub mod relocation_entry {
                 (BitWidth::W32, RelocationType::Implicit) => {
                     if data.len() != 0x08 {return Err("Relocation Entry: Length of data provided incorrect for 32-bit entry with implicit addends.");}
                     let info: u32 = u32_fb(data[0x04..0x08].try_into().map_err( |_| "Relocation Entry: Error slicing info.")?);
-                    return Ok(Self {
+                    Ok(Self {
                         offset: u32_fb(data[0x00..0x04].try_into().map_err( |_| "Relocation Entry: Error slicing offset.")?) as u64,
                         symbol: info >> 8,
                         relocation_entry_type: RelocationEntryTypeX86_64::try_from(info & 0xFF).map_err( |_| "Relocation Entry: Invalid relocation entry type.")?,
                         addend: None,
-                    });
+                    })
                 },
                 (BitWidth::W32, RelocationType::Explicit) => {
                     if data.len() != 0x0C {return Err("Relocation Entry: Length of data provided incorrect for 32-bit entry with explicit addends.");}
                     let info: u32 = u32_fb(data[0x04..0x08].try_into().map_err( |_| "Relocation Entry: Error slicing info.")?);
-                    return Ok(Self {
+                    Ok(Self {
                         offset: u32_fb(data[0x00..0x04].try_into().map_err( |_| "Relocation Entry: Error slicing offset.")?) as u64,
                         symbol: info >> 8,
                         relocation_entry_type: RelocationEntryTypeX86_64::try_from(info & 0xFF).map_err( |_| "Relocation Entry: Invalid relocation entry type.")?,
                         addend: Some(u32_fb(data[0x08..0x0C].try_into().map_err( |_| "Relocation Entry: Error slicing addend.")?) as u64),
-                    });
+                    })
                 },
                 (BitWidth::W64, RelocationType::Implicit) => {
                     if data.len() != 0x10 {return Err("Relocation Entry: Length of data provided incorrect for 64-bit entry with implicit addends.");}
                     let info: u64 = u64_fb(data[0x08..0x10].try_into().map_err( |_| "Relocation Entry: Error slicing info.")?);
-                    return Ok(Self {
+                    Ok(Self {
                         offset: u64_fb(data[0x00..0x08].try_into().map_err( |_| "Relocation Entry: Error slicing offset.")?),
                         symbol: (info>>32) as u32,
                         relocation_entry_type: RelocationEntryTypeX86_64::try_from((info & 0xFFFFFFFF) as u32).map_err( |_| "Relocation Entry: Invalid relocation Entry Type.")?,
                         addend: None,
-                    });
+                    })
                 },
                 (BitWidth::W64, RelocationType::Explicit) => {
                     if data.len() != 0x18 {return Err("Relocation Entry: Length of data provided incorrect for 64-bit entry with implicit addends.");}
                     let info: u64 = u64_fb(data[0x08..0x10].try_into().map_err( |_| "Relocation Entry: Error slicing info.")?);
-                    return Ok(Self {
+                    Ok(Self {
                         offset: u64_fb(data[0x00..0x08].try_into().map_err( |_| "Relocation Entry: Error slicing offset.")?),
                         symbol: (info>>32) as u32,
                         relocation_entry_type: RelocationEntryTypeX86_64::try_from((info & 0xFFFFFFFF) as u32).map_err( |_| "Relocation Entry: Invalid relocation Entry Type.")?,
                         addend: Some(u64_fb(data[0x10..0x18].try_into().map_err( |_| "Relocation Entry: Error slicing info.")?)),
-                    });
+                    })
                 },
             }
         }
