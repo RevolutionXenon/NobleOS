@@ -14,9 +14,8 @@
 #![no_std]
 #![no_main]
 #![allow(unused_must_use)]
-#![feature(start)]
 #![feature(asm)]
-#![feature(once_cell)]
+#![feature(start)]
 
 //Imports
 use photon::*;
