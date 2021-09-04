@@ -24,34 +24,31 @@ use section::*;
 use relocation_entry::*;
 
 //Constants
-pub const GLUON_VERSION: &str = "vDEV-2021-08-24";                                                       //CURRENT VERSION OF GRAPHICS LIBRARY
-//                                                         SIGN PM5 PM4 PM3 PM2 PM1 OFFSET
-pub const PHYSICAL_MEMORY_PHYSICAL_OCTAL:        usize = 0o_________000__________________usize;          //PHYSICAL MEMORY PHYSICAL LOCATION PML4 OFFSET
-pub const PHYSICAL_MEMORY_PHYSICAL_POINTER: *mut u8    = 0o_000_000_000_000_000_000_0000_u64 as *mut u8; //PHYSICAL MEMORY PHYSICAL LOCATION POINTER
-pub const KERNEL_VIRTUAL_OCTAL:                  usize = 0o_________400__________________usize;          //KERNEL VIRTUAL LOCATION PML4 TABLE OFFSET
-pub const KERNEL_VIRTUAL_POINTER:           *mut u8    = 0o_177_777_400_000_000_000_0000_u64 as *mut u8; //KERNEL VIRTUAL LOCATION POINTER
-pub const FRAME_BUFFER_VIRTUAL_OCTAL:            usize = 0o_________775__________________usize;          //FRAME BUFFER VIRTUAL LOCATION PML4 OFFSET
-pub const FRAME_BUFFER_VIRTUAL_POINTER:     *mut u8    = 0o_177_777_775_000_000_000_0000_u64 as *mut u8; //FRAME BUFFER VIRTUAL LOCATION POINTER
-pub const PHYSICAL_MEMORY_VIRTUAL_OCTAL:         usize = 0o_________776__________________usize;          //PHYSICAL MEMORY VIRTUAL LOCATION PML4 OFFSET
-pub const PHYSICAL_MEMORY_VIRTUAL_POINTER:  *mut u8    = 0o_177_777_776_000_000_000_0000_u64 as *mut u8; //PHYSICAL MEMORY VIRTUAL LOCATION POINTER
-pub const PAGE_MAP_VIRTUAL_OCTAL:                usize = 0o_________777__________________usize;          //PAGE MAP VIRTUAL LOCATION PML4 OFFSET
-pub const PAGE_MAP_VIRTUAL_POINTER:         *mut u8    = 0o_177_777_777_000_000_000_0000_u64 as *mut u8; //PAGE MAP VIRTUAL LOCATION POINTER
-pub const PAGE_SIZE_4KIB:                        usize = 0o_______________________1_0000_usize;          //MEMORY PAGE SIZE (  4KiB),                            PAGE MAP LEVEL 1 ENTRY SIZE
-pub const PAGE_SIZE_2MIB:                        usize = 0o___________________1_000_0000_usize;          //MEMORY PAGE SIZE (  2MiB), PAGE MAP LEVEL 1 CAPACITY, PAGE MAP LEVEL 2 ENTRY SIZE
-pub const PAGE_SIZE_1GIB:                        usize = 0o_______________1_000_000_0000_usize;          //MEMORY PAGE SIZE (  1GiB), PAGE MAP LEVEL 2 CAPACITY, PAGE MAP LEVEL 3 ENTRY SIZE
-pub const PAGE_SIZE_512G:                        usize = 0o___________1_000_000_000_0000_usize;          //MEMORY PAGE SIZE (512GiB), PAGE MAP LEVEL 3 CAPACITY
-pub const PAGE_SIZE_256T:                        usize = 0o_______1_000_000_000_000_0000_usize;          //MEMORY PAGE SIZE (256TiB), PAGE MAP LEVEL 4 CAPACITY
-pub const PAGE_SIZE_128P:                        usize = 0o___1_000_000_000_000_000_0000_usize;          //MEMORY PAGE SIZE (128PiB), PAGE MAP LEVEL 5 CAPACITY
-pub const PAGE_NUMBER_1:                         usize = 0o_________________________1000_usize;          //NUMBER OF PAGE TABLE ENTRIES 1 LEVELS UP
-pub const PAGE_NUMBER_2:                         usize = 0o_____________________100_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 2 LEVELS UP
-pub const PAGE_NUMBER_3:                         usize = 0o_________________100_000_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 3 LEVELS UP
-pub const PAGE_NUMBER_4:                         usize = 0o_____________100_000_000_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 4 LEVELS UP
-pub const PAGE_NUMBER_5:                         usize = 0o_________100_000_000_000_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 5 LEVELS UP
-pub const KIB:                                   usize = 0o_________________________2000_usize;          //ONE KIBIBYTE
-pub const MIB:                                   usize = 0o_____________________400_0000_usize;          //ONE MEBIBYTE
-pub const GIB:                                   usize = 0o_______________1_000_000_0000_usize;          //ONE GIBIBYTE
-pub const TIB:                                   usize = 0o___________2_000_000_000_0000_usize;          //ONE TEBIBYTE
-pub const PIB:                                   usize = 0o_______4_000_000_000_000_0000_usize;          //ONE PEBIBYTE
+pub const GLUON_VERSION: &str = "vDEV-2021-09-04";                                                       //CURRENT VERSION OF GRAPHICS LIBRARY
+//                                       SIGN PM5 PM4 PM3 PM2 PM1 OFFSET
+pub const HIGHER_HALF_57:    usize = 0o_177_000_000_000_000_000_0000_usize;          //HIGHER HALF LOCATION IN FIVE LEVEL PAGE MAP (57-bit address space)
+pub const HIGHER_HALF_48:    usize = 0o_177_777_000_000_000_000_0000_usize;          //HIGHER HALF LOCATION IN FOUR LEVEL PAGE MAP (48-bit address space)
+pub const IDENTITY_MAP_OCT:  usize = 0o_________000__________________usize;          //PHYSICAL MEMORY PHYSICAL LOCATION PML4 OFFSET
+pub const KERNEL_OCT:        usize = 0o_________400__________________usize;          //KERNEL VIRTUAL LOCATION PML4 TABLE OFFSET
+pub const FRAME_BUFFER_OCT:  usize = 0o_________775__________________usize;          //FRAME BUFFER VIRTUAL LOCATION PML4 OFFSET
+pub const FREE_MEMORY_OCT:   usize = 0o_________776__________________usize;          //PHYSICAL MEMORY VIRTUAL LOCATION PML4 OFFSET
+pub const PAGE_MAP_OCT:      usize = 0o_________777__________________usize;          //PAGE MAP VIRTUAL LOCATION PML4 OFFSET
+pub const PAGE_SIZE_4KIB:    usize = 0o_______________________1_0000_usize;          //MEMORY PAGE SIZE (  4KiB),                            PAGE MAP LEVEL 1 ENTRY SIZE
+pub const PAGE_SIZE_2MIB:    usize = 0o___________________1_000_0000_usize;          //MEMORY PAGE SIZE (  2MiB), PAGE MAP LEVEL 1 CAPACITY, PAGE MAP LEVEL 2 ENTRY SIZE
+pub const PAGE_SIZE_1GIB:    usize = 0o_______________1_000_000_0000_usize;          //MEMORY PAGE SIZE (  1GiB), PAGE MAP LEVEL 2 CAPACITY, PAGE MAP LEVEL 3 ENTRY SIZE
+pub const PAGE_SIZE_512G:    usize = 0o___________1_000_000_000_0000_usize;          //MEMORY PAGE SIZE (512GiB), PAGE MAP LEVEL 3 CAPACITY
+pub const PAGE_SIZE_256T:    usize = 0o_______1_000_000_000_000_0000_usize;          //MEMORY PAGE SIZE (256TiB), PAGE MAP LEVEL 4 CAPACITY
+pub const PAGE_SIZE_128P:    usize = 0o___1_000_000_000_000_000_0000_usize;          //MEMORY PAGE SIZE (128PiB), PAGE MAP LEVEL 5 CAPACITY
+pub const PAGE_NUMBER_1:     usize = 0o_________________________1000_usize;          //NUMBER OF PAGE TABLE ENTRIES 1 LEVELS UP
+pub const PAGE_NUMBER_2:     usize = 0o_____________________100_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 2 LEVELS UP
+pub const PAGE_NUMBER_3:     usize = 0o_________________100_000_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 3 LEVELS UP
+pub const PAGE_NUMBER_4:     usize = 0o_____________100_000_000_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 4 LEVELS UP
+pub const PAGE_NUMBER_5:     usize = 0o_________100_000_000_000_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 5 LEVELS UP
+pub const KIB:               usize = 0o_________________________2000_usize;          //ONE KIBIBYTE
+pub const MIB:               usize = 0o_____________________400_0000_usize;          //ONE MEBIBYTE
+pub const GIB:               usize = 0o_______________1_000_000_0000_usize;          //ONE GIBIBYTE
+pub const TIB:               usize = 0o___________2_000_000_000_0000_usize;          //ONE TEBIBYTE
+pub const PIB:               usize = 0o_______4_000_000_000_000_0000_usize;          //ONE PEBIBYTE
 
 
 // MACROS
@@ -689,7 +686,7 @@ pub mod section {
 
     // ENUMS
     //Section Type
-    numeric_enum!{
+    numeric_enum! {
         #[repr(u32)]
         #[derive(PartialEq)]
         #[derive(Clone, Copy)]
@@ -1055,7 +1052,7 @@ numeric_enum! {
 }
 
 //Relocation Type
-numeric_enum!{
+numeric_enum! {
     #[repr(u64)]
     #[derive(PartialEq)]
     #[derive(Clone, Copy)]
@@ -1070,17 +1067,17 @@ numeric_enum!{
 // PAGING
 //Page Allocator
 pub trait PageAllocator {
-    fn allocate_page(&self) -> *mut u64;
+    fn allocate_page(&mut self) -> Result<*mut u8, &'static str>;
 }
 
 //Page Table
 pub struct PageMap {
-    pub location:  *mut u64,
+    pub location:  *mut u8,
     map_level: PageMapLevel,
 }
 impl PageMap {
     //Constructor
-    pub fn new(location: *mut u64, map_level: PageMapLevel) -> Result<Self, &'static str> {
+    pub fn new(location: *mut u8, map_level: PageMapLevel) -> Result<Self, &'static str> {
         if location as usize % PAGE_SIZE_4KIB != 0 {return Err("Page Map: Location not aligned to 4KiB boundary.")}
         Ok(Self {
             location,
@@ -1091,7 +1088,7 @@ impl PageMap {
     //Get an entry from a location
     pub fn read_entry(&self, position: usize) -> Result<PageMapEntry, &'static str> {
         if position >= PAGE_NUMBER_1 {return Err("Page Map: Entry index out of bounds during read.")}
-        let data = unsafe{*(self.location.add(position))};
+        let data = unsafe{*((self.location as *mut u64).add(position))};
         PageMapEntry::from_u64(data, self.map_level)
     }
 
@@ -1100,12 +1097,12 @@ impl PageMap {
         if position >= PAGE_NUMBER_1 {return Err("Page Map: Entry index out of bounds during write.")}
         if entry.entry_level != self.map_level {return Err("Page Map: Entry level does not match map level.")}
         let data = entry.to_u64()?;
-        unsafe {*(self.location.add(position)) = data}
+        unsafe {*((self.location as *mut u64).add(position)) = data}
         Ok(())
     }
 
     //Map pages from a physical and within-map offset
-    pub fn  map_pages_offset(&self, page_allocator: &dyn PageAllocator, physical_offset: *mut u64, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+    pub fn  map_pages_offset(&self, page_allocator: &mut dyn PageAllocator, physical_offset: *mut u8, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
         match self.map_level {
             PageMapLevel::L1 => {self.map_pages_offset_pml1(                physical_offset, map_offset, size, write, supervisor, execute_disable)},
             PageMapLevel::L2 => {self.map_pages_offset_pml2(page_allocator, physical_offset, map_offset, size, write, supervisor, execute_disable)},
@@ -1113,7 +1110,7 @@ impl PageMap {
             _ => Err("Page Map: Offset function not finished.")
         }
     }
-    fn map_pages_offset_pml1(&self,                                     physical_offset: *mut u64, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+    fn map_pages_offset_pml1(&self,                                         physical_offset: *mut u8, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
         //TODO: Create macro to check and return if allocate_page doesn't create properly aligned page
         //Check Parameters
         if self.map_level                            != PageMapLevel::L1 {return Err("Page Map: Offset PML1 called on page map of wrong level.")}
@@ -1125,12 +1122,12 @@ impl PageMap {
         let position = map_offset / PAGE_SIZE_4KIB;
         //Loop
         for i in 0..pages {
-            self.write_entry(i+position, PageMapEntry::new(PageMapLevel::L1, PageMapEntryType::Memory, unsafe {((physical_offset as *mut u8).add(i*PAGE_SIZE_4KIB)) as *mut u64}, write, supervisor, execute_disable)?)?;
+            self.write_entry(i+position, PageMapEntry::new(PageMapLevel::L1, PageMapEntryType::Memory, unsafe {physical_offset.add(i*PAGE_SIZE_4KIB)}, write, supervisor, execute_disable)?)?;
         }
         //Return
         Ok(())
     }
-    fn map_pages_offset_pml2(&self, page_allocator: &dyn PageAllocator, physical_offset: *mut u64, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+    fn map_pages_offset_pml2(&self, page_allocator: &mut dyn PageAllocator, physical_offset: *mut u8, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
         //Check Parameters
         if self.map_level                            != PageMapLevel::L2 {return Err("Page Map: Offset PML2 called on page map of wrong level.")}
         if physical_offset as usize % PAGE_SIZE_4KIB != 0                {return Err("Page Map: Physical offset not aligned to 4KiB boundary.")}
@@ -1138,9 +1135,10 @@ impl PageMap {
         if map_offset      +  size  > PAGE_SIZE_1GIB                     {return Err("Page Map: Map position and size requested does not fit within level 2 map boundaries.")}
         //Position Variables
         let start_position: usize =  map_offset         / PAGE_SIZE_2MIB;
-        let start_offset:   usize =  map_offset         % PAGE_SIZE_2MIB;
-        let end_size:       usize = (map_offset + size) % PAGE_SIZE_2MIB;
-        let end_position:   usize = (map_offset + size) / PAGE_SIZE_2MIB + if end_size != 0 {1} else {0};
+        let start_size:     usize =  map_offset         % PAGE_SIZE_2MIB;
+        let align_size:     usize = (map_offset + size) % PAGE_SIZE_2MIB;
+        let end_position:   usize = (map_offset + size) / PAGE_SIZE_2MIB + if align_size != 0 {1} else {0};
+        let end_size:       usize = if align_size == 0   {PAGE_SIZE_2MIB} else {align_size};
         //Loop
         for position in start_position..end_position {
             //Retrieve PML1
@@ -1150,13 +1148,13 @@ impl PageMap {
                         entry
                     }
                     else {
-                        let new_entry = PageMapEntry::new(PageMapLevel::L2, PageMapEntryType::Table, page_allocator.allocate_page(), write, supervisor, execute_disable)?;
+                        let new_entry = PageMapEntry::new(PageMapLevel::L2, PageMapEntryType::Table, page_allocator.allocate_page()?, write, supervisor, execute_disable)?;
                         self.write_entry(position, new_entry)?;
                         new_entry
                     }
                 },
                 Err(_) => {
-                    let new_entry = PageMapEntry::new(PageMapLevel::L2, PageMapEntryType::Table, page_allocator.allocate_page(), write, supervisor, execute_disable)?;
+                    let new_entry = PageMapEntry::new(PageMapLevel::L2, PageMapEntryType::Table, page_allocator.allocate_page()?, write, supervisor, execute_disable)?;
                     self.write_entry(position, new_entry)?;
                     new_entry
                 },
@@ -1164,22 +1162,22 @@ impl PageMap {
             let pml1 = PageMap::new(entry.address, PageMapLevel::L1)?;
             //Map within PML1
             if position == start_position && position == end_position-1 {
-                pml1.map_pages_offset_pml1(physical_offset, start_offset, size, write, supervisor, execute_disable)?;
+                pml1.map_pages_offset_pml1(physical_offset, start_size, size, write, supervisor, execute_disable)?;
             }
             else if position == start_position {
-                pml1.map_pages_offset_pml1(physical_offset, start_offset, PAGE_SIZE_2MIB-start_offset, write, supervisor, execute_disable)?;
+                pml1.map_pages_offset_pml1(physical_offset, start_size, PAGE_SIZE_2MIB-start_size, write, supervisor, execute_disable)?;
             }
             else if position == end_position-1 {
-                pml1.map_pages_offset_pml1(unsafe {((physical_offset as *mut u8).add(position*PAGE_SIZE_2MIB - start_offset)) as *mut u64}, 0, end_size, write, supervisor, execute_disable)?;
+                pml1.map_pages_offset_pml1(unsafe {physical_offset.add((position-start_position)*PAGE_SIZE_2MIB - start_size)}, 0, end_size, write, supervisor, execute_disable)?;
             }
             else {
-                pml1.map_pages_offset_pml1(unsafe {((physical_offset as *mut u8).add(position*PAGE_SIZE_2MIB - start_offset)) as *mut u64}, 0, PAGE_SIZE_2MIB, write, supervisor, execute_disable)?;
+                pml1.map_pages_offset_pml1(unsafe {physical_offset.add((position-start_position)*PAGE_SIZE_2MIB - start_size)}, 0, PAGE_SIZE_2MIB, write, supervisor, execute_disable)?;
             }
         }
         //Return
         Ok(())
     }
-    fn map_pages_offset_pml3(&self, page_allocator: &dyn PageAllocator, physical_offset: *mut u64, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+    fn map_pages_offset_pml3(&self, page_allocator: &mut dyn PageAllocator, physical_offset: *mut u8, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
         //Check Parameters
         if self.map_level                            != PageMapLevel::L3 {return Err("Page Map: Offset PML2 called on page map of wrong level.")}
         if physical_offset as usize % PAGE_SIZE_4KIB != 0                {return Err("Page Map: Physical offset not aligned to 4KiB boundary.")}
@@ -1187,9 +1185,10 @@ impl PageMap {
         if map_offset      +  size  > PAGE_SIZE_512G                     {return Err("Page Map: Map position and size requested does not fit within level 2 map boundaries.")}
         //Position Variables
         let start_position: usize =  map_offset         / PAGE_SIZE_1GIB;
-        let start_offset:   usize =  map_offset         % PAGE_SIZE_1GIB;
-        let end_size:       usize = (map_offset + size) % PAGE_SIZE_1GIB;
-        let end_position:   usize = (map_offset + size) / PAGE_SIZE_1GIB + if end_size != 0 {1} else {0};
+        let start_size:     usize =  map_offset         % PAGE_SIZE_1GIB;
+        let align_size:     usize = (map_offset + size) % PAGE_SIZE_1GIB;
+        let end_position:   usize = (map_offset + size) / PAGE_SIZE_1GIB + if align_size != 0 {1} else {0};
+        let end_size:       usize = if align_size == 0   {PAGE_SIZE_1GIB} else {align_size};
         //Loop
         for position in start_position..end_position {
             //Retrieve PML2
@@ -1199,13 +1198,13 @@ impl PageMap {
                         entry
                     }
                     else {
-                        let new_entry = PageMapEntry::new(PageMapLevel::L3, PageMapEntryType::Table, page_allocator.allocate_page(), write, supervisor, execute_disable)?;
+                        let new_entry = PageMapEntry::new(PageMapLevel::L3, PageMapEntryType::Table, page_allocator.allocate_page()?, write, supervisor, execute_disable)?;
                         self.write_entry(position, new_entry)?;
                         new_entry
                     }
                 },
                 Err(_) => {
-                    let new_entry = PageMapEntry::new(PageMapLevel::L3, PageMapEntryType::Table, page_allocator.allocate_page(), write, supervisor, execute_disable)?;
+                    let new_entry = PageMapEntry::new(PageMapLevel::L3, PageMapEntryType::Table, page_allocator.allocate_page()?, write, supervisor, execute_disable)?;
                     self.write_entry(position, new_entry)?;
                     new_entry
                 },
@@ -1213,16 +1212,16 @@ impl PageMap {
             let pml2 = PageMap::new(entry.address, PageMapLevel::L2)?;
             //Map within PML2
             if position == start_position && position == end_position-1 {
-                pml2.map_pages_offset_pml2(page_allocator, physical_offset, start_offset, size, write, supervisor, execute_disable)?;
+                pml2.map_pages_offset_pml2(page_allocator, physical_offset, start_size, size, write, supervisor, execute_disable)?;
             }
             else if position == start_position {
-                pml2.map_pages_offset_pml2(page_allocator, physical_offset, start_offset, PAGE_SIZE_2MIB-start_offset, write, supervisor, execute_disable)?;
+                pml2.map_pages_offset_pml2(page_allocator, physical_offset, start_size, PAGE_SIZE_1GIB - start_size, write, supervisor, execute_disable)?;
             }
             else if position == end_position-1 {
-                pml2.map_pages_offset_pml2(page_allocator, unsafe {((physical_offset as *mut u8).add(position*PAGE_SIZE_2MIB - start_offset)) as *mut u64}, 0, end_size, write, supervisor, execute_disable)?;
+                pml2.map_pages_offset_pml2(page_allocator, unsafe {physical_offset.add((position-start_position)*PAGE_SIZE_1GIB - start_size)}, 0, end_size, write, supervisor, execute_disable)?;
             }
             else {
-                pml2.map_pages_offset_pml2(page_allocator, unsafe {((physical_offset as *mut u8).add(position*PAGE_SIZE_2MIB - start_offset)) as *mut u64}, 0, PAGE_SIZE_2MIB, write, supervisor, execute_disable)?;
+                pml2.map_pages_offset_pml2(page_allocator, unsafe {physical_offset.add((position-start_position)*PAGE_SIZE_1GIB - start_size)}, 0, PAGE_SIZE_1GIB, write, supervisor, execute_disable)?;
             }
         }
         //Return
@@ -1236,7 +1235,7 @@ impl PageMap {
 pub struct PageMapEntry {
     pub entry_level:     PageMapLevel,
     pub entry_type:      PageMapEntryType, //Bit 7 in some cirumstances, indicates page refers to memory when it could refer to a table
-    pub address:         *mut u64,
+    pub address:         *mut u8,
     pub present:         bool, //ALL: Bit 0, indicates entry exists
     pub write:           bool, //ALL: Bit 1, indicates page may be written to
     pub supervisor:      bool, //ALL: Bit 2, indicates page can only be accessed in Ring 0
@@ -1270,7 +1269,7 @@ impl PageMapEntry {
                 (PageMapLevel::L2, PageMapEntryType::Memory) =>      data & 0o_000_777_777_777_777_000_0000_u64,
                 (PageMapLevel::L1, PageMapEntryType::Memory) =>      data & 0o_000_777_777_777_777_777_0000_u64,
                 _ => {return Err("Page Table Entry: Invalid combination of level and entry type found.")}
-            } as *mut u64,
+            } as *mut u8,
             present:                                                 data & (1<<0o00) > 0,
             write:                                                   data & (1<<0o01) > 0,
             supervisor:                                              data & (1<<0o02) > 0,
@@ -1327,7 +1326,7 @@ impl PageMapEntry {
     }
 
     //New
-    pub fn new(entry_level: PageMapLevel, entry_type: PageMapEntryType, address: *mut u64, write: bool, supervisor: bool, execute_disable: bool) -> Result<Self, &'static str> {
+    pub fn new(entry_level: PageMapLevel, entry_type: PageMapEntryType, address: *mut u8, write: bool, supervisor: bool, execute_disable: bool) -> Result<Self, &'static str> {
         match (entry_level, entry_type) {
             (PageMapLevel::L5, PageMapEntryType::Table)  => {if address as usize % PAGE_SIZE_4KIB != 0 {return Err("Page Table Entry: Address is not aligned to a 4KiB boundary.")}},
             (PageMapLevel::L4, PageMapEntryType::Table)  => {if address as usize % PAGE_SIZE_4KIB != 0 {return Err("Page Table Entry: Address is not aligned to a 4KiB boundary.")}},
@@ -1378,4 +1377,24 @@ numeric_enum! {
 pub enum PageMapEntryType {
     Memory,
     Table,
+}
+
+// ADDRESS SPACE
+pub fn oct_to_pointer_4(pml4: usize, pml3: usize, pml2: usize, pml1: usize, offset: usize) -> Result<*mut u8, &'static str> {
+    if pml4   >= PAGE_NUMBER_1  {return Err("O4 to Pointer: PML4 oct out of bounds.")}
+    if pml3   >= PAGE_NUMBER_1  {return Err("O4 to Pointer: PML3 oct out of bounds.")}
+    if pml2   >= PAGE_NUMBER_1  {return Err("O4 to Pointer: PML2 oct out of bounds.")}
+    if pml1   >= PAGE_NUMBER_1  {return Err("O4 to Pointer: PML1 oct out of bounds.")}
+    if offset >= PAGE_SIZE_4KIB {return Err("O4 to Pointer: Offset out of bounds.")}
+    let mut result: usize = if pml4 >= 0o400 {HIGHER_HALF_48} else {0};
+    result |= pml4 << (0o14 + 0o11 + 0o11 + 0o11);
+    result |= pml3 << (0o14 + 0o11 + 0o11);
+    result |= pml2 << (0o14 + 0o11);
+    result |= pml1 << (0o14);
+    result |= offset;
+    Ok(result as *mut u8)
+}
+
+pub fn oct4_to_pointer(pml4: usize) -> Result<*mut u8, &'static str> {
+    oct_to_pointer_4(pml4, 0, 0, 0, 0)
 }

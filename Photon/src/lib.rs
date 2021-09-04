@@ -57,6 +57,7 @@ pub trait CharacterRenderer<Color: ColorFormat, Character: CharacterFormat<Color
 
 // SPECIFIC IMPLEMENTATIONS
 //Color: BGRX
+#[repr(C)]
 #[derive(Default)]
 #[derive(Copy, Clone)]
 pub struct ColorBGRX {

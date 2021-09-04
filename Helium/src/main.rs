@@ -25,7 +25,7 @@ use core::{fmt::Write};
 use core::panic::PanicInfo;
 
 //Constants
-const HELIUM_VERSION: &str = "vDEV-2021-08-29"; //CURRENT VERSION OF KERNEL
+const HELIUM_VERSION: &str = "vDEV-2021-09-04"; //CURRENT VERSION OF KERNEL
 static WHITESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
 static _BLACKSPACE: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
 static _BLUESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE,  background: COLOR_BGRX_BLACK};
@@ -38,7 +38,7 @@ static REDSPACE:    CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX
 pub extern "sysv64" fn _start() -> ! {
     // GRAPHICS SETUP
     //Screen Variables
-    let pixel_renderer: PixelRendererHWD = PixelRendererHWD {pointer: FRAME_BUFFER_VIRTUAL_POINTER, height: F1_SCREEN_HEIGHT, width: F1_SCREEN_WIDTH};
+    let pixel_renderer: PixelRendererHWD = PixelRendererHWD {pointer: oct4_to_pointer(FRAME_BUFFER_OCT).unwrap(), height: F1_SCREEN_HEIGHT, width: F1_SCREEN_WIDTH};
     let character_renderer: CharacterTwoToneRenderer16x16<ColorBGRX> = CharacterTwoToneRenderer16x16::<ColorBGRX> {renderer: &pixel_renderer, height: F1_FRAME_HEIGHT, width: F1_FRAME_WIDTH, y: 0, x: 0};
     let mut frame: FrameWindow::<F1_FRAME_HEIGHT, F1_FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = FrameWindow::<F1_FRAME_HEIGHT, F1_FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, WHITESPACE, 0, 0);
     let mut _inputter: InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, WHITESPACE, F1_INPUT_Y, F1_INPUT_X);
@@ -59,10 +59,34 @@ pub extern "sysv64" fn _start() -> ! {
     writeln!(printer, "Photon Graphics Library {}", PHOTON_VERSION);
     writeln!(printer, "Gluon Memory Library    {}", GLUON_VERSION);
 
-    // TEST WRITES
-    for i in 0..100 {
-        writeln!(printer, "test write: {}", i);
+    // PAGE MAP PARSING
+    //Go to PML4
+    let pml4 = PageMap::new(oct_to_pointer_4(PAGE_MAP_OCT, PAGE_MAP_OCT, PAGE_MAP_OCT, PAGE_MAP_OCT, 0).unwrap(), PageMapLevel::L4).unwrap();
+    //Print info
+    writeln!(printer, "Identity Map Area Present: {}", pml4.read_entry(IDENTITY_MAP_OCT).unwrap().present);
+    writeln!(printer, "Kernel Map Area Present:   {}", pml4.read_entry(KERNEL_OCT      ).unwrap().present);
+    writeln!(printer, "Frame Buffer Area Present: {}", pml4.read_entry(FRAME_BUFFER_OCT).unwrap().present);
+    writeln!(printer, "Free Memory Area Present:  {}", pml4.read_entry(FREE_MEMORY_OCT ).unwrap().present);
+    writeln!(printer, "Page Map Area Present:     {}", pml4.read_entry(PAGE_MAP_OCT    ).unwrap().present);
+    //Determine amount of free memory
+    let pml3_free = PageMap::new(oct_to_pointer_4(PAGE_MAP_OCT, PAGE_MAP_OCT, PAGE_MAP_OCT, FREE_MEMORY_OCT, 0).unwrap(), PageMapLevel::L3).unwrap();
+    let mut free_page_count: usize = 0;
+    for i in 0..PAGE_NUMBER_1 {
+        if pml3_free.read_entry(i).unwrap().present {
+            let pml2 = PageMap::new(oct_to_pointer_4(PAGE_MAP_OCT, PAGE_MAP_OCT, FREE_MEMORY_OCT, i, 0).unwrap(), PageMapLevel::L2).unwrap();
+            for j in 0..PAGE_NUMBER_1 {
+                if pml2.read_entry(j).unwrap().present {
+                    let pml1 = PageMap::new(oct_to_pointer_4(PAGE_MAP_OCT, FREE_MEMORY_OCT, i, j, 0).unwrap(), PageMapLevel::L1).unwrap();
+                    for k in 0..PAGE_NUMBER_1 {
+                        if pml1.read_entry(k).unwrap().present {
+                            free_page_count += 1;
+                        }
+                    }
+                }
+            }
+        }
     }
+    writeln!(printer, "Free memory found: {}Pg or {}MiB {}KiB", free_page_count, (free_page_count*PAGE_SIZE_4KIB)/MIB, ((free_page_count*PAGE_SIZE_4KIB) % MIB)/KIB);
 
     // HALT COMPUTER
     writeln!(printer, "Halt reached.");

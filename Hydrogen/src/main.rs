@@ -49,7 +49,7 @@ use uefi::table::runtime::ResetType;
 use x86_64::registers::control::*;
 
 //Constants
-const HYDROGEN_VERSION: & str = "vDEV-2021-08-29"; //CURRENT VERSION OF BOOTLOADER
+const HYDROGEN_VERSION: & str = "vDEV-2021-09-04"; //CURRENT VERSION OF BOOTLOADER
 
 
 // MAIN
@@ -81,7 +81,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     let mut inputter: InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>  = InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, whitespace, F1_INPUT_Y, F1_INPUT_X);
     unsafe {PANIC_WRITE_POINTER = Some(&mut printer as &mut dyn Write as *mut dyn Write)};
     //Graphics Output Protocol: Set Graphics Mode
-    set_graphics_mode(graphics_output_protocol);
+    uefi_set_graphics_mode(graphics_output_protocol);
     let _st = graphics_output_protocol.current_mode_info().stride();
     let _pf = graphics_output_protocol.current_mode_info().pixel_format();
     let _s = graphics_output_protocol.frame_buffer().size();
@@ -103,7 +103,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     frame.horizontal_line(F1_INPUT_Y+1,     0,            F1_FRAME_WIDTH-1,  bluespace);
     frame.vertical_line(  0,                F1_PRINT_Y-1, F1_INPUT_Y+1,      bluespace);
     frame.vertical_line(  F1_FRAME_WIDTH-1, F1_PRINT_Y-1, F1_INPUT_Y+1,      bluespace);
-    frame.horizontal_string("NOBLE OS",            0, 0,                                                     bluespace);
+    frame.horizontal_string("NOBLE OS",            0, 0,                                            bluespace);
     frame.horizontal_string("HYDROGEN BOOTLOADER", 0, F1_FRAME_WIDTH - 20 - HYDROGEN_VERSION.len(), bluespace);
     frame.horizontal_string(HYDROGEN_VERSION,      0, F1_FRAME_WIDTH -      HYDROGEN_VERSION.len(), bluespace);
     frame.render();
@@ -133,19 +133,21 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     if kernel.header.architecture             != InstructionSetArchitecture::EmX86_64 {writeln!(printer, "Kernel load: Incorrect Instruction Set Architecture (e_machine). Should be x86-64 (0x3E)."); panic!();}
     if kernel.header.object_type              != ObjectType::Shared                   {writeln!(printer, "Kernel Load: Incorrect Object Type (e_type). Should be Dynamic (0x03)."); panic!()}
     //Allocate memory for kernel
-    let kernel_stack_size: usize = 16*MIB;
-    let kernel_total_size: usize = kernel.program_memory_size() as usize + kernel_stack_size;
-    let kernel_physical: *mut u8 = unsafe {allocate_memory(boot_services, MemoryType::LOADER_CODE, kernel_total_size, PAGE_SIZE_4KIB as usize)};
+    let kernel_size: usize = kernel.program_memory_size() as usize;
+    let kernel_location: *mut u8 = unsafe {allocate_memory(boot_services, MemoryType::LOADER_CODE, kernel_size, PAGE_SIZE_4KIB)};
+    let stack_size: usize = 8*MIB;
+    let stack_location: *mut u8 = unsafe {allocate_memory(boot_services, MemoryType::LOADER_CODE, stack_size, PAGE_SIZE_4KIB)};
     //Load kernel into memory
     unsafe {
-        match kernel.load(kernel_physical) {
+        match kernel.load(kernel_location) {
             Ok(()) => {
-                               writeln!(printer, "Kernel successfully loaded at:    0x{:16X}", kernel_physical as usize);
-                match kernel.relocate(kernel_physical, KERNEL_VIRTUAL_POINTER) {
-                    Ok(()) => {writeln!(printer, "Kernel successfully relocated to: 0x{:16X}", KERNEL_VIRTUAL_POINTER as usize);},
+                writeln!(printer, "Kernel successfully loaded at:    0x{:16X}", kernel_location as usize);
+                writeln!(printer, "Kernel stack located at:          0x{:16X}", stack_location as usize);
+                match kernel.relocate(kernel_location, oct4_to_pointer(KERNEL_OCT).unwrap()) {
+                    Ok(()) => {writeln!(printer, "Kernel successfully relocated to: 0x{:16X}", oct4_to_pointer(KERNEL_OCT).unwrap() as usize);},
                     Err(error) => {writeln!(printer, "{}", error);},
                 }
-            },
+            }
             Err(error) => {writeln!(printer, "{}", error);}
         }
     }
@@ -160,51 +162,39 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     writeln!(printer, "Kernel Section Header Entry Size:   0x{:16X}", kernel.header.section_header_entry_size);
     writeln!(printer, "Kernel Section Header Number:       0x{:16X}", kernel.header.section_header_number);
     writeln!(printer, "Kernel Section Header String Index: 0x{:16X}", kernel.header.string_section_index);
-    writeln!(printer, "Kernel Code Size:                   0x{:16X}", kernel.program_memory_size());
+    writeln!(printer, "Kernel Code Size:                   0x{:16X} or {}KiB", kernel_size, kernel_size / KIB);
 
     // BOOT LOAD
-    let pml4: *mut u64;
+    let pml4: PageMap;
     unsafe {
         // NEW PAGE MAP SYSTEM
         writeln!(printer, "\n=== NEW PAGE MAP SYSTEM ===\n");
-        let page_allocator = PageAllocatorWrapper{boot_services};
-        //Page Map Level 4: Kernel Environment
-        let pml4_boot: PageMap = match PageMap::new(allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA) as *mut u64, PageMapLevel::L4) {Ok(page_map) => page_map, Err(error) => panic!("{}", error)};
-        writeln!(printer, "PML4 KNENV: 0x{:16X}", pml4_boot.location as usize);
+        let mut page_allocator = UefiPageAllocator{boot_services};
+        //Page Map Level 4: OS Boot
+        pml4 = PageMap::new(allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA), PageMapLevel::L4).unwrap();
+        writeln!(printer, "PML4 KNENV: 0x{:16X}", pml4.location as usize);
         //Page Map Level 4: EFI Boot
-        let pml4_efi: PageMap = match PageMap::new(Cr3::read().0.start_address().as_u64() as *mut u64, PageMapLevel::L4) {Ok(page_map) => page_map, Err(error) => panic!("{}", error)};
-        writeln!(printer, "PML4 EFIBT: 0x{:16X}", pml4_efi.location as usize);
+        let pml4_efi_boot: PageMap = PageMap::new(Cr3::read().0.start_address().as_u64() as *mut u8, PageMapLevel::L4).unwrap();
+        writeln!(printer, "PML4 EFIBT: 0x{:16X}", pml4_efi_boot.location as usize);
         //Page Map Level 3: EFI Boot Physical Memory
-        let pml3_efi_physical: PageMap = match PageMap::new(match pml4_efi.read_entry(0) {Ok(page_map_entry) => page_map_entry.address, Err(error) => panic!("{}", error)}, PageMapLevel::L3) {Ok(page_map) => page_map, Err(error) => panic!("{}", error)};
-        writeln!(printer, "PML3 EFIPH: 0x{:16X}", pml3_efi_physical.location as usize);
-        //Page Map Level 3: Operating System Initialized Physical Memory
-        //let pml3_osiph_new: PageMap = match PageMap::new(allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA) as *mut u64, PageMapLevel::L3) {Ok(page_map) => page_map, Err(error) => panic!("{}", error)};
-        //match pml3_osiph_new.map_pages_offset(&page_allocator, 0 as *mut u64, 0, PAGE_SIZE_512G, true, true, false) {Ok(_) => {}, Err(error) => panic!("{}", error)};
-        //writeln!(printer, "PML3 OSIPH: 0x{:16X}", pml3_osiph_new.location as usize);
+        let pml3_efi_physical_memory: PageMap = PageMap::new(match pml4_efi_boot.read_entry(0) {Ok(page_map_entry) => page_map_entry.address, Err(error) => panic!("{}", error)}, PageMapLevel::L3).unwrap();
+        writeln!(printer, "PML3 EFIPH: 0x{:16X}", pml3_efi_physical_memory.location as usize);
         //Page Map Level 3: Kernel
-        let pml3_kernel: PageMap = match PageMap::new(allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA) as *mut u64, PageMapLevel::L3) {Ok(page_map) => page_map, Err(error) => panic!("{}", error)};
-        match pml3_kernel.map_pages_offset(&page_allocator, kernel_physical as *mut u64, 0, kernel_total_size, true, true, false) {Ok(_) => {}, Err(error) => panic!("{}", error)};
+        let pml3_kernel: PageMap = PageMap::new(allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA), PageMapLevel::L3).unwrap();
+        pml3_kernel.map_pages_offset(&mut page_allocator, kernel_location, 0, kernel_size, true, true, false).unwrap();
+        pml3_kernel.map_pages_offset(&mut page_allocator, stack_location, PAGE_SIZE_512G - stack_size, stack_size, true, true, false);
         writeln!(printer, "PML3 KERNL: 0x{:16X}", pml3_kernel.location as usize);
         //Page Map Level 3: Frame Buffer
-        let pml3_frame_new: PageMap = match PageMap::new(allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA) as *mut u64, PageMapLevel::L3) {Ok(page_map) => page_map, Err(error) => panic!("{}", error)};
-        match pml3_frame_new.map_pages_offset(&page_allocator, graphics_frame_pointer as *mut u64, 0, F1_SCREEN_HEIGHT*F1_SCREEN_WIDTH*ColorBGRX::stride(), true, true, false) {Ok(_) => {}, Err(error) => panic!("{}", error)};
-        writeln!(printer, "PML3 FRAME: 0x{:16X}", pml3_frame_new.location as usize);
+        let pml3_frame_buffer: PageMap = match PageMap::new(allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA), PageMapLevel::L3) {Ok(page_map) => page_map, Err(error) => panic!("{}", error)};
+        match pml3_frame_buffer.map_pages_offset(&mut page_allocator, graphics_frame_pointer, 0, F1_SCREEN_HEIGHT*F1_SCREEN_WIDTH*ColorBGRX::stride(), true, true, false) {Ok(_) => {}, Err(error) => panic!("{}", error)};
+        writeln!(printer, "PML3 FRAME: 0x{:16X}", pml3_frame_buffer.location as usize);
         //Write PML4 Entries
-        pml4_boot.write_entry(PHYSICAL_MEMORY_PHYSICAL_OCTAL, match PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_efi_physical.location, true, true, false) {Ok(page_map_entry) => page_map_entry, Err(error) => panic!("{}", error)});
-        pml4_boot.write_entry(KERNEL_VIRTUAL_OCTAL,           match PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_kernel.location, true, true, false) {Ok(page_map_entry) => page_map_entry, Err(error) => panic!("{}", error)});
-        pml4_boot.write_entry(FRAME_BUFFER_VIRTUAL_OCTAL,     match PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_frame_new.location, true, true, false) {Ok(page_map_entry) => page_map_entry, Err(error) => panic!("{}", error)});
-        //pml4_knenv_new.write_entry(PHYSICAL_MEMORY_VIRTUAL_OCTAL,  match PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_osiph_new.location, true, true, false) {Ok(page_map_entry) => page_map_entry, Err(error) => panic!("{}", error)});
-        pml4_boot.write_entry(PAGE_MAP_VIRTUAL_OCTAL,         match PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml4_boot.location, true, true, false) {Ok(page_map_entry) => page_map_entry, Err(error) => panic!("{}", error)});
+        pml4.write_entry(IDENTITY_MAP_OCT,  match PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_efi_physical_memory.location, true, true, false) {Ok(page_map_entry) => page_map_entry, Err(error) => panic!("{}", error)});
+        pml4.write_entry(KERNEL_OCT,           match PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_kernel.location,       true, true, false) {Ok(page_map_entry) => page_map_entry, Err(error) => panic!("{}", error)});
+        pml4.write_entry(FRAME_BUFFER_OCT,     match PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_frame_buffer.location,    true, true, false) {Ok(page_map_entry) => page_map_entry, Err(error) => panic!("{}", error)});
+        pml4.write_entry(PAGE_MAP_OCT,         match PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml4.location,      true, true, false) {Ok(page_map_entry) => page_map_entry, Err(error) => panic!("{}", error)});
         // FINISH
-        pml4 = pml4_boot.location;
     }
-
-    //Test Page Table in Gluon
-    writeln!(printer, "\n=== PAGE TABLE TESTING ===\n");
-    let pte_test_1 = unsafe{*(Cr3::read().0.start_address().as_u64() as *mut u64)};
-    let pte_test_2 = PageMapEntry::from_u64(pte_test_1, PageMapLevel::L4).unwrap();
-    let pte_test_3 = pte_test_2.to_u64().unwrap();
-    writeln!(printer, "{:016X}\n{:?}\n{:016X}", pte_test_1, pte_test_2, pte_test_3);
 
     // COMMAND LINE
     writeln!(printer, "\n=== COMMAND LINE READY ===");
@@ -273,25 +263,69 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
             }
         }
     }
+    
+    // BOOT SEQUENCE
     writeln!(printer, "\n=== BOOTING ===\n");
     writeln!(printer, "Bootloader Command Line Exited.");
-
-    // BOOT SEQUENCE
+    //Push free memory to new page map
+    {
+        //Check amount of free memory
+        let free_memory_types = &[MemoryType::CONVENTIONAL, MemoryType::BOOT_SERVICES_CODE, MemoryType::BOOT_SERVICES_DATA];
+        let free_page_count: usize = uefi_free_memory_page_count(boot_services, free_memory_types).unwrap();
+        writeln!(printer, "Free Memory Before Final Boot:      {:10}Pg or {:4}MiB {:4}KiB", free_page_count, (free_page_count*PAGE_SIZE_4KIB)/MIB, ((free_page_count*PAGE_SIZE_4KIB) % MIB)/KIB);
+        //Check memory required to map free memory
+        let required_pages_l1: usize = (free_page_count + PAGE_NUMBER_1 - 1) / PAGE_NUMBER_1;
+        let required_pages_l2: usize = (free_page_count + PAGE_NUMBER_2 - 1) / PAGE_NUMBER_2;
+        let required_pages_l3: usize = (free_page_count + PAGE_NUMBER_3 - 1) / PAGE_NUMBER_3;
+        let required_page_count: usize = required_pages_l1 + required_pages_l2 + required_pages_l3;
+        writeln!(printer, "Required Memory to Map Free Memory: {:10}Pg or {:4}MiB {:4}KiB", required_page_count, (required_page_count*PAGE_SIZE_4KIB)/MIB, ((required_page_count*PAGE_SIZE_4KIB) % MIB)/KIB);
+        //Allocate and zero memory required
+        let zone_location = unsafe {allocate_memory(boot_services, MemoryType::LOADER_DATA, required_page_count * PAGE_SIZE_4KIB, PAGE_SIZE_4KIB)};
+        unsafe {
+            for i in 0..required_page_count*PAGE_SIZE_4KIB {
+                write_volatile(zone_location.add(i), 0x00);
+            }
+        }
+        let mut zone_page_allocator = ZonePageAllocator::new(zone_location, required_page_count).unwrap();
+        //Build page map
+        let pml3_free_memory = PageMap::new(zone_page_allocator.allocate_page().unwrap(), PageMapLevel::L3).unwrap();
+        let mut buffer = [0u8; 0x4000];
+        let (_k, description_iterator) = match boot_services.memory_map(&mut buffer) {
+            Ok(value) => value.unwrap(),
+            Err(error) => {panic!("{}", uefi_error_readout(error.status()))}
+        };
+        //Iterate over memory map
+        let mut size_pages = 0;
+        for descriptor in description_iterator {
+            let free_memory_pointer = descriptor.phys_start as *mut u8;
+            let free_memory_size = (descriptor.page_count as usize) * PAGE_SIZE_4KIB;
+            if free_memory_types.contains(&descriptor.ty) {
+                writeln!(printer, "Free Memory Location:     {:16X} ({:8}KiB, {:8}pg)", free_memory_pointer as usize, free_memory_size/KIB, free_memory_size/PAGE_SIZE_4KIB);
+                pml3_free_memory.map_pages_offset(&mut zone_page_allocator, free_memory_pointer, size_pages*PAGE_SIZE_4KIB, free_memory_size, true, true, false).unwrap();
+                size_pages += descriptor.page_count as usize;
+            }
+        }
+        writeln!(printer, "Free Memory After Final Boot:       {:10}Pg or {:4}MiB {:4}KiB", size_pages, (size_pages*PAGE_SIZE_4KIB)/MIB, ((size_pages*PAGE_SIZE_4KIB) % MIB)/KIB);
+        //Write into pml4
+        let pml4e_free_memory = PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_free_memory.location, true, true, false).unwrap();
+        pml4.write_entry(FREE_MEMORY_OCT, pml4e_free_memory).unwrap();
+    }
+    //Delay
+    writeln!(printer, "Holding for 5 seconds.");
+    boot_services.stall(5_000_000);
     //Exit Boot Services
     let mut memory_map_buffer = [0; 10000];
     let (_table_runtime, _esi) = system_table_boot.exit_boot_services(_handle, &mut memory_map_buffer).expect_success("Boot services exit failed");
     exit_boot_services();
     writeln!(printer, "Boot Services exited.");
-
     //Enter Kernel
     unsafe {
-        asm!("MOV R14, {stack}",   stack   = in(reg) KERNEL_VIRTUAL_POINTER as u64 + kernel_total_size as u64,  options(nostack));
-        asm!("MOV R15, {entry}",   entry   = in(reg) KERNEL_VIRTUAL_POINTER as u64 + kernel.header.entry_point, options(nostack));
-        asm!("MOV CR3, {pagemap}", pagemap = in(reg) pml4                   as u64,                             options(nostack));
-        asm!("MOV RSP, R14",                                                                                    options(nostack));
-        asm!("JMP R15",                                                                                         options(nostack));
+        asm!("MOV R14, {stack}",   stack   = in(reg) oct4_to_pointer(KERNEL_OCT).unwrap() as u64 + PAGE_SIZE_512G as u64,     options(nostack));
+        asm!("MOV R15, {entry}",   entry   = in(reg) oct4_to_pointer(KERNEL_OCT).unwrap() as u64 + kernel.header.entry_point, options(nostack));
+        asm!("MOV CR3, {pagemap}", pagemap = in(reg) pml4.location                        as u64,                             options(nostack));
+        asm!("MOV RSP, R14",                                                                                                  options(nostack));
+        asm!("JMP R15",                                                                                                       options(nostack));
     }
-
     //Halt Computer
     writeln!(printer, "Halt reached.");
     unsafe {asm!("HLT");}
@@ -366,7 +400,7 @@ fn uefi_error_readout(error: Status) -> &'static str {
 }
 
 //Set a larger graphics mode
-fn set_graphics_mode(gop: &mut GraphicsOutput) {
+fn uefi_set_graphics_mode(gop: &mut GraphicsOutput) {
     let mode:Mode = gop.modes()
     .map(|mode| mode.expect("Graphics Output Protocol query of available modes failed.")).find(|mode| {
         let info = mode.info();
@@ -375,6 +409,24 @@ fn set_graphics_mode(gop: &mut GraphicsOutput) {
     gop.set_mode(&mode).expect_success("Graphics Output Protocol set mode failed.");
 }
 
+//Total size of free conventional memory
+fn uefi_free_memory_page_count(boot_services: &BootServices, memory_types: &[MemoryType]) -> Result<usize, &'static str> {
+    //Build a buffer big enough to handle the memory map
+    let mut buffer = [0u8; 0x4000];
+    //Read memory map into buffer
+    let (_k, description_iterator) = match boot_services.memory_map(&mut buffer) {
+        Ok(value) => value.unwrap(),
+        Err(error) => {return Err(uefi_error_readout(error.status()));}
+    };
+    //Iterate over memory map
+    let mut size_pages: usize = 0;
+    for descriptor in description_iterator {
+        if memory_types.contains(&descriptor.ty) {
+            size_pages += descriptor.page_count as usize;
+        }
+    }
+    Ok(size_pages)
+}
 
 // COMMAND PROCESSOR
 //Evaluate and execute a bootloader command and return a code
@@ -710,13 +762,42 @@ impl<'a> LocationalRead for LocationalReadWrapper<'a> {
     }
 }
 
-//Page Allocator System
-struct PageAllocatorWrapper<'a> {
+//UEFI Page Allocator
+struct UefiPageAllocator<'a> {
     boot_services: &'a BootServices,
 }
-impl<'a> PageAllocator for PageAllocatorWrapper<'a> {
-    fn allocate_page(&self) -> *mut u64 {
-        unsafe {allocate_page_zeroed(self.boot_services, MemoryType::LOADER_DATA) as *mut u64}
+impl<'a> PageAllocator for UefiPageAllocator<'a> {
+    fn allocate_page(&mut self) -> Result<*mut u8, &'static str> {
+        Ok(unsafe {allocate_page_zeroed(self.boot_services, MemoryType::LOADER_DATA)})
+    }
+}
+
+//Zone Page Allocator
+struct ZonePageAllocator {
+    pub location: *mut u8,
+    pub total_pages: usize,
+    current_page: usize,
+}
+impl ZonePageAllocator {
+    pub fn new(location: *mut u8, total_pages: usize) -> Result<Self, &'static str> {
+        if location as usize % PAGE_SIZE_4KIB != 0 {return Err("Zone Page Allocator: Location not aligned to 4KiB boundary.")}
+        Ok(Self {
+            location,
+            total_pages,
+            current_page: 0,
+        })
+    }
+}
+impl PageAllocator for ZonePageAllocator {
+    fn allocate_page(&mut self) -> Result<*mut u8, &'static str> {
+        if self.current_page >= self.total_pages {
+            Err("Zone Page Allocator: Out of pages.")
+        }
+        else {
+            let location: *mut u8 = unsafe {self.location.add(self.current_page*PAGE_SIZE_4KIB)};
+            self.current_page += 1;
+            Ok(location)
+        }
     }
 }
 
