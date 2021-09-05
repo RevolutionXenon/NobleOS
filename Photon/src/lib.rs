@@ -25,18 +25,16 @@ use core::str;
 use crate::font_16_16::retrieve_font_bitmap;
 
 //Constants
-pub const PHOTON_VERSION: & str = "vDEV-2021-08-29"; //CURRENT VERSION OF GRAPHICS LIBRARY
+pub const PHOTON_VERSION: & str = "vDEV-2021-09-04"; //CURRENT VERSION OF GRAPHICS LIBRARY
 
 
 // TRAITS
 //Color Format
-pub trait ColorFormat {
-    fn render_data(&self) -> &[u8];
-    fn stride() -> usize;
+pub trait ColorFormat:Clone+Copy {
 }
 
 //Character Format
-pub trait CharacterFormat<Color: ColorFormat> {
+pub trait CharacterFormat<Color: ColorFormat>:Clone+Copy {
     fn get_codepoint(&self) -> char;
     fn set_codepoint(&mut self, codepoint: char);
 }
@@ -61,16 +59,22 @@ pub trait CharacterRenderer<Color: ColorFormat, Character: CharacterFormat<Color
 #[derive(Default)]
 #[derive(Copy, Clone)]
 pub struct ColorBGRX {
-    data: [u8;3]
+    blue:     u8,
+    green:    u8,
+    red:      u8,
+    reserved: u8,
 }
 impl ColorBGRX                 {
     pub const fn new(red: u8, green: u8, blue: u8) -> Self {
-        Self {data: [blue, green, red],}
+        Self {
+            blue,
+            green,
+            red,
+            reserved: 0,
+        }
     }
 }
 impl ColorFormat for ColorBGRX {
-    fn render_data(&self) -> &[u8] {&self.data}
-    fn stride() -> usize {4}
 }
 
 //Character: Two Tone
@@ -86,19 +90,15 @@ impl<Color: ColorFormat> CharacterFormat<Color> for CharacterTwoTone<Color> {
 }
 
 //Pixel Render: Height then Width then Depth
-pub struct PixelRendererHWD {
-    pub pointer: *mut u8,
+pub struct PixelRendererHWD<Color: ColorFormat> {
+    pub pointer: *mut Color,
     pub height:       usize,
     pub width:        usize,
 }
-impl<Color: ColorFormat+Clone+Copy> PixelRenderer<Color> for PixelRendererHWD {
+impl<Color: ColorFormat> PixelRenderer<Color> for PixelRendererHWD<Color> {
     unsafe fn render_pixel(&self, color: Color, y: usize, x: usize) {
         if !(y<self.height && x<self.width) {return};
-        let position: *mut u8 = self.pointer.add((y*self.width + x)*Color::stride());
-        let render_data = color.render_data();
-        for (i, byte) in render_data.iter().enumerate() {
-            write_volatile(position.add(i), *byte);
-        }
+        write_volatile(self.pointer.add(y*self.width + x), color);
     }
     unsafe fn render_line(&self, line: &[Color], y: usize, x: usize) {
         for (i, pixel) in line.iter().enumerate() {
@@ -120,14 +120,14 @@ impl<Color: ColorFormat+Clone+Copy> PixelRenderer<Color> for PixelRendererHWD {
 }
 
 //Character Renderer: Two Tone Characters, 16x16 Pixel Grid
-pub struct CharacterTwoToneRenderer16x16<Color: ColorFormat+Default+Copy>                                                                                            {
+pub struct CharacterTwoToneRenderer16x16<Color: ColorFormat+Default>                                                                                            {
     pub renderer: *const dyn PixelRenderer<Color>,
     pub height:           usize,
     pub width:            usize,
     pub y:                usize,
     pub x:                usize,
 }
-impl                                    <Color: ColorFormat+Default+Copy> CharacterRenderer<Color, CharacterTwoTone<Color>> for CharacterTwoToneRenderer16x16<Color> {
+impl                                    <Color: ColorFormat+Default> CharacterRenderer<Color, CharacterTwoTone<Color>> for CharacterTwoToneRenderer16x16<Color> {
     fn render_character(&self, character: CharacterTwoTone<Color>, y: usize, x: usize) {
         //Find bitmap
         let bitmap = retrieve_font_bitmap(character.codepoint);
@@ -152,13 +152,13 @@ impl                                    <Color: ColorFormat+Default+Copy> Charac
 
 // WINDOW STRUCTS
 //Frame of Fixed Dimensions
-pub struct FrameWindow<'s, const HEIGHT: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>+Clone+Copy>                                                  {
+pub struct FrameWindow<'s, const HEIGHT: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>>                                                  {
     renderer: &'s dyn CharacterRenderer<Color, Character>,
     character_frame:  [[Character; WIDTH]; HEIGHT],
     y:                usize,
     x:                usize,
 }
-impl                  <'s, const HEIGHT: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>+Clone+Copy> FrameWindow<'s, HEIGHT, WIDTH, Color, Character> {
+impl                  <'s, const HEIGHT: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>> FrameWindow<'s, HEIGHT, WIDTH, Color, Character> {
     //CONSTRUCTOR
     pub fn new(renderer: &'s dyn CharacterRenderer<Color, Character>, whitespace: Character, y: usize, x: usize) -> Self {
         FrameWindow{
@@ -279,7 +279,7 @@ impl                  <'s, const HEIGHT: usize, const WIDTH: usize, Color: Color
 }
 
 //Print Window of Fixed Dimensions
-pub struct PrintWindow<const LINES: usize, const HEIGHT: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>+Clone+Copy>                                                                   {
+pub struct PrintWindow<const LINES: usize, const HEIGHT: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>>                                                                   {
     screen:   *const dyn CharacterRenderer<Color, Character>,
     print_buffer:         [[Character; WIDTH]; LINES],
     print_y:              usize,
@@ -289,7 +289,7 @@ pub struct PrintWindow<const LINES: usize, const HEIGHT: usize, const WIDTH: usi
     pub y:                usize,
     pub x:                usize,
 }
-impl                  <const LINES: usize, const HEIGHT: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>+Clone+Copy>           PrintWindow<LINES, HEIGHT, WIDTH, Color, Character> {
+impl                  <const LINES: usize, const HEIGHT: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>>           PrintWindow<LINES, HEIGHT, WIDTH, Color, Character> {
     //CONSTRUCTOR
     pub fn new(character_renderer: *const dyn CharacterRenderer<Color, Character>, write_whitespace: Character, line_whitespace: Character, y: usize, x: usize) -> Self{
         PrintWindow{
@@ -428,7 +428,7 @@ impl                  <const LINES: usize, const HEIGHT: usize, const WIDTH: usi
         self.render();
     }
 }
-impl                  <const LINES: usize, const HEIGHT: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>+Clone+Copy> Write for PrintWindow<LINES, HEIGHT, WIDTH, Color, Character> {
+impl                  <const LINES: usize, const HEIGHT: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>> Write for PrintWindow<LINES, HEIGHT, WIDTH, Color, Character> {
     fn write_str(&mut self, string: &str) -> Result<(), Error> {
         self.push(string, self.write_whitespace);
         Ok(())
@@ -447,14 +447,14 @@ impl                  <const LINES: usize, const HEIGHT: usize, const WIDTH: usi
 }
 
 //Input Window
-pub struct InputWindow<'s, const LENGTH: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>+Copy+Clone>                                                  where [(); LENGTH*4]: {
+pub struct InputWindow<'s, const LENGTH: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>>                                                  where [(); LENGTH*4]: {
     screen: &'s dyn CharacterRenderer<Color, Character>,
     input_buffer:   [Character; LENGTH],
     input_p:        usize,
     y:              usize,
     x:              usize,
 }
-impl                  <'s, const LENGTH: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>+Copy+Clone> InputWindow<'s, LENGTH, WIDTH, Color, Character> where [(); LENGTH*4]: {
+impl                  <'s, const LENGTH: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>> InputWindow<'s, LENGTH, WIDTH, Color, Character> where [(); LENGTH*4]: {
     // CONSTRUCTOR
     pub fn new(character_renderer: &'s dyn CharacterRenderer<Color, Character>, whitespace: Character, y: usize, x: usize) -> Self {
         InputWindow {

@@ -38,7 +38,7 @@ static REDSPACE:    CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX
 pub extern "sysv64" fn _start() -> ! {
     // GRAPHICS SETUP
     //Screen Variables
-    let pixel_renderer: PixelRendererHWD = PixelRendererHWD {pointer: oct4_to_pointer(FRAME_BUFFER_OCT).unwrap(), height: F1_SCREEN_HEIGHT, width: F1_SCREEN_WIDTH};
+    let pixel_renderer: PixelRendererHWD<ColorBGRX> = PixelRendererHWD {pointer: oct4_to_pointer(FRAME_BUFFER_OCT).unwrap() as *mut ColorBGRX, height: F1_SCREEN_HEIGHT, width: F1_SCREEN_WIDTH};
     let character_renderer: CharacterTwoToneRenderer16x16<ColorBGRX> = CharacterTwoToneRenderer16x16::<ColorBGRX> {renderer: &pixel_renderer, height: F1_FRAME_HEIGHT, width: F1_FRAME_WIDTH, y: 0, x: 0};
     let mut frame: FrameWindow::<F1_FRAME_HEIGHT, F1_FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = FrameWindow::<F1_FRAME_HEIGHT, F1_FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, WHITESPACE, 0, 0);
     let mut _inputter: InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, WHITESPACE, F1_INPUT_Y, F1_INPUT_X);
@@ -58,6 +58,11 @@ pub extern "sysv64" fn _start() -> ! {
     writeln!(printer, "Helium Kernel           {}", HELIUM_VERSION);
     writeln!(printer, "Photon Graphics Library {}", PHOTON_VERSION);
     writeln!(printer, "Gluon Memory Library    {}", GLUON_VERSION);
+
+    // TEST WRITES
+    for i in 0..100 {
+        writeln!(printer, "Test Write: {}", i);
+    }
 
     // PAGE MAP PARSING
     //Go to PML4
@@ -87,6 +92,8 @@ pub extern "sysv64" fn _start() -> ! {
         }
     }
     writeln!(printer, "Free memory found: {}Pg or {}MiB {}KiB", free_page_count, (free_page_count*PAGE_SIZE_4KIB)/MIB, ((free_page_count*PAGE_SIZE_4KIB) % MIB)/KIB);
+
+    
 
     // HALT COMPUTER
     writeln!(printer, "Halt reached.");

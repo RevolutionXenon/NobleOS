@@ -74,7 +74,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     let whitespace: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
     let _blackspace: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
     let bluespace: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE, background: COLOR_BGRX_BLACK};
-    let pixel_renderer: PixelRendererHWD = PixelRendererHWD {pointer: graphics_frame_pointer, height: F1_SCREEN_HEIGHT, width: F1_SCREEN_WIDTH};
+    let pixel_renderer: PixelRendererHWD<ColorBGRX> = PixelRendererHWD {pointer: graphics_frame_pointer as *mut ColorBGRX, height: F1_SCREEN_HEIGHT, width: F1_SCREEN_WIDTH};
     let character_renderer: CharacterTwoToneRenderer16x16<ColorBGRX> = CharacterTwoToneRenderer16x16::<ColorBGRX> {renderer: &pixel_renderer, height: F1_FRAME_HEIGHT, width: F1_FRAME_WIDTH, y: 0, x: 0};
     let mut frame: FrameWindow::<F1_FRAME_HEIGHT, F1_FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = FrameWindow::<F1_FRAME_HEIGHT, F1_FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, whitespace, 0, 0);
     let mut printer: PrintWindow::<F1_PRINT_LINES, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = PrintWindow::<F1_PRINT_LINES, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, whitespace, whitespace, F1_PRINT_Y, F1_PRINT_X);
@@ -186,7 +186,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         writeln!(printer, "PML3 KERNL: 0x{:16X}", pml3_kernel.location as usize);
         //Page Map Level 3: Frame Buffer
         let pml3_frame_buffer: PageMap = match PageMap::new(allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA), PageMapLevel::L3) {Ok(page_map) => page_map, Err(error) => panic!("{}", error)};
-        match pml3_frame_buffer.map_pages_offset(&mut page_allocator, graphics_frame_pointer, 0, F1_SCREEN_HEIGHT*F1_SCREEN_WIDTH*ColorBGRX::stride(), true, true, false) {Ok(_) => {}, Err(error) => panic!("{}", error)};
+        match pml3_frame_buffer.map_pages_offset(&mut page_allocator, graphics_frame_pointer, 0, F1_SCREEN_HEIGHT*F1_SCREEN_WIDTH*4, true, true, false) {Ok(_) => {}, Err(error) => panic!("{}", error)};
         writeln!(printer, "PML3 FRAME: 0x{:16X}", pml3_frame_buffer.location as usize);
         //Write PML4 Entries
         pml4.write_entry(IDENTITY_MAP_OCT,  match PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_efi_physical_memory.location, true, true, false) {Ok(page_map_entry) => page_map_entry, Err(error) => panic!("{}", error)});
