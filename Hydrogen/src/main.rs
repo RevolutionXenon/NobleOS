@@ -49,7 +49,7 @@ use uefi::table::runtime::ResetType;
 use x86_64::registers::control::*;
 
 //Constants
-const HYDROGEN_VERSION: & str = "vDEV-2021-09-04"; //CURRENT VERSION OF BOOTLOADER
+const HYDROGEN_VERSION: & str = "vDEV-2021-09-05"; //CURRENT VERSION OF BOOTLOADER
 
 
 // MAIN
@@ -189,7 +189,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         match pml3_frame_buffer.map_pages_offset(&mut page_allocator, graphics_frame_pointer, 0, F1_SCREEN_HEIGHT*F1_SCREEN_WIDTH*4, true, true, false) {Ok(_) => {}, Err(error) => panic!("{}", error)};
         writeln!(printer, "PML3 FRAME: 0x{:16X}", pml3_frame_buffer.location as usize);
         //Write PML4 Entries
-        pml4.write_entry(IDENTITY_MAP_OCT,  match PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_efi_physical_memory.location, true, true, false) {Ok(page_map_entry) => page_map_entry, Err(error) => panic!("{}", error)});
+        pml4.write_entry(PHYSICAL_OCT,  match PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_efi_physical_memory.location, true, true, false) {Ok(page_map_entry) => page_map_entry, Err(error) => panic!("{}", error)});
         pml4.write_entry(KERNEL_OCT,           match PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_kernel.location,       true, true, false) {Ok(page_map_entry) => page_map_entry, Err(error) => panic!("{}", error)});
         pml4.write_entry(FRAME_BUFFER_OCT,     match PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_frame_buffer.location,    true, true, false) {Ok(page_map_entry) => page_map_entry, Err(error) => panic!("{}", error)});
         pml4.write_entry(PAGE_MAP_OCT,         match PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml4.location,      true, true, false) {Ok(page_map_entry) => page_map_entry, Err(error) => panic!("{}", error)});
@@ -201,72 +201,81 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     //Enter Read-Evaluate-Print Loop
     loop {
         //Wait for key to be pressed
-        boot_services.wait_for_event(&mut [input.wait_for_key_event()]).expect_success("Boot services event wait failed");
-        //Check input key
-        let input_key = input.read_key().expect_success("Key input failed").unwrap();
-        match input_key {
-            //Printable Key
-            Key::Printable(input_ucs16) => {
-                //Convert to usable type
-                let input_char = char::from(input_ucs16);
-                //User has hit enter
-                if input_char == '\r' {
-                    //Return to bottom of screen
-                    printer.end_down();
-                    //Execute command and reset input stack
-                    let mut buffer = [0u8; F1_INPUT_LENGTH*4];
-                    match inputter.to_str(&mut buffer) {
-                        Ok(command) => {
-                            let return_code = command_processor(&mut printer, &system_table_boot, command);
-                            //Check return code
-                            match return_code {
-                                0x00 => { //Continue
-                                },
-                                0x01 => { //Boot
-                                    break;
-                                },
-                                0x02 => { //Shutdown
-                                    system_table_boot.boot_services().stall(5_000_000);
-                                    system_table_boot.runtime_services().reset(ResetType::Shutdown, Status(0), None);
-                                },
-                                0x03 => { //Panic
-                                    system_table_boot.boot_services().stall(5_000_000);
-                                    panic!("Manually called panic.");
-                                },
-                                _    => { //Unrecognized
-                                    panic!("Unexpected return code.");
-                                },
+        match input.read_key().unwrap().unwrap() {
+            Some(input_key) => {
+                //Check input key
+                match input_key {
+                    //Printable Key
+                    Key::Printable(input_ucs16) => {
+                        //Convert to usable type
+                        let input_char = char::from(input_ucs16);
+                        //User has hit enter
+                        if input_char == '\r' {
+                            //Return to bottom of screen
+                            printer.end_down();
+                            //Execute command and reset input stack
+                            let mut buffer = [0u8; F1_INPUT_LENGTH*4];
+                            match inputter.to_str(&mut buffer) {
+                                Ok(command) => {
+                                    let return_code = command_processor(&mut printer, &system_table_boot, command);
+                                    //Check return code
+                                    match return_code {
+                                        0x00 => { //Continue
+                                        },
+                                        0x01 => { //Boot
+                                            break;
+                                        },
+                                        0x02 => { //Shutdown
+                                            system_table_boot.boot_services().stall(5_000_000);
+                                            system_table_boot.runtime_services().reset(ResetType::Shutdown, Status(0), None);
+                                        },
+                                        0x03 => { //Panic
+                                            system_table_boot.boot_services().stall(5_000_000);
+                                            panic!("Manually called panic.");
+                                        },
+                                        _    => { //Unrecognized
+                                            panic!("Unexpected return code.");
+                                        },
+                                    }
+                                }
+                                Err(error) => {
+                                    writeln!(printer, "{}", error);
+                                }
                             }
+                            inputter.flush(whitespace);
                         }
-                        Err(error) => {
-                            writeln!(printer, "{}", error);
+                        //User has typed a character
+                        else {
+                            inputter.push_render(CharacterTwoTone::<ColorBGRX>{codepoint: input_char, foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK}, whitespace);
                         }
                     }
-                    inputter.flush(whitespace);
-                }
-                //User has typed a character
-                else {
-                    inputter.push_render(CharacterTwoTone::<ColorBGRX>{codepoint: input_char, foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK}, whitespace);
-                }
-            }
-            //Modifier or Control Key
-            Key::Special(scancode) => {
-                match scancode {
-                    ScanCode::HOME      => {printer.end_up();},
-                    ScanCode::END       => {printer.end_down();},
-                    ScanCode::UP        => {printer.line_up();},
-                    ScanCode::DOWN      => {printer.line_down();},
-                    ScanCode::PAGE_UP   => {printer.page_up();},
-                    ScanCode::PAGE_DOWN => {printer.page_down();},
-                    _ => {},
+                    //Modifier or Control Key
+                    Key::Special(scancode) => {
+                        match scancode {
+                            ScanCode::HOME      => {printer.end_up();},
+                            ScanCode::END       => {printer.end_down();},
+                            ScanCode::UP        => {printer.line_up();},
+                            ScanCode::DOWN      => {printer.line_down();},
+                            ScanCode::PAGE_UP   => {printer.page_up();},
+                            ScanCode::PAGE_DOWN => {printer.page_down();},
+                            _ => {},
+                        }
+                    }
                 }
             }
+            None => {boot_services.stall(10_000)},
         }
     }
     
     // BOOT SEQUENCE
     writeln!(printer, "\n=== BOOTING ===\n");
     writeln!(printer, "Bootloader Command Line Exited.");
+    let entry_point_virtual = oct4_to_pointer(KERNEL_OCT).unwrap() as u64 + kernel.header.entry_point;
+    let stack_point_virtual = oct4_to_pointer(KERNEL_OCT).unwrap() as u64 + PAGE_SIZE_512G as u64;
+    let pml4_point_physical = pml4.location                             as u64;
+    writeln!(printer, "Entry Point Virtual:  {:16X}", entry_point_virtual);
+    writeln!(printer, "Stack Point Virtual:  {:16X}", stack_point_virtual);
+    writeln!(printer, "PML4  Point Physical: {:16X}", pml4_point_physical);
     //Push free memory to new page map
     {
         //Check amount of free memory
@@ -300,7 +309,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
             let free_memory_pointer = descriptor.phys_start as *mut u8;
             let free_memory_size = (descriptor.page_count as usize) * PAGE_SIZE_4KIB;
             if free_memory_types.contains(&descriptor.ty) {
-                writeln!(printer, "Free Memory Location:     {:16X} ({:8}KiB, {:8}pg)", free_memory_pointer as usize, free_memory_size/KIB, free_memory_size/PAGE_SIZE_4KIB);
+                //writeln!(printer, "Free Memory Location:     {:16X} ({:8}KiB, {:8}pg)", free_memory_pointer as usize, free_memory_size/KIB, free_memory_size/PAGE_SIZE_4KIB);
                 pml3_free_memory.map_pages_offset(&mut zone_page_allocator, free_memory_pointer, size_pages*PAGE_SIZE_4KIB, free_memory_size, true, true, false).unwrap();
                 size_pages += descriptor.page_count as usize;
             }
@@ -311,8 +320,8 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         pml4.write_entry(FREE_MEMORY_OCT, pml4e_free_memory).unwrap();
     }
     //Delay
-    writeln!(printer, "Holding for 5 seconds.");
-    boot_services.stall(5_000_000);
+    //writeln!(printer, "Holding for 5 seconds.");
+    //boot_services.stall(5_000_000);
     //Exit Boot Services
     let mut memory_map_buffer = [0; 10000];
     let (_table_runtime, _esi) = system_table_boot.exit_boot_services(_handle, &mut memory_map_buffer).expect_success("Boot services exit failed");
@@ -320,11 +329,11 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     writeln!(printer, "Boot Services exited.");
     //Enter Kernel
     unsafe {
-        asm!("MOV R14, {stack}",   stack   = in(reg) oct4_to_pointer(KERNEL_OCT).unwrap() as u64 + PAGE_SIZE_512G as u64,     options(nostack));
-        asm!("MOV R15, {entry}",   entry   = in(reg) oct4_to_pointer(KERNEL_OCT).unwrap() as u64 + kernel.header.entry_point, options(nostack));
-        asm!("MOV CR3, {pagemap}", pagemap = in(reg) pml4.location                        as u64,                             options(nostack));
-        asm!("MOV RSP, R14",                                                                                                  options(nostack));
-        asm!("JMP R15",                                                                                                       options(nostack));
+        asm!("MOV R14, {stack}",   stack   = in(reg) stack_point_virtual, options(nostack));
+        asm!("MOV R15, {entry}",   entry   = in(reg) entry_point_virtual, options(nostack));
+        asm!("MOV CR3, {pagemap}", pagemap = in(reg) pml4_point_physical, options(nostack));
+        asm!("MOV RSP, R14",                                              options(nostack));
+        asm!("JMP R15",                                                   options(nostack));
     }
     //Halt Computer
     writeln!(printer, "Halt reached.");

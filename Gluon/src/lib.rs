@@ -22,33 +22,35 @@ use header::*;
 use program::*;
 use section::*;
 use relocation_entry::*;
+use x86_64::instructions::port::*;
 
 //Constants
-pub const GLUON_VERSION: &str = "vDEV-2021-09-04";                                                       //CURRENT VERSION OF GRAPHICS LIBRARY
-//                                       SIGN PM5 PM4 PM3 PM2 PM1 OFFSET
-pub const HIGHER_HALF_57:    usize = 0o_177_000_000_000_000_000_0000_usize;          //HIGHER HALF LOCATION IN FIVE LEVEL PAGE MAP (57-bit address space)
-pub const HIGHER_HALF_48:    usize = 0o_177_777_000_000_000_000_0000_usize;          //HIGHER HALF LOCATION IN FOUR LEVEL PAGE MAP (48-bit address space)
-pub const IDENTITY_MAP_OCT:  usize = 0o_________000__________________usize;          //PHYSICAL MEMORY PHYSICAL LOCATION PML4 OFFSET
-pub const KERNEL_OCT:        usize = 0o_________400__________________usize;          //KERNEL VIRTUAL LOCATION PML4 TABLE OFFSET
-pub const FRAME_BUFFER_OCT:  usize = 0o_________775__________________usize;          //FRAME BUFFER VIRTUAL LOCATION PML4 OFFSET
-pub const FREE_MEMORY_OCT:   usize = 0o_________776__________________usize;          //PHYSICAL MEMORY VIRTUAL LOCATION PML4 OFFSET
-pub const PAGE_MAP_OCT:      usize = 0o_________777__________________usize;          //PAGE MAP VIRTUAL LOCATION PML4 OFFSET
-pub const PAGE_SIZE_4KIB:    usize = 0o_______________________1_0000_usize;          //MEMORY PAGE SIZE (  4KiB),                            PAGE MAP LEVEL 1 ENTRY SIZE
-pub const PAGE_SIZE_2MIB:    usize = 0o___________________1_000_0000_usize;          //MEMORY PAGE SIZE (  2MiB), PAGE MAP LEVEL 1 CAPACITY, PAGE MAP LEVEL 2 ENTRY SIZE
-pub const PAGE_SIZE_1GIB:    usize = 0o_______________1_000_000_0000_usize;          //MEMORY PAGE SIZE (  1GiB), PAGE MAP LEVEL 2 CAPACITY, PAGE MAP LEVEL 3 ENTRY SIZE
-pub const PAGE_SIZE_512G:    usize = 0o___________1_000_000_000_0000_usize;          //MEMORY PAGE SIZE (512GiB), PAGE MAP LEVEL 3 CAPACITY
-pub const PAGE_SIZE_256T:    usize = 0o_______1_000_000_000_000_0000_usize;          //MEMORY PAGE SIZE (256TiB), PAGE MAP LEVEL 4 CAPACITY
-pub const PAGE_SIZE_128P:    usize = 0o___1_000_000_000_000_000_0000_usize;          //MEMORY PAGE SIZE (128PiB), PAGE MAP LEVEL 5 CAPACITY
-pub const PAGE_NUMBER_1:     usize = 0o_________________________1000_usize;          //NUMBER OF PAGE TABLE ENTRIES 1 LEVELS UP
-pub const PAGE_NUMBER_2:     usize = 0o_____________________100_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 2 LEVELS UP
-pub const PAGE_NUMBER_3:     usize = 0o_________________100_000_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 3 LEVELS UP
-pub const PAGE_NUMBER_4:     usize = 0o_____________100_000_000_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 4 LEVELS UP
-pub const PAGE_NUMBER_5:     usize = 0o_________100_000_000_000_0000_usize;          //NUMBER OF PAGE TABLE ENTRIES 5 LEVELS UP
-pub const KIB:               usize = 0o_________________________2000_usize;          //ONE KIBIBYTE
-pub const MIB:               usize = 0o_____________________400_0000_usize;          //ONE MEBIBYTE
-pub const GIB:               usize = 0o_______________1_000_000_0000_usize;          //ONE GIBIBYTE
-pub const TIB:               usize = 0o___________2_000_000_000_0000_usize;          //ONE TEBIBYTE
-pub const PIB:               usize = 0o_______4_000_000_000_000_0000_usize;          //ONE PEBIBYTE
+pub const GLUON_VERSION: &str = "vDEV-2021-09-05";                         //CURRENT VERSION OF GRAPHICS LIBRARY
+//                                    SIGN PM5 PM4 PM3 PM2 PM1 OFFSET
+pub const HIGHER_HALF_57:   usize = 0o_177_000_000_000_000_000_0000_usize; //HIGHER HALF SIGN EXTENSION IN FIVE LEVEL PAGE MAP (57-bit address space)
+pub const HIGHER_HALF_48:   usize = 0o_177_777_000_000_000_000_0000_usize; //HIGHER HALF SIGN EXTENSION IN FOUR LEVEL PAGE MAP (48-bit address space)
+pub const PHYSICAL_OCT:     usize = 0o_________000__________________usize; //PML4 OFFSET OF PHYSICAL MEMORY PHYSICAL LOCATION
+pub const KERNEL_OCT:       usize = 0o_________400__________________usize; //PML4 OFFSET OF KERNEL VIRTUAL LOCATION
+pub const IDENTITY_OCT:     usize = 0o_________774__________________usize; //PML4 OFFSET OF OFFSET IDENTITY MAP VIRTUAL LOCATION
+pub const FRAME_BUFFER_OCT: usize = 0o_________775__________________usize; //PML4 OFFSET OF FRAME BUFFER VIRTUAL LOCATION
+pub const FREE_MEMORY_OCT:  usize = 0o_________776__________________usize; //PML4 OFFSET OF PHYSICAL MEMORY VIRTUAL LOCATION
+pub const PAGE_MAP_OCT:     usize = 0o_________777__________________usize; //PML4 OFFSET OF PAGE MAP VIRTUAL LOCATION 
+pub const PAGE_SIZE_4KIB:   usize = 0o_______________________1_0000_usize; //MEMORY PAGE SIZE (  4KiB), PAGE MAP LEVEL 1 ENTRY SIZE
+pub const PAGE_SIZE_2MIB:   usize = 0o___________________1_000_0000_usize; //MEMORY PAGE SIZE (  2MiB), PAGE MAP LEVEL 2 ENTRY SIZE, PAGE MAP LEVEL 1 CAPACITY
+pub const PAGE_SIZE_1GIB:   usize = 0o_______________1_000_000_0000_usize; //MEMORY PAGE SIZE (  1GiB), PAGE MAP LEVEL 3 ENTRY SIZE, PAGE MAP LEVEL 2 CAPACITY
+pub const PAGE_SIZE_512G:   usize = 0o___________1_000_000_000_0000_usize; //MEMORY PAGE SIZE (512GiB),                              PAGE MAP LEVEL 3 CAPACITY
+pub const PAGE_SIZE_256T:   usize = 0o_______1_000_000_000_000_0000_usize; //MEMORY PAGE SIZE (256TiB),                              PAGE MAP LEVEL 4 CAPACITY
+pub const PAGE_SIZE_128P:   usize = 0o___1_000_000_000_000_000_0000_usize; //MEMORY PAGE SIZE (128PiB),                              PAGE MAP LEVEL 5 CAPACITY
+pub const PAGE_NUMBER_1:    usize = 0o_________________________1000_usize; //NUMBER OF PAGE TABLE ENTRIES 1 LEVELS UP (               512)
+pub const PAGE_NUMBER_2:    usize = 0o_____________________100_0000_usize; //NUMBER OF PAGE TABLE ENTRIES 2 LEVELS UP (           262,144)
+pub const PAGE_NUMBER_3:    usize = 0o_________________100_000_0000_usize; //NUMBER OF PAGE TABLE ENTRIES 3 LEVELS UP (       134,217,728)
+pub const PAGE_NUMBER_4:    usize = 0o_____________100_000_000_0000_usize; //NUMBER OF PAGE TABLE ENTRIES 4 LEVELS UP (    68,719,476,736)
+pub const PAGE_NUMBER_5:    usize = 0o_________100_000_000_000_0000_usize; //NUMBER OF PAGE TABLE ENTRIES 5 LEVELS UP (35,184,372,088,832)
+pub const KIB:              usize = 0o_________________________2000_usize; //ONE KIBIBYTE
+pub const MIB:              usize = 0o_____________________400_0000_usize; //ONE MEBIBYTE
+pub const GIB:              usize = 0o_______________1_000_000_0000_usize; //ONE GIBIBYTE
+pub const TIB:              usize = 0o___________2_000_000_000_0000_usize; //ONE TEBIBYTE
+pub const PIB:              usize = 0o_______4_000_000_000_000_0000_usize; //ONE PEBIBYTE
 
 
 // MACROS
@@ -1104,14 +1106,15 @@ impl PageMap {
     //Map pages from a physical and within-map offset
     pub fn  map_pages_offset(&self, page_allocator: &mut dyn PageAllocator, physical_offset: *mut u8, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
         match self.map_level {
-            PageMapLevel::L1 => {self.map_pages_offset_pml1(                physical_offset, map_offset, size, write, supervisor, execute_disable)},
-            PageMapLevel::L2 => {self.map_pages_offset_pml2(page_allocator, physical_offset, map_offset, size, write, supervisor, execute_disable)},
-            PageMapLevel::L3 => {self.map_pages_offset_pml3(page_allocator, physical_offset, map_offset, size, write, supervisor, execute_disable)},
+            PageMapLevel::L1 => {self.map_pages_offset_pml1_4kib(                physical_offset, map_offset, size, write, supervisor, execute_disable)},
+            PageMapLevel::L2 => {self.map_pages_offset_pml2_4kib(page_allocator, physical_offset, map_offset, size, write, supervisor, execute_disable)},
+            PageMapLevel::L3 => {self.map_pages_offset_pml3_4kib(page_allocator, physical_offset, map_offset, size, write, supervisor, execute_disable)},
             _ => Err("Page Map: Offset function not finished.")
         }
     }
-    fn map_pages_offset_pml1(&self,                                         physical_offset: *mut u8, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
-        //TODO: Create macro to check and return if allocate_page doesn't create properly aligned page
+    
+    //Internal handling of creating page maps
+    fn map_pages_offset_pml1_4kib(&self,                                         physical_offset: *mut u8, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
         //Check Parameters
         if self.map_level                            != PageMapLevel::L1 {return Err("Page Map: Offset PML1 called on page map of wrong level.")}
         if physical_offset as usize % PAGE_SIZE_4KIB != 0                {return Err("Page Map: Physical offset not aligned to 4KiB boundary.")}
@@ -1127,7 +1130,7 @@ impl PageMap {
         //Return
         Ok(())
     }
-    fn map_pages_offset_pml2(&self, page_allocator: &mut dyn PageAllocator, physical_offset: *mut u8, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+    fn map_pages_offset_pml2_4kib(&self, page_allocator: &mut dyn PageAllocator, physical_offset: *mut u8, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
         //Check Parameters
         if self.map_level                            != PageMapLevel::L2 {return Err("Page Map: Offset PML2 called on page map of wrong level.")}
         if physical_offset as usize % PAGE_SIZE_4KIB != 0                {return Err("Page Map: Physical offset not aligned to 4KiB boundary.")}
@@ -1162,22 +1165,22 @@ impl PageMap {
             let pml1 = PageMap::new(entry.address, PageMapLevel::L1)?;
             //Map within PML1
             if position == start_position && position == end_position-1 {
-                pml1.map_pages_offset_pml1(physical_offset, start_size, size, write, supervisor, execute_disable)?;
+                pml1.map_pages_offset_pml1_4kib(physical_offset, start_size, size, write, supervisor, execute_disable)?;
             }
             else if position == start_position {
-                pml1.map_pages_offset_pml1(physical_offset, start_size, PAGE_SIZE_2MIB-start_size, write, supervisor, execute_disable)?;
+                pml1.map_pages_offset_pml1_4kib(physical_offset, start_size, PAGE_SIZE_2MIB-start_size, write, supervisor, execute_disable)?;
             }
             else if position == end_position-1 {
-                pml1.map_pages_offset_pml1(unsafe {physical_offset.add((position-start_position)*PAGE_SIZE_2MIB - start_size)}, 0, end_size, write, supervisor, execute_disable)?;
+                pml1.map_pages_offset_pml1_4kib(unsafe {physical_offset.add((position-start_position)*PAGE_SIZE_2MIB - start_size)}, 0, end_size, write, supervisor, execute_disable)?;
             }
             else {
-                pml1.map_pages_offset_pml1(unsafe {physical_offset.add((position-start_position)*PAGE_SIZE_2MIB - start_size)}, 0, PAGE_SIZE_2MIB, write, supervisor, execute_disable)?;
+                pml1.map_pages_offset_pml1_4kib(unsafe {physical_offset.add((position-start_position)*PAGE_SIZE_2MIB - start_size)}, 0, PAGE_SIZE_2MIB, write, supervisor, execute_disable)?;
             }
         }
         //Return
         Ok(())
     }
-    fn map_pages_offset_pml3(&self, page_allocator: &mut dyn PageAllocator, physical_offset: *mut u8, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+    fn map_pages_offset_pml3_4kib(&self, page_allocator: &mut dyn PageAllocator, physical_offset: *mut u8, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
         //Check Parameters
         if self.map_level                            != PageMapLevel::L3 {return Err("Page Map: Offset PML2 called on page map of wrong level.")}
         if physical_offset as usize % PAGE_SIZE_4KIB != 0                {return Err("Page Map: Physical offset not aligned to 4KiB boundary.")}
@@ -1212,20 +1215,29 @@ impl PageMap {
             let pml2 = PageMap::new(entry.address, PageMapLevel::L2)?;
             //Map within PML2
             if position == start_position && position == end_position-1 {
-                pml2.map_pages_offset_pml2(page_allocator, physical_offset, start_size, size, write, supervisor, execute_disable)?;
+                pml2.map_pages_offset_pml2_4kib(page_allocator, physical_offset, start_size, size, write, supervisor, execute_disable)?;
             }
             else if position == start_position {
-                pml2.map_pages_offset_pml2(page_allocator, physical_offset, start_size, PAGE_SIZE_1GIB - start_size, write, supervisor, execute_disable)?;
+                pml2.map_pages_offset_pml2_4kib(page_allocator, physical_offset, start_size, PAGE_SIZE_1GIB - start_size, write, supervisor, execute_disable)?;
             }
             else if position == end_position-1 {
-                pml2.map_pages_offset_pml2(page_allocator, unsafe {physical_offset.add((position-start_position)*PAGE_SIZE_1GIB - start_size)}, 0, end_size, write, supervisor, execute_disable)?;
+                pml2.map_pages_offset_pml2_4kib(page_allocator, unsafe {physical_offset.add((position-start_position)*PAGE_SIZE_1GIB - start_size)}, 0, end_size, write, supervisor, execute_disable)?;
             }
             else {
-                pml2.map_pages_offset_pml2(page_allocator, unsafe {physical_offset.add((position-start_position)*PAGE_SIZE_1GIB - start_size)}, 0, PAGE_SIZE_1GIB, write, supervisor, execute_disable)?;
+                pml2.map_pages_offset_pml2_4kib(page_allocator, unsafe {physical_offset.add((position-start_position)*PAGE_SIZE_1GIB - start_size)}, 0, PAGE_SIZE_1GIB, write, supervisor, execute_disable)?;
             }
         }
         //Return
         Ok(())
+    }
+    
+    fn map_pages_offset_pml2_2mib(&self, page_allocator: &mut dyn PageAllocator, physical_offset: *mut u8, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+        if self.map_level                            != PageMapLevel::L1 {return Err("Page Map: Offset PML1 called on page map of wrong level.")}
+        if physical_offset as usize % PAGE_SIZE_2MIB != 0                {return Err("Page Map: Physical offset not aligned to 2MiB boundary.")}
+        if map_offset      as usize % PAGE_SIZE_2MIB != 0                {return Err("Page Map: Map offset not aligned to 2MiB boundary.")}
+        if map_offset      +  size  > PAGE_SIZE_1GIB                     {return Err("Page Map: Map position and size requested does not fit within level 1 map boundaries.")}
+
+        Err("Unfinished.")
     }
 }
 
@@ -1397,4 +1409,88 @@ pub fn oct_to_pointer_4(pml4: usize, pml3: usize, pml2: usize, pml1: usize, offs
 
 pub fn oct4_to_pointer(pml4: usize) -> Result<*mut u8, &'static str> {
     oct_to_pointer_4(pml4, 0, 0, 0, 0)
+}
+
+
+// PCI DEVICES
+//Ports
+static mut PCI_INDEX_PORT: PortGeneric<u32, ReadWriteAccess> = PortGeneric::<u32, ReadWriteAccess>::new(0x0CF8);
+static mut PCI_DATA_PORT: PortGeneric<u32, ReadWriteAccess> = PortGeneric::<u32, ReadWriteAccess>::new(0x0CFC);
+
+pub struct Pci {
+    bus: u32,
+    device: u32,
+    function: u32,
+}
+impl Pci {
+    unsafe fn global_register(bus: u32, device: u32, function: u32, register: u32) -> Result<u32, &'static str> {
+        //Bounds checking
+        if bus      > 0xFF {return Err("PCI Register: Bus out of bounds.")}
+        if device   > 0x1F {return Err("PCI Register: Device out of bounds.")}
+        if function > 0x07 {return Err("PCI Register: Function out of bounds.")}
+        if register > 0x3F {return Err("PCI Register: Register out of bounds.")}
+        //Read register
+        PCI_INDEX_PORT.write((1<<31)|(bus<<16)|(device<<11)|(function<<8)|(register<<2));
+        Ok(PCI_DATA_PORT.read())
+    }
+
+    pub unsafe fn register(&self, register: u32) -> Result<u32, &'static str> {
+        Pci::global_register(self.bus, self.device, self.function, register)
+    }
+
+    //Constructor
+    pub unsafe fn new(bus: u32, device: u32, function: u32) -> Result<Self, &'static str> {
+        //Bounds checking
+        if bus      > 0xFF {return Err("PCI Device: Bus index out of bounds.")}
+        if device   > 0x1F {return Err("PCI Device: Device index out of bounds.")}
+        if function > 0x07 {return Err("PCI Device: Function index out of bounds.")}
+        //Check function exists
+        if (Pci::global_register(bus, device, function, 0x00)? & 0x0000FFFF) == 0xFFFF {return Err("PCI Device: No device found.")}
+        //Return self
+        Ok(Self {bus, device, function})
+    }
+    
+    //Read Header
+    pub unsafe fn vendor_id  (&self) -> u32 {(self.register(0x00).unwrap() & 0x0000FFFF) >> 0x00}
+    pub unsafe fn device_id  (&self) -> u32 {(self.register(0x00).unwrap() & 0xFFFF0000) >> 0x10}
+    pub unsafe fn status     (&self) -> u32 {(self.register(0x01).unwrap() & 0xFFFF0000) >> 0x10}
+    pub unsafe fn revision_id(&self) -> u32 {(self.register(0x02).unwrap() & 0x000000FF) >> 0x00}
+    pub unsafe fn prog_if    (&self) -> u32 {(self.register(0x02).unwrap() & 0x0000FF00) >> 0x08}
+    pub unsafe fn subclass   (&self) -> u32 {(self.register(0x02).unwrap() & 0x00FF0000) >> 0x10}
+    pub unsafe fn class_code (&self) -> u32 {(self.register(0x02).unwrap() & 0xFF000000) >> 0x18}
+    pub unsafe fn chache_lz  (&self) -> u32 {(self.register(0x03).unwrap() & 0x000000FF) >> 0x00}
+    pub unsafe fn latency    (&self) -> u32 {(self.register(0x03).unwrap() & 0x0000FF00) >> 0x08}
+    pub unsafe fn header_type(&self) -> u32 {(self.register(0x03).unwrap() & 0x007F0000) >> 0x10}
+    pub unsafe fn bist       (&self) -> u32 {(self.register(0x03).unwrap() & 0xFF000000) >> 0x18}
+}
+
+//UHCI Endpoint
+pub struct PciUhci {
+    pub pci:            Pci,
+    pub command:    PortGeneric<u16, ReadWriteAccess>,
+    pub status:     PortGeneric<u16, ReadWriteAccess>,
+    pub interrupt:  PortGeneric<u16, ReadWriteAccess>,
+    pub frame_num:  PortGeneric<u16, ReadWriteAccess>,
+    pub frame_base: PortGeneric<u32, ReadWriteAccess>,
+    pub frame_mod:  PortGeneric<u8,  ReadWriteAccess>,
+    pub sc_1:       PortGeneric<u16, ReadWriteAccess>,
+    pub sc_2:       PortGeneric<u16, ReadWriteAccess>
+}
+impl PciUhci {
+    pub unsafe fn new(pci: Pci) -> Result<Self, &'static str> {
+        if !(pci.class_code() == 0x0C && pci.subclass() == 0x03 && pci.prog_if() == 0x00) {return Err("PCI UHCI: Device is not UHCI.")};
+        let reg = pci.register(0x08)?;
+        let baseport = if reg > 0xFFFF {return Err("PCI UHCI: Base port out of bounds.")} else {reg as u16};
+        Ok(Self {
+            pci,
+            command:    PortGeneric::<u16, ReadWriteAccess>::new(baseport + 0x00),
+            status:     PortGeneric::<u16, ReadWriteAccess>::new(baseport + 0x02),
+            interrupt:  PortGeneric::<u16, ReadWriteAccess>::new(baseport + 0x04),
+            frame_num:  PortGeneric::<u16, ReadWriteAccess>::new(baseport + 0x06),
+            frame_base: PortGeneric::<u32, ReadWriteAccess>::new(baseport + 0x08),
+            frame_mod:  PortGeneric::<u8,  ReadWriteAccess>::new(baseport + 0x0C),
+            sc_1:       PortGeneric::<u16, ReadWriteAccess>::new(baseport + 0x10),
+            sc_2:       PortGeneric::<u16, ReadWriteAccess>::new(baseport + 0x12),
+        })
+    }
 }
