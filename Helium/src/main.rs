@@ -15,17 +15,19 @@
 #![no_main]
 #![allow(unused_must_use)]
 #![feature(asm)]
+#![feature(panic_info_message)]
 #![feature(start)]
 
 //Imports
 use photon::*;
 use gluon::*;
-use core::{fmt::Write, ptr::write_volatile};
+use x86_64::registers::control::Cr3;
+use core::{fmt::Write, ptr::{read_volatile, write_volatile}, slice::from_raw_parts_mut};
 #[cfg(not(test))]
 use core::panic::PanicInfo;
 
 //Constants
-const HELIUM_VERSION: &str = "vDEV-2021-09-05"; //CURRENT VERSION OF KERNEL
+const HELIUM_VERSION: &str = "vDEV-2021-09-06"; //CURRENT VERSION OF KERNEL
 static WHITESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
 static _BLACKSPACE: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
 static _BLUESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE,  background: COLOR_BGRX_BLACK};
@@ -59,53 +61,8 @@ pub extern "sysv64" fn _start() -> ! {
     writeln!(printer, "Photon Graphics Library {}", PHOTON_VERSION);
     writeln!(printer, "Gluon Memory Library    {}", GLUON_VERSION);
 
-    // PAGE MAP TESTING
-    //Go to PML4
-    let pml4 = PageMap::new(oct_to_pointer_4(PAGE_MAP_OCT, PAGE_MAP_OCT, PAGE_MAP_OCT, PAGE_MAP_OCT, 0).unwrap(), PageMapLevel::L4).unwrap();
-    //Print info
-    writeln!(printer, "Identity Map Area Present: {}", pml4.read_entry(PHYSICAL_OCT).unwrap().present);
-    writeln!(printer, "Kernel Map Area Present:   {}", pml4.read_entry(KERNEL_OCT      ).unwrap().present);
-    writeln!(printer, "Frame Buffer Area Present: {}", pml4.read_entry(FRAME_BUFFER_OCT).unwrap().present);
-    writeln!(printer, "Free Memory Area Present:  {}", pml4.read_entry(FREE_MEMORY_OCT ).unwrap().present);
-    writeln!(printer, "Page Map Area Present:     {}", pml4.read_entry(PAGE_MAP_OCT    ).unwrap().present);
-
-    // PAGE MAP PARSING
-    //Determine amount of free memory
-    let mut identity_not_present = pml4.read_entry(PHYSICAL_OCT).unwrap();
-    identity_not_present.present = false;
-    pml4.write_entry(PHYSICAL_OCT, identity_not_present).unwrap();
-    let pml3_free = PageMap::new(oct_to_pointer_4(PAGE_MAP_OCT, PAGE_MAP_OCT, PAGE_MAP_OCT, FREE_MEMORY_OCT, 0).unwrap(), PageMapLevel::L3).unwrap();
-    let mut free_page_count: usize = 0;
-    for i in 0..PAGE_NUMBER_1 {
-        if pml3_free.read_entry(i).unwrap().present {
-            let pml2 = PageMap::new(oct_to_pointer_4(PAGE_MAP_OCT, PAGE_MAP_OCT, FREE_MEMORY_OCT, i, 0).unwrap(), PageMapLevel::L2).unwrap();
-            for j in 0..PAGE_NUMBER_1 {
-                if pml2.read_entry(j).unwrap().present {
-                    let pml1 = PageMap::new(oct_to_pointer_4(PAGE_MAP_OCT, FREE_MEMORY_OCT, i, j, 0).unwrap(), PageMapLevel::L1).unwrap();
-                    for k in 0..PAGE_NUMBER_1 {
-                        let pml1e = pml1.read_entry(k).unwrap();
-                        if pml1e.present {
-                            //Write bools for memory table
-                            unsafe {write_volatile((oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut bool).add(free_page_count), true)}
-                            free_page_count += 1;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    writeln!(printer, "Free memory found: {}Pg or {}MiB {}KiB", free_page_count, (free_page_count*PAGE_SIZE_4KIB)/MIB, ((free_page_count*PAGE_SIZE_4KIB) % MIB)/KIB);
-    //"Allocate" memory space for boolean table
-    for i in 0..(free_page_count+PAGE_SIZE_4KIB-1)/PAGE_SIZE_4KIB {
-        unsafe {write_volatile((oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut bool).add(i), false)}
-    }
-    //Create free memory area allocator
-    let mut free_memory_area_allocator = FreeMemoryAreaAllocator{bool_table: unsafe {core::slice::from_raw_parts_mut(oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut bool, free_page_count)}};
-    let free_memory_test = free_memory_area_allocator.allocate().unwrap();
-    writeln!(printer, "Free Memory Area Allocation Test: {:?}", free_memory_test);
-    writeln!(printer, "Free Memory Deallocation Test:    {:?}", free_memory_area_allocator.deallocate(free_memory_test));
-
     // REGISTER TESTING
+    writeln!(printer, "\n=== REGISTER TEST ===\n");
     let mut cr3: u64;
     let mut rip: u64;
     unsafe {
@@ -115,22 +72,76 @@ pub extern "sysv64" fn _start() -> ! {
     writeln!(printer, "CR3: 0x{:16X}", cr3);
     writeln!(printer, "RIP: 0x{:16X}", rip);
 
+    // PAGE MAP PARSING
+    writeln!(printer, "\n=== PAGE MAP ===\n");
+    //Create "allocator" for address translation
+    let none_alloc = NoneAllocator{identity_offset: oct4_to_usize(IDENTITY_OCT).unwrap()};
+    //Go to PML4
+    let pml4_physical = PhysicalAddress(Cr3::read().0.start_address().as_u64() as usize);
+    let pml4 = PageMap::new(pml4_physical, PageMapLevel::L4, &none_alloc).unwrap();
+    //Print info
+    writeln!(printer, "Physical Memory Area Present: {}", pml4.read_entry(PHYSICAL_OCT    ).unwrap().present);
+    writeln!(printer, "Kernel Area Present:          {}", pml4.read_entry(KERNEL_OCT      ).unwrap().present);
+    writeln!(printer, "Programs Area Present:        {}", pml4.read_entry(PROGRAMS_OCT    ).unwrap().present);
+    writeln!(printer, "Frame Buffer Area Present:    {}", pml4.read_entry(FRAME_BUFFER_OCT).unwrap().present);
+    writeln!(printer, "Free Memory Area Present:     {}", pml4.read_entry(FREE_MEMORY_OCT ).unwrap().present);
+    writeln!(printer, "Offset Identity Area Present: {}", pml4.read_entry(IDENTITY_OCT    ).unwrap().present);
+    writeln!(printer, "Page Map Area Present:        {}", pml4.read_entry(PAGE_MAP_OCT    ).unwrap().present);
+    //Remove physical memory area
+    {
+        let mut identity_not_present = pml4.read_entry(PHYSICAL_OCT).unwrap();
+        identity_not_present.present = false;
+        pml4.write_entry(PHYSICAL_OCT, identity_not_present).unwrap();
+    }
+    //Determine amount of free memory
+    let mut free_page_count: usize = 0;
+    {
+        let pml3_free = PageMap::new(pml4.read_entry(FREE_MEMORY_OCT).unwrap().physical, PageMapLevel::L3, &none_alloc).unwrap();
+        for i in 0..PAGE_NUMBER_1 {
+            let pml3_free_entry = pml3_free.read_entry(i).unwrap();
+            if pml3_free_entry.present {
+                let pml2 = PageMap::new(pml3_free_entry.physical, PageMapLevel::L2, &none_alloc).unwrap();
+                for j in 0..PAGE_NUMBER_1 {
+                    let pml2_entry = pml2.read_entry(j).unwrap();
+                    if pml2_entry.present {
+                        let pml1 = PageMap::new(pml2_entry.physical, PageMapLevel::L1, &none_alloc).unwrap();
+                        for k in 0..PAGE_NUMBER_1 {
+                            let pml1e = pml1.read_entry(k).unwrap();
+                            if pml1e.present {
+                                //Write bools for memory table
+                                unsafe {write_volatile((oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut UsableMemoryEntry).add(free_page_count), UsableMemoryEntry {address: pml1e.physical, present: true})}
+                                free_page_count += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    writeln!(printer, "Free memory found: {}Pg or {}MiB {}KiB", free_page_count, (free_page_count*PAGE_SIZE_4KIB)/MIB, ((free_page_count*PAGE_SIZE_4KIB) % MIB)/KIB);
+    //"Allocate" memory space for table
+    let usable_table = unsafe {from_raw_parts_mut(oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut UsableMemoryEntry, free_page_count)};
+    for i in 0..(free_page_count+PAGE_SIZE_4KIB-1)/PAGE_SIZE_4KIB {
+        let entry = usable_table[i];
+        usable_table[i] = UsableMemoryEntry{address: entry.address, present: false}
+    }
+    //Create free memory area allocator
+    let free_memory_area_allocator = UsableMemoryPageAllocator{table: oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut UsableMemoryEntry, len: usable_table.len(), identity_offset: oct4_to_usize(IDENTITY_OCT).unwrap()};
+    {
+        let free_memory_test = free_memory_area_allocator.allocate_page().unwrap();
+        writeln!(printer, "Free Memory Area Allocation Test: {:?}", free_memory_test);
+        writeln!(printer, "Free Memory Deallocation Test:    {:?}", free_memory_area_allocator.deallocate_page(free_memory_test));
+    }
+
     // PCI TESTING
+    writeln!(printer, "\n=== PCI BUS ===\n");
     let mut pci_uhci_option = None;
     unsafe {for pci_bus in 0..256 {
         for pci_device in 0..32 {
             for pci_function in 0..8 {
-                //Get the vendor ID here and check for if the pci device exists (vendor id == 0xFFFF means it does not)
-                let pci = match Pci::new(pci_bus, pci_device, pci_function) {
-                    Ok(pci) => pci,
-                    Err(_) => break,
-                };
+                let pci = match Pci::new(pci_bus, pci_device, pci_function) {Ok(pci) => pci, Err(_) => break};
                 write!(printer, "PCI DEVICE:");
                 write!(printer, "  Bus: {:02X}, Device: {:02X}, Function: {:01X}", pci_bus, pci_device, pci_function);
-                //writeln!(printer, "  Reg0: {:08X}", pci.register(0x00).unwrap());
-                //writeln!(printer, "  Reg1: {:08X}", pci.register(0x01).unwrap());
-                //writeln!(printer, "  Reg2: {:08X}", pci.register(0x02).unwrap());
-                //writeln!(printer, "  Reg3: {:08X}", pci.register(0x03).unwrap());
                 writeln!(printer, "  |  Vendor ID: {:04X}, Device ID: {:04X}, Status: {:04X}", pci.vendor_id(), pci.device_id(), pci.status());
                 //writeln!(printer, "  Revision ID:   {:02X}, Prog IF:       {:02X}, Subclass:      {:02X}, Class Code:    {:02X}", pci.revision_id(), pci.prog_if(), pci.subclass(), pci.class_code());
                 //writeln!(printer, "  Cache LSZ:     {:02X}, Latency Tmr:   {:02X}, Header Type:   {:02X}, BIST:          {:02X}", pci.chache_lz(), pci.latency(), pci.header_type(), pci.bist());
@@ -141,7 +152,7 @@ pub extern "sysv64" fn _start() -> ! {
 
     // USB TESTING
     unsafe {if let Some(mut pci_uhci) = pci_uhci_option {
-        writeln!(printer, "UHCI USB Controller Found");
+        writeln!(printer, "\n=== UHCI USB === \n");
         for i in 0..0x0F {
             writeln!(printer, "PCI Register {:02X}: {:08X}", i, pci_uhci.pci.register(i).unwrap());
         }
@@ -155,10 +166,28 @@ pub extern "sysv64" fn _start() -> ! {
         writeln!(printer, "Status/Control Port 2:   {:04X}", pci_uhci.sc_2.read());
     }}
 
+    // PS/2 KEYBOARD TESTING
+    writeln!(printer, "\n=== PS/2 BUS===\n");
+    let ps2_controller = Ps2Controller{};
+    unsafe {
+        ps2_controller.disable_port_1();
+        ps2_controller.disable_port_2();
+        let a1 = ps2_controller.read_memory(0x0000).unwrap();
+        ps2_controller.write_memory(0, a1 & 0b1011_1100);
+        if ps2_controller.test_controller() {
+            writeln!(printer, "PS/2 Controller test succeeded.");
+            let port_1 = ps2_controller.test_port_1();
+            let port_2 = ps2_controller.test_port_2();
+            if port_1 || port_2 {
+
+            }
+            else {writeln!(printer, "PS/2 Port tests failed.");}
+        }
+        else {writeln!(printer, "PS/2 Controller test failed.");}
+    }
+
     // HALT COMPUTER
-    writeln!(printer, "Halt reached.");
-    unsafe {asm!("HLT");}
-    panic!("Kernel exited.")
+    panic!("\n=== IT IS NOW SAFE TO SHUT OFF YOUR COMPUTER ===")
 }
 
 
@@ -172,7 +201,15 @@ static mut PANIC_WRITE_POINTER: Option<*mut dyn Write> = None;
 fn panic_handler(panic_info: &PanicInfo) -> ! {
     unsafe {
         let printer = &mut *PANIC_WRITE_POINTER.unwrap();
-        writeln!(printer, "{}", panic_info);
+        write!(printer, "\nKernel Halt: ");
+        if let Some(panic_message) = panic_info.message() {
+            writeln!(printer, "{}", panic_message);
+        }
+        if let Some(panic_location) = panic_info.location() {
+            writeln!(printer, "File:   {}", panic_location.file());
+            writeln!(printer, "Line:   {}", panic_location.line());
+            writeln!(printer, "Column: {}", panic_location.column());
+        }
         asm!("HLT");
         loop {}
     }
@@ -180,17 +217,63 @@ fn panic_handler(panic_info: &PanicInfo) -> ! {
 
 
 // MEMORY MANAGEMENT
-struct FreeMemoryAreaAllocator<'s> {
-    bool_table: &'s mut [bool]
+#[derive(Clone, Copy)]
+#[derive(Debug)]
+struct UsableMemoryEntry {
+    pub address: PhysicalAddress,
+    pub present: bool,
 }
-impl<'s> FreeMemoryAreaAllocator<'s> {
-    pub fn allocate(&mut self) -> Result<usize, &'static str> {
-        for position in 0..self.bool_table.len() {
-            if self.bool_table[position] {self.bool_table[position] = false; return Ok(position)}
-        }
-        Err("Free Memory Area Allocator: Out of memory.")
+
+
+struct NoneAllocator {
+    pub identity_offset: usize
+}
+impl PageAllocator for NoneAllocator {
+    fn allocate_page     (&self)                            -> Result<PhysicalAddress, &'static str> {
+        Err("No Allocator: Allocate page called.")
     }
-    pub fn deallocate(&mut self, position: usize) -> Result<(), &'static str> {
-        if self.bool_table[position] {Err("Free Memory Area Allocator: Deallocation of unallocated page.")} else {self.bool_table[position] = true; Ok(())}
+    fn deallocate_page   (&self, physical: PhysicalAddress) -> Result<(),              &'static str> {
+        Err("No Allocator: De-allocate page called.")
+    }
+    fn physical_to_linear(&self, physical: PhysicalAddress) -> Result<LinearAddress,   &'static str> {
+        Ok(LinearAddress(physical.add(self.identity_offset).0))
+    }
+}
+
+struct UsableMemoryPageAllocator {
+    pub table: *mut UsableMemoryEntry,
+    pub len: usize,
+    pub identity_offset: usize,
+}
+impl PageAllocator for UsableMemoryPageAllocator {
+    fn allocate_page     (&self)                            -> Result<PhysicalAddress, &'static str> {
+        for i in 0..self.len {
+            let entry = unsafe {&mut *(self.table.add(i))};
+            if entry.present {
+                entry.present = false;
+                return Ok(entry.address)
+            }
+        }
+        Err("Usable Memory Page Allocator: Out of memory.")
+    }
+
+    fn deallocate_page   (&self, physical: PhysicalAddress) -> Result<(),              &'static str> {
+        for i in 0..self.len {
+            let entry = unsafe {&mut *(self.table.add(i))};
+            if entry.address.0 == physical.0 {
+                if !entry.present {
+                    entry.present = true;
+                    return Ok(())
+                }
+                else {
+                    return Err("Usable Memory Page Allocator: Address to deallocate not allocated.")
+                }
+            }
+        }
+        Err("Usable Memory Page Allocator: Address to deallocate not found.")
+    }
+
+    fn physical_to_linear(&self, physical: PhysicalAddress) -> Result<LinearAddress,   &'static str> {
+        Ok(LinearAddress(physical.add(self.identity_offset).0))
     }
 }
