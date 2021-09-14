@@ -24,7 +24,8 @@ extern crate alloc;
 //Imports
 use photon::*;
 use gluon::*;
-use gluon::header::*;
+use gluon::elf::*;
+use gluon::mem::*;
 use core::cell::Cell;
 use core::cell::RefCell;
 use core::fmt::Write;
@@ -50,7 +51,7 @@ use uefi::table::runtime::ResetType;
 use x86_64::registers::control::*;
 
 //Constants
-const HYDROGEN_VERSION: & str = "vDEV-2021-09-06"; //CURRENT VERSION OF BOOTLOADER
+const HYDROGEN_VERSION: & str = "vDEV-2021-09-14"; //CURRENT VERSION OF BOOTLOADER
 
 
 // MAIN
@@ -301,9 +302,9 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                 write_volatile(zone_location.add(i), 0x00);
             }
         }
-        let mut zone_page_allocator = ZonePageAllocator::new(zone_location, required_page_count).unwrap();
+        let zone_page_allocator = ZonePageAllocator::new(zone_location, required_page_count).unwrap();
         //Build page map
-        let pml3_free_memory = PageMap::new(zone_page_allocator.allocate_page().unwrap(), PageMapLevel::L3, &mut zone_page_allocator).unwrap();
+        let pml3_free_memory = PageMap::new(zone_page_allocator.allocate_page().unwrap(), PageMapLevel::L3, &zone_page_allocator).unwrap();
         let mut buffer = [0u8; 0x4000];
         let (_k, description_iterator) = match boot_services.memory_map(&mut buffer) {
             Ok(value) => value.unwrap(),

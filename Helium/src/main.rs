@@ -21,13 +21,16 @@
 //Imports
 use photon::*;
 use gluon::*;
+use gluon::mem::*;
+use gluon::pci::*;
+use gluon::ps2::*;
 use x86_64::registers::control::Cr3;
 use core::{fmt::Write, ptr::{read_volatile, write_volatile}, slice::from_raw_parts_mut};
 #[cfg(not(test))]
 use core::panic::PanicInfo;
 
 //Constants
-const HELIUM_VERSION: &str = "vDEV-2021-09-06"; //CURRENT VERSION OF KERNEL
+const HELIUM_VERSION: &str = "vDEV-2021-09-14"; //CURRENT VERSION OF KERNEL
 static WHITESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
 static _BLACKSPACE: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
 static _BLUESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE,  background: COLOR_BGRX_BLACK};
@@ -131,6 +134,10 @@ pub extern "sysv64" fn _start() -> ! {
         let free_memory_test = free_memory_area_allocator.allocate_page().unwrap();
         writeln!(printer, "Free Memory Area Allocation Test: {:?}", free_memory_test);
         writeln!(printer, "Free Memory Deallocation Test:    {:?}", free_memory_area_allocator.deallocate_page(free_memory_test));
+        for i in 0..30 {
+            let entry = usable_table[i];
+            writeln!(printer, "{:2}: {}", i, entry.present);
+        }
     }
 
     // PCI TESTING
@@ -139,13 +146,13 @@ pub extern "sysv64" fn _start() -> ! {
     unsafe {for pci_bus in 0..256 {
         for pci_device in 0..32 {
             for pci_function in 0..8 {
-                let pci = match Pci::new(pci_bus, pci_device, pci_function) {Ok(pci) => pci, Err(_) => break};
+                let pci_endpoint = match PciEndpoint::new(pci_bus, pci_device, pci_function) {Ok(pci) => pci, Err(_) => break};
                 write!(printer, "PCI DEVICE:");
                 write!(printer, "  Bus: {:02X}, Device: {:02X}, Function: {:01X}", pci_bus, pci_device, pci_function);
-                writeln!(printer, "  |  Vendor ID: {:04X}, Device ID: {:04X}, Status: {:04X}", pci.vendor_id(), pci.device_id(), pci.status());
+                writeln!(printer, "  |  Vendor ID: {:04X}, Device ID: {:04X}, Status: {:04X}", pci_endpoint.vendor_id(), pci_endpoint.device_id(), pci_endpoint.status());
                 //writeln!(printer, "  Revision ID:   {:02X}, Prog IF:       {:02X}, Subclass:      {:02X}, Class Code:    {:02X}", pci.revision_id(), pci.prog_if(), pci.subclass(), pci.class_code());
                 //writeln!(printer, "  Cache LSZ:     {:02X}, Latency Tmr:   {:02X}, Header Type:   {:02X}, BIST:          {:02X}", pci.chache_lz(), pci.latency(), pci.header_type(), pci.bist());
-                if let Ok(o) = PciUhci::new(pci) {pci_uhci_option = Some(o)};
+                if let Ok(o) = PciUhci::new(pci_endpoint) {pci_uhci_option = Some(o)};
             }
         }
     }}
