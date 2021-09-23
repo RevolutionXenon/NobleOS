@@ -26,8 +26,10 @@ use photon::*;
 use gluon::*;
 use gluon::elf::*;
 use gluon::mem::*;
+use x86_64::structures::gdt::GlobalDescriptorTable;
 use core::cell::Cell;
 use core::cell::RefCell;
+use core::convert::TryInto;
 use core::fmt::Write;
 #[cfg(not(test))]
 use core::panic::PanicInfo;
@@ -693,27 +695,36 @@ fn command_crread(printer: &mut dyn Write, args: &mut Split<&str>) {
     let mut cr3:  bool = false;
     let mut cr4:  bool = false;
     let mut efer: bool = false;
+    let mut gdtr: bool = false;
     //Processing
     for arg in args {
         if arg.starts_with('-') { match arg {
-            arg if arg.eq_ignore_ascii_case("-all")  => {if cr0||cr2||cr3||cr4||efer {writeln!(printer, "Flag usage not valid.\n{}", HELP_CRREAD); return;} else {cr0 = true; cr2 = true; cr3 = true; cr4 = true; efer = true;}},
-            arg if arg.eq_ignore_ascii_case("-cr0")  => {if cr0                      {writeln!(printer, "Flag usage not valid.\n{}", HELP_CRREAD); return;} else {cr0 = true}},
-            arg if arg.eq_ignore_ascii_case("-cr2")  => {if cr2                      {writeln!(printer, "Flag usage not valid.\n{}", HELP_CRREAD); return;} else {cr2 = true}},
-            arg if arg.eq_ignore_ascii_case("-cr3")  => {if cr3                      {writeln!(printer, "Flag usage not valid.\n{}", HELP_CRREAD); return;} else {cr3 = true}},
-            arg if arg.eq_ignore_ascii_case("-cr4")  => {if cr4                      {writeln!(printer, "Flag usage not valid.\n{}", HELP_CRREAD); return;} else {cr4 = true}},
-            arg if arg.eq_ignore_ascii_case("-efer") => {if efer                     {writeln!(printer, "Flag usage not valid.\n{}", HELP_CRREAD); return;} else {efer = true}},
+            arg if arg.eq_ignore_ascii_case("-all")  => {if cr0||cr2||cr3||cr4||efer||gdtr {writeln!(printer, "Flag usage not valid.\n{}", HELP_CRREAD); return;} else {cr0 = true; cr2 = true; cr3 = true; cr4 = true; efer = true; gdtr = true;}},
+            arg if arg.eq_ignore_ascii_case("-cr0")  => {if cr0                            {writeln!(printer, "Flag usage not valid.\n{}", HELP_CRREAD); return;} else {cr0 = true}},
+            arg if arg.eq_ignore_ascii_case("-cr2")  => {if cr2                            {writeln!(printer, "Flag usage not valid.\n{}", HELP_CRREAD); return;} else {cr2 = true}},
+            arg if arg.eq_ignore_ascii_case("-cr3")  => {if cr3                            {writeln!(printer, "Flag usage not valid.\n{}", HELP_CRREAD); return;} else {cr3 = true}},
+            arg if arg.eq_ignore_ascii_case("-cr4")  => {if cr4                            {writeln!(printer, "Flag usage not valid.\n{}", HELP_CRREAD); return;} else {cr4 = true}},
+            arg if arg.eq_ignore_ascii_case("-efer") => {if efer                           {writeln!(printer, "Flag usage not valid.\n{}", HELP_CRREAD); return;} else {efer = true}},
+            arg if arg.eq_ignore_ascii_case("-gdtr") => {if gdtr                           {writeln!(printer, "Flag usage not valid.\n{}", HELP_CRREAD); return;} else {gdtr = true}},
             _ => {writeln!(printer, "Invalid flag: {}.\n{}",     arg, HELP_CRREAD); return;}
         }}
         else     {writeln!(printer, "Invalid argument: {}.\n{}", arg, HELP_CRREAD); return;}
     }
     //Check validity
-    if !(cr0||cr2||cr3||cr4||efer) {writeln!(printer, "{}", HELP_CRREAD); return;}
+    if !(cr0||cr2||cr3||cr4||efer||gdtr) {writeln!(printer, "{}", HELP_CRREAD); return;}
     //Control Register Display
     if cr0  {writeln!(printer, "Control Register 0:\n  Flags:   0x{:016X}", Cr0::read().bits());}
     if cr2  {writeln!(printer, "Control Register 2:\n  Address: 0x{:016X}", Cr2::read().as_u64());}
     if cr3  {writeln!(printer, "Control Register 3:\n  Flags:   0b{:016X}\n  Address: 0x{:016X}", Cr3::read().1.bits(), Cr3::read().0.start_address());}
     if cr4  {writeln!(printer, "Control Register 4:\n  Flags:   0x{:016X}", Cr4::read().bits());}
     if efer {writeln!(printer, "Extended Feature Enable Register:\n  Flags:   0x{:016X}", Efer::read().bits());}
+    if gdtr {
+        let gdt = [0u8; 10];
+        unsafe {asm!("SGDT [{}]", in(reg) &gdt, options(nostack));}
+        let gdta = u64::from_le_bytes(gdt[2..10].try_into().unwrap());
+        let gdtl = u16::from_le_bytes(gdt[0..2].try_into().unwrap());
+        writeln!(printer, "Global Descriptor Table Register:\n  Address: 0x{:016X}\n  Limit:   0x{:04X}", gdta, gdtl);
+    }
 }
 
 

@@ -15,9 +15,12 @@
 #![allow(clippy::missing_safety_doc)]
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::type_complexity)]
+#![feature(arbitrary_enum_discriminant)]
+#![feature(asm)]
 
 //Imports
 pub mod elf;
+pub mod idt;
 pub mod mem;
 pub mod pci;
 pub mod ps2;

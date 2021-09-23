@@ -16,6 +16,7 @@ pub trait PageAllocator {
 }
 
 //Physical Address
+#[repr(transparent)]
 #[derive(Clone, Copy)]
 #[derive(Debug)]
 pub struct PhysicalAddress(pub usize);
@@ -26,6 +27,7 @@ impl PhysicalAddress {
 }
 
 //Linear Address
+#[repr(transparent)]
 #[derive(Clone, Copy)]
 #[derive(Debug)]
 pub struct LinearAddress(pub usize);

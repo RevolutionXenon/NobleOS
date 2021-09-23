@@ -18,13 +18,17 @@
 #![feature(panic_info_message)]
 #![feature(start)]
 
+use gluon::idt::GlobalDescriptorTable;
+use gluon::idt::GlobalDescriptorTableEntry;
 //Imports
 use photon::*;
 use gluon::*;
 use gluon::mem::*;
 use gluon::pci::*;
 use gluon::ps2::*;
+use gluon::idt::*;
 use x86_64::registers::control::Cr3;
+use core::convert::TryInto;
 use core::{fmt::Write, ptr::{read_volatile, write_volatile}, slice::from_raw_parts_mut};
 #[cfg(not(test))]
 use core::panic::PanicInfo;
@@ -34,7 +38,7 @@ const HELIUM_VERSION: &str = "vDEV-2021-09-14"; //CURRENT VERSION OF KERNEL
 static WHITESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
 static _BLACKSPACE: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
 static _BLUESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE,  background: COLOR_BGRX_BLACK};
-static REDSPACE:    CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_RED, background: COLOR_BGRX_BLACK};
+static REDSPACE:    CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_RED,   background: COLOR_BGRX_BLACK};
 
 
 // MAIN
@@ -134,10 +138,10 @@ pub extern "sysv64" fn _start() -> ! {
         let free_memory_test = free_memory_area_allocator.allocate_page().unwrap();
         writeln!(printer, "Free Memory Area Allocation Test: {:?}", free_memory_test);
         writeln!(printer, "Free Memory Deallocation Test:    {:?}", free_memory_area_allocator.deallocate_page(free_memory_test));
-        for i in 0..30 {
+        /*for i in 0..30 {
             let entry = usable_table[i];
             writeln!(printer, "{:2}: {}", i, entry.present);
-        }
+        }*/
     }
 
     // PCI TESTING
@@ -173,9 +177,46 @@ pub extern "sysv64" fn _start() -> ! {
         writeln!(printer, "Status/Control Port 2:   {:04X}", pci_uhci.sc_2.read());
     }}
 
+    // GDT SETUP
+    writeln!(printer, "\n=== GDT ===\n");
+    {
+        let gdt = GlobalDescriptorTable{address: free_memory_area_allocator.physical_to_linear(free_memory_area_allocator.allocate_page().unwrap()).unwrap(), limit: 2};
+        writeln!(printer, "GDT Linear Address: 0x{:016X}", gdt.address.0);
+        //CODE ENTRY
+        let gdte1 = GlobalDescriptorTableEntry {
+            limit: 0xFFFFF,
+            base: 0,
+            granularity: Granularity::PageLevel,
+            instruction_mode: InstructionMode::I64,
+            present: true,
+            privilege_level: PrivilegeLevel::Supervisor,
+            segment_type: SegmentType::User,
+            segment_spec: Executable::Code(Conforming::LessPrivilege, Readable::ExecuteRead),
+            accessed: false,
+        };
+        gdt.write_entry(gdte1, 1).unwrap();
+        //DATA ENTRY
+        let gdte2 = GlobalDescriptorTableEntry {
+            limit: 0xFFFFF,
+            base: 0,
+            granularity: Granularity::PageLevel,
+            instruction_mode: InstructionMode::I64,
+            present: true,
+            privilege_level: PrivilegeLevel::Supervisor,
+            segment_type: SegmentType::User,
+            segment_spec: Executable::Data(Direction::Upwards, Writeable::ReadWrite),
+            accessed: false,
+        };
+        gdt.write_entry(gdte2, 2).unwrap();
+        //Finalize
+        unsafe {gdt.write_gdtr();}
+    }
+
     // PS/2 KEYBOARD TESTING
-    writeln!(printer, "\n=== PS/2 BUS===\n");
+    writeln!(printer, "\n=== PS/2 BUS ===\n");
     let ps2_controller = Ps2Controller{};
+    let mut ps2_port1_present: bool = false;
+    let mut ps2_port2_present: bool = false;
     unsafe {
         ps2_controller.disable_port_1();
         ps2_controller.disable_port_2();
@@ -183,15 +224,72 @@ pub extern "sysv64" fn _start() -> ! {
         ps2_controller.write_memory(0, a1 & 0b1011_1100);
         if ps2_controller.test_controller() {
             writeln!(printer, "PS/2 Controller test succeeded.");
-            let port_1 = ps2_controller.test_port_1();
-            let port_2 = ps2_controller.test_port_2();
-            if port_1 || port_2 {
-
+            ps2_port1_present = ps2_controller.test_port_1();
+            ps2_port2_present = ps2_controller.test_port_2();
+            if ps2_port1_present || ps2_port2_present {
+                writeln!(printer, "PS/2 Port tests succeeded:");
+                writeln!(printer, "PS/2 Port 1: {}", ps2_port1_present);
+                writeln!(printer, "PS/2 Port 2: {}", ps2_port2_present);
             }
             else {writeln!(printer, "PS/2 Port tests failed.");}
         }
         else {writeln!(printer, "PS/2 Controller test failed.");}
     }
+
+    // IDT SETUP
+    writeln!(printer, "\n=== INTERRUPT DESCRIPTOR TABLE ===\n");
+    //IDT
+    let idt = InterruptDescriptorTable {address: free_memory_area_allocator.physical_to_linear(free_memory_area_allocator.allocate_page().unwrap()).unwrap(), limit: 255};
+    writeln!(printer, "");
+    {
+        //Exception functions
+        fn exception_divide_error()       {panic!("Interrupt Vector 0x00 (#DE): Divide Error")}
+        fn exception_debug()              {panic!("Interrupt Vector 0x01 (#DB): Debug Exception")}
+        fn exception_breakpoint()         {panic!("Interrupt Vector 0x03 (#BP): Breakpoint")}
+        fn exception_overflow()           {panic!("Interrupt Vector 0x04 (#OF): Overflow")}
+        fn exception_bound_range()        {panic!("Interrupt Vector 0x05 (#BR): Bound Range Exceeded")}
+        fn exception_invalid_opcode()     {panic!("Interrupt Vector 0x06 (#UD): Invalid Opcode")}
+        fn exception_no_fpu()             {panic!("Interrupt Vector 0x07 (#NM): No Floating Point Unit")}
+        fn exception_double()             {panic!("Interrupt Vector 0x08 (#DF): Double Fault")}
+        fn exception_invalid_tss()        {panic!("Interrupt Vector 0x0A (#TS): Invalid Task State Segment")}
+        fn exception_not_present()        {panic!("Interrupt Vector 0x0B (#NP): Segment Not Present")}
+        fn exception_stack_segment()      {panic!("Interrupt Vector 0x0C (#SS): Stack Segment Fault")}
+        fn exception_general_protection() {panic!("Interrupt Vector 0x0D (#GP): General Protection Error")}
+        fn exception_page_fault()         {panic!("Interrupt Vector 0x0E (#PF): Page Fault")}
+        fn exception_fpu_error()          {panic!("Interrupt Vector 0x10 (#MF): Floating Point Math Fault")}
+        fn exception_alignment()          {panic!("Interrupt Vector 0x11 (#AC): Alignment Check")}
+        fn exception_machine()            {panic!("Interrupt Vector 0x12 (#MC): Machine Check")}
+        fn exception_simd()               {panic!("Interrupt Vector 0x13 (#XM): SIMD Floating Point Math Exception")}
+        fn exception_virtualization()     {panic!("Interrupt Vector 0x14 (#VE): Virtualization Exception")}
+        fn exception_control_protection() {panic!("Interrupt Vector 0x15 (#CP): Control Protection Exception")}
+        //Generic Entry
+        let mut idte = InterruptDescriptorTableEntry {
+            offset: 0,
+            descriptor_table_index: 1,
+            table_indicator: TableIndicator::GDT,
+            requested_privilege_level: PrivilegeLevel::Supervisor,
+            segment_present: true,
+            privilege_level: PrivilegeLevel::Supervisor,
+            interrupt_stack_table: 0,
+            descriptor_type: DescriptorType::InterruptGate,
+        };
+        //Entry 0x00
+        idte.offset = exception_divide_error as fn() as u64;
+        idt.write_entry(&idte, 0x00);
+        //Entry 0x06
+        idte.offset = exception_invalid_opcode as fn() as u64;
+        idt.write_entry(&idte, 0x06);
+        //Entry 0x0E
+        idte.offset = exception_page_fault as fn() as u64;
+        idt.write_entry(&idte, 0x0E);
+        //Test
+        unsafe {idt.write_idtr();}
+        //unsafe {asm!("ud2")} //test undefined opcode
+        unsafe {write_volatile(0x800000 as *mut u8, 0x00)}
+    }
+    
+
+
 
     // HALT COMPUTER
     panic!("\n=== IT IS NOW SAFE TO SHUT OFF YOUR COMPUTER ===")
@@ -258,6 +356,10 @@ impl PageAllocator for UsableMemoryPageAllocator {
             let entry = unsafe {&mut *(self.table.add(i))};
             if entry.present {
                 entry.present = false;
+                let linear = self.physical_to_linear(entry.address)?.0 as *mut u8;
+                for i in 0..PAGE_SIZE_4KIB {
+                    unsafe {write_volatile(linear.add(i), 0x00);}
+                }
                 return Ok(entry.address)
             }
         }
