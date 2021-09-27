@@ -4,13 +4,11 @@
 
 // HEADER
 //Imports
-use x86_64::instructions::port::*;
+use crate::*;
 
 
 // PCI DEVICES
 //Ports
-static mut PCI_INDEX_PORT: PortGeneric<u32, ReadWriteAccess> = PortGeneric::<u32, ReadWriteAccess>::new(0x0CF8);
-static mut PCI_DATA_PORT: PortGeneric<u32, ReadWriteAccess> = PortGeneric::<u32, ReadWriteAccess>::new(0x0CFC);
 
 //PCI Function Endpoint
 pub struct PciEndpoint {
@@ -26,8 +24,8 @@ impl PciEndpoint {
         if function > 0x07 {return Err("PCI Register: Function out of bounds.")}
         if register > 0x3F {return Err("PCI Register: Register out of bounds.")}
         //Read register
-        PCI_INDEX_PORT.write((1<<31)|(bus<<16)|(device<<11)|(function<<8)|(register<<2));
-        Ok(PCI_DATA_PORT.read())
+        PORT_PCI_INDEX.write((1<<31)|(bus<<16)|(device<<11)|(function<<8)|(register<<2));
+        Ok(PORT_PCI_DATA.read())
     }
 
     pub unsafe fn register(&self, register: u32) -> Result<u32, &'static str> {

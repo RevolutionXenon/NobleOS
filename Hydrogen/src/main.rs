@@ -208,10 +208,13 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     // COMMAND LINE
     writeln!(printer, "\n=== COMMAND LINE READY ===");
     //Enter Read-Evaluate-Print Loop
+    let mut leave: bool = true;
+    let mut countdown = 5_000_000;
     loop {
         //Wait for key to be pressed
         match input.read_key().unwrap().unwrap() {
             Some(input_key) => {
+                leave = false;
                 //Check input key
                 match input_key {
                     //Printable Key
@@ -272,7 +275,13 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                     }
                 }
             }
-            None => {boot_services.stall(10_000)},
+            None => {
+                boot_services.stall(10_000);
+                if leave {
+                    countdown -= 10_000;
+                    if countdown <= 0 {break}
+                }
+            },
         }
     }
 

@@ -14,6 +14,7 @@
 #![no_std]
 #![no_main]
 #![allow(unused_must_use)]
+#![feature(abi_x86_interrupt)]
 #![feature(asm)]
 #![feature(panic_info_message)]
 #![feature(start)]
@@ -25,9 +26,10 @@ use photon::*;
 use gluon::*;
 use gluon::mem::*;
 use gluon::pci::*;
-use gluon::ps2::*;
 use gluon::idt::*;
 use x86_64::registers::control::Cr3;
+use x86_64::instructions::hlt;
+use x86_64::structures::idt::InterruptStackFrame;
 use core::convert::TryInto;
 use core::{fmt::Write, ptr::{read_volatile, write_volatile}, slice::from_raw_parts_mut};
 #[cfg(not(test))]
@@ -67,17 +69,6 @@ pub extern "sysv64" fn _start() -> ! {
     writeln!(printer, "Helium Kernel           {}", HELIUM_VERSION);
     writeln!(printer, "Photon Graphics Library {}", PHOTON_VERSION);
     writeln!(printer, "Gluon Memory Library    {}", GLUON_VERSION);
-
-    // REGISTER TESTING
-    writeln!(printer, "\n=== REGISTER TEST ===\n");
-    let mut cr3: u64;
-    let mut rip: u64;
-    unsafe {
-        asm!("MOV {cr3}, CR3",   cr3 = out(reg) cr3, options(nostack));
-        asm!("LEA {rip}, [RIP]", rip = out(reg) rip, options(nostack));
-    }
-    writeln!(printer, "CR3: 0x{:16X}", cr3);
-    writeln!(printer, "RIP: 0x{:16X}", rip);
 
     // PAGE MAP PARSING
     writeln!(printer, "\n=== PAGE MAP ===\n");
@@ -209,59 +200,16 @@ pub extern "sysv64" fn _start() -> ! {
         };
         gdt.write_entry(gdte2, 2).unwrap();
         //Finalize
-        unsafe {gdt.write_gdtr();}
-    }
-
-    // PS/2 KEYBOARD TESTING
-    writeln!(printer, "\n=== PS/2 BUS ===\n");
-    let ps2_controller = Ps2Controller{};
-    let mut ps2_port1_present: bool = false;
-    let mut ps2_port2_present: bool = false;
-    unsafe {
-        ps2_controller.disable_port_1();
-        ps2_controller.disable_port_2();
-        let a1 = ps2_controller.read_memory(0x0000).unwrap();
-        ps2_controller.write_memory(0, a1 & 0b1011_1100);
-        if ps2_controller.test_controller() {
-            writeln!(printer, "PS/2 Controller test succeeded.");
-            ps2_port1_present = ps2_controller.test_port_1();
-            ps2_port2_present = ps2_controller.test_port_2();
-            if ps2_port1_present || ps2_port2_present {
-                writeln!(printer, "PS/2 Port tests succeeded:");
-                writeln!(printer, "PS/2 Port 1: {}", ps2_port1_present);
-                writeln!(printer, "PS/2 Port 2: {}", ps2_port2_present);
-            }
-            else {writeln!(printer, "PS/2 Port tests failed.");}
-        }
-        else {writeln!(printer, "PS/2 Controller test failed.");}
+        unsafe {gdt.write_gdtr(0x08, 0x10);}
     }
 
     // IDT SETUP
     writeln!(printer, "\n=== INTERRUPT DESCRIPTOR TABLE ===\n");
     //IDT
     let idt = InterruptDescriptorTable {address: free_memory_area_allocator.physical_to_linear(free_memory_area_allocator.allocate_page().unwrap()).unwrap(), limit: 255};
-    writeln!(printer, "");
+    writeln!(printer, "IDT Linear Address: 0x{:016X}", idt.address.0);
     {
         //Exception functions
-        fn exception_divide_error()       {panic!("Interrupt Vector 0x00 (#DE): Divide Error")}
-        fn exception_debug()              {panic!("Interrupt Vector 0x01 (#DB): Debug Exception")}
-        fn exception_breakpoint()         {panic!("Interrupt Vector 0x03 (#BP): Breakpoint")}
-        fn exception_overflow()           {panic!("Interrupt Vector 0x04 (#OF): Overflow")}
-        fn exception_bound_range()        {panic!("Interrupt Vector 0x05 (#BR): Bound Range Exceeded")}
-        fn exception_invalid_opcode()     {panic!("Interrupt Vector 0x06 (#UD): Invalid Opcode")}
-        fn exception_no_fpu()             {panic!("Interrupt Vector 0x07 (#NM): No Floating Point Unit")}
-        fn exception_double()             {panic!("Interrupt Vector 0x08 (#DF): Double Fault")}
-        fn exception_invalid_tss()        {panic!("Interrupt Vector 0x0A (#TS): Invalid Task State Segment")}
-        fn exception_not_present()        {panic!("Interrupt Vector 0x0B (#NP): Segment Not Present")}
-        fn exception_stack_segment()      {panic!("Interrupt Vector 0x0C (#SS): Stack Segment Fault")}
-        fn exception_general_protection() {panic!("Interrupt Vector 0x0D (#GP): General Protection Error")}
-        fn exception_page_fault()         {panic!("Interrupt Vector 0x0E (#PF): Page Fault")}
-        fn exception_fpu_error()          {panic!("Interrupt Vector 0x10 (#MF): Floating Point Math Fault")}
-        fn exception_alignment()          {panic!("Interrupt Vector 0x11 (#AC): Alignment Check")}
-        fn exception_machine()            {panic!("Interrupt Vector 0x12 (#MC): Machine Check")}
-        fn exception_simd()               {panic!("Interrupt Vector 0x13 (#XM): SIMD Floating Point Math Exception")}
-        fn exception_virtualization()     {panic!("Interrupt Vector 0x14 (#VE): Virtualization Exception")}
-        fn exception_control_protection() {panic!("Interrupt Vector 0x15 (#CP): Control Protection Exception")}
         //Generic Entry
         let mut idte = InterruptDescriptorTableEntry {
             offset: 0,
@@ -273,26 +221,145 @@ pub extern "sysv64" fn _start() -> ! {
             interrupt_stack_table: 0,
             descriptor_type: DescriptorType::InterruptGate,
         };
-        //Entry 0x00
-        idte.offset = exception_divide_error as fn() as u64;
-        idt.write_entry(&idte, 0x00);
-        //Entry 0x06
-        idte.offset = exception_invalid_opcode as fn() as u64;
-        idt.write_entry(&idte, 0x06);
-        //Entry 0x0E
-        idte.offset = exception_page_fault as fn() as u64;
-        idt.write_entry(&idte, 0x0E);
+        //Write entries
+        idte.offset = exception_divide_error       as fn() as u64; idt.write_entry(&idte, 0x00);
+        idte.offset = exception_debug              as fn() as u64; idt.write_entry(&idte, 0x01);
+        idte.offset = exception_breakpoint         as fn() as u64; idt.write_entry(&idte, 0x03);
+        idte.offset = exception_overflow           as fn() as u64; idt.write_entry(&idte, 0x04);
+        idte.offset = exception_bound_range        as fn() as u64; idt.write_entry(&idte, 0x05);
+        idte.offset = exception_invalid_opcode     as fn() as u64; idt.write_entry(&idte, 0x06);
+        idte.offset = exception_no_fpu             as fn() as u64; idt.write_entry(&idte, 0x07);
+        idte.offset = exception_double             as fn() as u64; idt.write_entry(&idte, 0x08);
+        idte.offset = exception_invalid_tss        as fn() as u64; idt.write_entry(&idte, 0x0A);
+        idte.offset = exception_not_present        as fn() as u64; idt.write_entry(&idte, 0x0B);
+        idte.offset = exception_stack_segment      as fn() as u64; idt.write_entry(&idte, 0x0C);
+        idte.offset = exception_general_protection as fn() as u64; idt.write_entry(&idte, 0x0D);
+        idte.offset = exception_page_fault         as fn() as u64; idt.write_entry(&idte, 0x0E);
+        idte.offset = exception_fpu_error          as fn() as u64; idt.write_entry(&idte, 0x10);
+        idte.offset = exception_alignment          as fn() as u64; idt.write_entry(&idte, 0x11);
+        idte.offset = exception_machine            as fn() as u64; idt.write_entry(&idte, 0x12);
+        idte.offset = exception_simd               as fn() as u64; idt.write_entry(&idte, 0x13);
+        idte.offset = exception_virtualization     as fn() as u64; idt.write_entry(&idte, 0x14);
+        idte.offset = exception_control_protection as fn() as u64; idt.write_entry(&idte, 0x15);
         //Test
         unsafe {idt.write_idtr();}
         //unsafe {asm!("ud2")} //test undefined opcode
-        unsafe {write_volatile(0x800000 as *mut u8, 0x00)}
+        //unsafe {write_volatile(0x800000 as *mut u8, 0x00)} //test page fault
     }
     
+    // PIC SETUP
+    writeln!(printer, "\n=== PROGRAMMABLE INTERRUPT CONTROLLER ===\n");
+    unsafe {
+        pic::remap(0x20, 0x28).unwrap();
+        pic::enable_irq(0x01).unwrap();
+        let idte = InterruptDescriptorTableEntry {
+            offset: interrupt_ps2_keyboard as extern "x86-interrupt" fn(InterruptStackFrame) as u64,
+            descriptor_table_index: 1,
+            table_indicator: TableIndicator::GDT,
+            requested_privilege_level: PrivilegeLevel::Supervisor,
+            segment_present: true,
+            privilege_level: PrivilegeLevel::Supervisor,
+            interrupt_stack_table: 0,
+            descriptor_type: DescriptorType::InterruptGate,
+        };
+        idt.write_entry(&idte, 0x20 + 0x01);
+        asm!("STI");
+        //Test
+        writeln!(printer, "{:08b} {:08b}", PORT_PIC1_DATA.read(), PORT_PIC2_DATA.read());
+    }
+
+    // PS/2 KEYBOARD
+    writeln!(printer, "\n=== PS/2 BUS ===\n");
+    let mut ps2_port1_present: bool = false;
+    let mut ps2_port2_present: bool = false;
+    unsafe {
+        ps2::disable_port1();
+        ps2::disable_port2();
+        let a1 = ps2::read_memory(0x0000).unwrap();
+        ps2::write_memory(0, a1 & 0b1011_1100).unwrap();
+        if ps2::test_controller() {
+            writeln!(printer, "PS/2 Controller test succeeded.");
+            ps2_port1_present = ps2::test_port_1();
+            ps2_port2_present = ps2::test_port_2();
+            if ps2_port1_present || ps2_port2_present {
+                writeln!(printer, "PS/2 Port tests succeeded:");
+                if ps2_port1_present {
+                    writeln!(printer, "  PS/2 Port 1 Present.");
+                    ps2::enable_port1();
+                    ps2::enable_int_port1();
+                }
+                if ps2_port2_present {
+                    writeln!(printer, "  PS/2 Port 2 Present.");
+                    //ps2::enable_port2();
+                }
+            }
+            else {writeln!(printer, "PS/2 Port tests failed.");}
+        }
+        else {writeln!(printer, "PS/2 Controller test failed.");}
+    }
 
 
+    // REGISTER TESTING
+    writeln!(printer, "\n=== REGISTER TEST ===\n");
+    let mut cr3: u64;
+    let mut rip: u64;
+    unsafe {
+        asm!("MOV {cr3}, CR3",   cr3 = out(reg) cr3, options(nostack));
+        asm!("LEA {rip}, [RIP]", rip = out(reg) rip, options(nostack));
+    }
+    writeln!(printer, "CR3:    0x{:16X}", cr3);
+    writeln!(printer, "RIP:    0x{:16X}", rip);
+
+    //TEST
+    unsafe {
+        //asm!("INT 3h")
+        /*loop {
+            while !ps2::poll_input() {}
+            let scancode = ps2::read_keyboard_set2();
+            writeln!(printer, "SCANCODE: 0x{:02X}", scancode);
+            if scancode == 0x29 {asm!("INT 21h")}
+        }*/
+    }
 
     // HALT COMPUTER
-    panic!("\n=== IT IS NOW SAFE TO SHUT OFF YOUR COMPUTER ===")
+    loop {
+        hlt();
+    }
+    //panic!("\n=== STARTUP COMPLETE ===")
+}
+
+
+// INTERRUPT FUNCTIONS
+//Exception Functions (Just panic for now)
+fn exception_divide_error()       {panic!("Interrupt Vector 0x00 (#DE): Divide Error")}
+fn exception_debug()              {panic!("Interrupt Vector 0x01 (#DB): Debug Exception")}
+fn exception_breakpoint()         {panic!("Interrupt Vector 0x03 (#BP): Breakpoint")}
+fn exception_overflow()           {panic!("Interrupt Vector 0x04 (#OF): Overflow")}
+fn exception_bound_range()        {panic!("Interrupt Vector 0x05 (#BR): Bound Range Exceeded")}
+fn exception_invalid_opcode()     {panic!("Interrupt Vector 0x06 (#UD): Invalid Opcode")}
+fn exception_no_fpu()             {panic!("Interrupt Vector 0x07 (#NM): No Floating Point Unit")}
+fn exception_double()             {panic!("Interrupt Vector 0x08 (#DF): Double Fault")}
+fn exception_invalid_tss()        {panic!("Interrupt Vector 0x0A (#TS): Invalid Task State Segment")}
+fn exception_not_present()        {panic!("Interrupt Vector 0x0B (#NP): Segment Not Present")}
+fn exception_stack_segment()      {panic!("Interrupt Vector 0x0C (#SS): Stack Segment Fault")}
+fn exception_general_protection() {panic!("Interrupt Vector 0x0D (#GP): General Protection Error")}
+fn exception_page_fault()         {panic!("Interrupt Vector 0x0E (#PF): Page Fault")}
+fn exception_fpu_error()          {panic!("Interrupt Vector 0x10 (#MF): Floating Point Math Fault")}
+fn exception_alignment()          {panic!("Interrupt Vector 0x11 (#AC): Alignment Check")}
+fn exception_machine()            {panic!("Interrupt Vector 0x12 (#MC): Machine Check")}
+fn exception_simd()               {panic!("Interrupt Vector 0x13 (#XM): SIMD Floating Point Math Exception")}
+fn exception_virtualization()     {panic!("Interrupt Vector 0x14 (#VE): Virtualization Exception")}
+fn exception_control_protection() {panic!("Interrupt Vector 0x15 (#CP): Control Protection Exception")}
+
+//PS/2 Keyboard function
+extern "x86-interrupt" fn interrupt_ps2_keyboard(stack_frame: InterruptStackFrame) {
+    unsafe {
+        let printer = &mut *PANIC_WRITE_POINTER.unwrap();
+        let scancode = ps2::read_input();
+        writeln!(printer, "Scancode: 0x{:02X}", scancode);
+        pic::end_irq(0x01);
+        //hlt();
+    }
 }
 
 
@@ -315,8 +382,8 @@ fn panic_handler(panic_info: &PanicInfo) -> ! {
             writeln!(printer, "Line:   {}", panic_location.line());
             writeln!(printer, "Column: {}", panic_location.column());
         }
-        asm!("HLT");
-        loop {}
+        hlt();
+        loop{};
     }
 }
 
@@ -328,7 +395,6 @@ struct UsableMemoryEntry {
     pub address: PhysicalAddress,
     pub present: bool,
 }
-
 
 struct NoneAllocator {
     pub identity_offset: usize

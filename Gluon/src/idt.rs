@@ -3,7 +3,6 @@
 // HEADER
 //Imports
 use crate::{*, mem::LinearAddress};
-use core::convert::{TryFrom, TryInto};
 
 
 // GLOBAL DESCRIPTOR TABLE
@@ -15,6 +14,8 @@ pub struct GlobalDescriptorTable {
     pub address: LinearAddress,
 }
 impl GlobalDescriptorTable {
+    //FUNCTIONS
+    //Write a GDT entry into the GDT
     pub fn write_entry(&self, entry: GlobalDescriptorTableEntry, position: u16) -> Result<(), &'static str> {
         if position >  self.limit {return Err("Global Descriptor Table: Entry position out of bounds on write.")}
         if position == 0          {return Err("Global Descriptor Table: Entry position 0 on write.")}         
@@ -23,24 +24,39 @@ impl GlobalDescriptorTable {
         Ok(())
     }
     
-    pub unsafe fn write_gdtr(&self) {
-        let mut bytes: [u8;10] = [0u8;10];
-        //Limit
+    //Load the new GDT
+    //This function is unsafe because doing it wrong will cause a #GP fault either immediately or during future instructions
+    pub unsafe fn write_gdtr(&self, code_selector: u16, segment_selector: u16) {
+        //Create byte array to load
+        let mut gdt_bytes: [u8;10] = [0u8;10];
+        //Place limit value into array
         let limit_bytes: [u8;2] = ((self.limit + 1) * 8 - 1).to_le_bytes();
-        bytes[0x0] = limit_bytes[0x0];
-        bytes[0x1] = limit_bytes[0x1];
-        //Address
+        gdt_bytes[0x0] = limit_bytes[0x0];
+        gdt_bytes[0x1] = limit_bytes[0x1];
+        //Place address value into array
         let address_bytes: [u8;8] = self.address.0.to_le_bytes();
-        bytes[0x2] = address_bytes[0x0];
-        bytes[0x3] = address_bytes[0x1];
-        bytes[0x4] = address_bytes[0x2];
-        bytes[0x5] = address_bytes[0x3];
-        bytes[0x6] = address_bytes[0x4];
-        bytes[0x7] = address_bytes[0x5];
-        bytes[0x8] = address_bytes[0x6];
-        bytes[0x9] = address_bytes[0x7];
-        //Load
-        asm!("LGDT [{}]", in(reg) &bytes, options(nostack));
+        gdt_bytes[0x2] = address_bytes[0x0];
+        gdt_bytes[0x3] = address_bytes[0x1];
+        gdt_bytes[0x4] = address_bytes[0x2];
+        gdt_bytes[0x5] = address_bytes[0x3];
+        gdt_bytes[0x6] = address_bytes[0x4];
+        gdt_bytes[0x7] = address_bytes[0x5];
+        gdt_bytes[0x8] = address_bytes[0x6];
+        gdt_bytes[0x9] = address_bytes[0x7];
+        //Load GDT and Segment Registers
+        //This black magic is the way it is because interrupts will cause a #GP when they hit IRETQ without it
+        asm!(
+            "LGDT [{gdt}]",      //Load into GDT register from address of gdt_bytes
+            "PUSH {cs}",         //Push CS value to stack
+            "LEA RAX, [RIP+1f]", //Load relative address of 1: into RAX
+            "PUSH RAX",          //Push RAX to stack
+            "RETFQ",             //Use return to change CS register
+            "1:",                //Jump here after return
+            "MOV SS, {ss}",      //Change SS Register
+            gdt = in(reg) &gdt_bytes,
+            cs  = in(reg) code_selector,
+            ss  = in(reg) segment_selector,
+            options(nostack));
     }
 }
 
@@ -309,6 +325,6 @@ numeric_enum! {
     #[derive(Debug)]
     pub enum TableIndicator {
         GDT = 0x0,
-        LDT  = 0x1,
+        LDT = 0x1,
     }
 }
