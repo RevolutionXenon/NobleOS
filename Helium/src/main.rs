@@ -319,6 +319,11 @@ pub extern "sysv64" fn _start() -> ! {
             writeln!(printer, "SCANCODE: 0x{:02X}", scancode);
             if scancode == 0x29 {asm!("INT 21h")}
         }*/
+        PS2_INDEX   = 0;
+        LEFT_SHIFT  = false;
+        RIGHT_SHIFT = false;
+        CAPS_LOCK   = false;
+        NUM_LOCK    = false;
     }
 
     // HALT COMPUTER
@@ -352,13 +357,52 @@ fn exception_virtualization()     {panic!("Interrupt Vector 0x14 (#VE): Virtuali
 fn exception_control_protection() {panic!("Interrupt Vector 0x15 (#CP): Control Protection Exception")}
 
 //PS/2 Keyboard function
+static mut PS2_SCANCODES: [u8;9] = [0u8;9];
+static mut PS2_INDEX:   usize = 0x00;
+static mut LEFT_SHIFT:  bool = false;
+static mut RIGHT_SHIFT: bool = false;
+static mut CAPS_LOCK:   bool = false;
+static mut NUM_LOCK:    bool = false;
 extern "x86-interrupt" fn interrupt_ps2_keyboard(stack_frame: InterruptStackFrame) {
     unsafe {
         let printer = &mut *PANIC_WRITE_POINTER.unwrap();
-        let scancode = ps2::read_input();
-        writeln!(printer, "Scancode: 0x{:02X}", scancode);
+        while ps2::poll_input() {
+            let scancode = ps2::read_input();
+            PS2_SCANCODES[PS2_INDEX] = scancode;
+            PS2_INDEX += 1;
+            match ps2::scancodes_2(&PS2_SCANCODES[0..PS2_INDEX]) {
+                Ok(ps2_scan) => match ps2_scan {
+                    ps2::Ps2Scan::Finish(input_event) => {
+                        //writeln!(printer, "PS/2 KEYBOARD {:?}", input_event);
+                        //writeln!(printer, "PS/2 KEYBOARD SUCCESS: {:?}", &PS2_SCANCODES[0..PS2_INDEX]);
+                        if let ps2::InputEvent::DigitalKey(press_type, key_id) = input_event {match press_type {
+                            ps2::PressType::Press => match ps2::us_qwerty(key_id, CAPS_LOCK ^ (LEFT_SHIFT || RIGHT_SHIFT), NUM_LOCK) {
+                                ps2::KeyStr::Key(phys_id) => match phys_id {
+                                    ps2::KeyID::KeyLeftShift => {LEFT_SHIFT = true;}
+                                    ps2::KeyID::KeyRightShift => {RIGHT_SHIFT = true;}
+                                    ps2::KeyID::KeyCapsLock => {CAPS_LOCK = !CAPS_LOCK;}
+                                    ps2::KeyID::NumLock => {NUM_LOCK = !NUM_LOCK;}
+                                    _ => {}
+                                }
+                                ps2::KeyStr::Str(string) => {write!(printer, "{}", string);}
+                            }
+                            ps2::PressType::Unpress => match key_id {
+                                ps2::KeyID::KeyLeftShift => {LEFT_SHIFT = false;}
+                                ps2::KeyID::KeyRightShift => {RIGHT_SHIFT = false;}
+                                _ => {}
+                            } 
+                        }}
+                        PS2_INDEX = 0;
+                    }
+                    ps2::Ps2Scan::Continue => {}
+                }
+                Err(error) => {
+                    writeln!(printer, "PS/2 KEYBOARD ERROR: {:?}", &PS2_SCANCODES[0..PS2_INDEX]);
+                    PS2_INDEX = 0;
+                }
+            }
+        }
         pic::end_irq(0x01);
-        //hlt();
     }
 }
 
