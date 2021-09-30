@@ -5,8 +5,8 @@
 // idt.rs: Structs and enums related to the contents and handling of x86-64 GDT and IDT structures
 // mem.rs: Structs, enums, and traits related to the contents and handling of x86-64 page tables
 // pci.rs: Structs and objects related to the handling of the PCI bus
-// pic.rs: Structs and objects related to the handling of the 8259 Programmable Interrupt Controller
-// ps2.rs: Structs and objects related to the handling of the PS/2 controller and devices
+// pic.rs: Functions and objects related to the handling of the Programmable Interrupt Controller and Advanced Programmable Interrupt Controller
+// ps2.rs: Functions and objects related to the handling of the PS/2 controller and devices
 
 
 // HEADER
@@ -28,11 +28,10 @@ pub mod pci;
 pub mod pic;
 pub mod ps2;
 use core::convert::TryFrom;
-use core::convert::TryInto;
 use x86_64::instructions::port::*;
 
 //Constants
-pub const GLUON_VERSION: &str = "vDEV-2021-09-14"; //CURRENT VERSION OF GRAPHICS LIBRARY
+pub const GLUON_VERSION: &str = "vDEV-2021-09-29"; //CURRENT VERSION OF GRAPHICS LIBRARY
 
 
 // MACROS
@@ -93,7 +92,7 @@ pub const TIB:              usize = 0o___________2_000_000_000_0000_usize; //ONE
 pub const PIB:              usize = 0o_______4_000_000_000_000_0000_usize; //ONE PEBIBYTE
 
 //Functions
-pub fn oct_to_usize_4  (pml4: usize, pml3: usize, pml2: usize, pml1: usize, offset: usize) -> Result<usize,   &'static str> {
+pub fn oct_to_usize_4(pml4: usize, pml3: usize, pml2: usize, pml1: usize, offset: usize)   -> Result<usize,   &'static str> {
     if pml4   >= PAGE_NUMBER_1  {return Err("O4 to Pointer: PML4 oct out of bounds.")}
     if pml3   >= PAGE_NUMBER_1  {return Err("O4 to Pointer: PML3 oct out of bounds.")}
     if pml2   >= PAGE_NUMBER_1  {return Err("O4 to Pointer: PML2 oct out of bounds.")}
@@ -110,17 +109,48 @@ pub fn oct_to_usize_4  (pml4: usize, pml3: usize, pml2: usize, pml1: usize, offs
 pub fn oct_to_pointer_4(pml4: usize, pml3: usize, pml2: usize, pml1: usize, offset: usize) -> Result<*mut u8, &'static str> {
     Ok(oct_to_usize_4(pml4, pml3, pml2, pml1, offset)? as *mut u8)
 }
-pub fn oct4_to_usize   (pml4: usize)                                                       -> Result<usize,   &'static str> {
+pub fn oct4_to_usize(pml4: usize)                                                          -> Result<usize,   &'static str> {
     oct_to_usize_4(pml4, 0, 0, 0, 0)
 }
-pub fn oct4_to_pointer (pml4: usize)                                                       -> Result<*mut u8, &'static str> {
+pub fn oct4_to_pointer(pml4: usize)                                                        -> Result<*mut u8, &'static str> {
     oct_to_pointer_4(pml4, 0, 0, 0, 0)
 }
 
+
+// PC ARCHITECTURE
+//Functions
 pub fn io_wait() {
     unsafe {PORT_WAIT.write(0x00);}
 }
-
+/*pub fn cpuid(command: u32) -> (u32, u32, u32, u32) {
+    let r1: u32;
+    let r2: u32;
+    let r3: u32;
+    let r4: u32;
+    unsafe {asm!(
+        "PUSH RAX",
+        "PUSH RBX",
+        "PUSH RCX",
+        "PUSH RDX",
+        "MOV EAX, {command}",
+        "CPUID",
+        "MOV {r1}, EAX",
+        "MOV {r2}, EBX",
+        "MOV {r3}, ECX",
+        "MOV {r4}, EDX",
+        "POP RDX",
+        "POP RCX",
+        "POP RBX",
+        "POP RAX",
+        command = in(reg) command,
+        r1 = out(reg) r1,
+        r2 = out(reg) r2,
+        r3 = out(reg) r3,
+        r4 = out(reg) r4,
+        options(nostack)
+    )}
+    (r1, r2, r3, r4)
+}*/
 
 //Ports
 pub static mut PORT_PIC1_COMMAND:   PortGeneric<u8,  WriteOnlyAccess> = PortGeneric::<u8,  WriteOnlyAccess>::new(0x0020);

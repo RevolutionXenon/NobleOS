@@ -28,15 +28,13 @@ use gluon::mem::*;
 use gluon::pci::*;
 use gluon::idt::*;
 use x86_64::registers::control::Cr3;
-use x86_64::instructions::hlt;
-use x86_64::structures::idt::InterruptStackFrame;
-use core::convert::TryInto;
-use core::{fmt::Write, ptr::{read_volatile, write_volatile}, slice::from_raw_parts_mut};
+use core::ptr::slice_from_raw_parts_mut;
+use core::{fmt::Write, ptr::{write_volatile}, slice::from_raw_parts_mut};
 #[cfg(not(test))]
 use core::panic::PanicInfo;
 
 //Constants
-const HELIUM_VERSION: &str = "vDEV-2021-09-14"; //CURRENT VERSION OF KERNEL
+const HELIUM_VERSION: &str = "vDEV-2021-09-29"; //CURRENT VERSION OF KERNEL
 static WHITESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
 static _BLACKSPACE: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
 static _BLUESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE,  background: COLOR_BGRX_BLACK};
@@ -124,19 +122,32 @@ pub extern "sysv64" fn _start() -> ! {
         usable_table[i] = UsableMemoryEntry{address: entry.address, present: false}
     }
     //Create free memory area allocator
-    let free_memory_area_allocator = UsableMemoryPageAllocator{table: oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut UsableMemoryEntry, len: usable_table.len(), identity_offset: oct4_to_usize(IDENTITY_OCT).unwrap()};
+    let u_alloc = UsableMemoryPageAllocator{table: oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut UsableMemoryEntry, len: usable_table.len(), identity_offset: oct4_to_usize(IDENTITY_OCT).unwrap()};
     {
-        let free_memory_test = free_memory_area_allocator.allocate_page().unwrap();
+        let free_memory_test = u_alloc.allocate_page().unwrap();
         writeln!(printer, "Free Memory Area Allocation Test: {:?}", free_memory_test);
-        writeln!(printer, "Free Memory Deallocation Test:    {:?}", free_memory_area_allocator.deallocate_page(free_memory_test));
+        writeln!(printer, "Free Memory Deallocation Test:    {:?}", u_alloc.deallocate_page(free_memory_test));
         /*for i in 0..30 {
             let entry = usable_table[i];
             writeln!(printer, "{:2}: {}", i, entry.present);
         }*/
     }
 
+    // GLOBAL VARIABLES
+    let mut text_pipe: TextPipe;
+    unsafe {
+        PS2_INDEX   = 0;
+        LEFT_SHIFT  = false;
+        RIGHT_SHIFT = false;
+        CAPS_LOCK   = false;
+        NUM_LOCK    = false;
+        text_pipe = TextPipe{ position: 0, size: PAGE_SIZE_4KIB, bytes: slice_from_raw_parts_mut(u_alloc.physical_to_linear(u_alloc.allocate_page().unwrap()).unwrap().0 as *mut u8, PAGE_SIZE_4KIB) };
+        TIMER_TEXT_PIPE = &mut text_pipe;
+        TIMER_PRINT = false;
+    }
+
     // PCI TESTING
-    writeln!(printer, "\n=== PCI BUS ===\n");
+    writeln!(printer, "\n=== PERIPHERAL COMPONENT INTERCONNECT BUS ===\n");
     let mut pci_uhci_option = None;
     unsafe {for pci_bus in 0..256 {
         for pci_device in 0..32 {
@@ -169,9 +180,9 @@ pub extern "sysv64" fn _start() -> ! {
     }}
 
     // GDT SETUP
-    writeln!(printer, "\n=== GDT ===\n");
+    writeln!(printer, "\n=== GLOBAL DESCRIPTOR TABLE ===\n");
     {
-        let gdt = GlobalDescriptorTable{address: free_memory_area_allocator.physical_to_linear(free_memory_area_allocator.allocate_page().unwrap()).unwrap(), limit: 2};
+        let gdt = GlobalDescriptorTable{address: u_alloc.physical_to_linear(u_alloc.allocate_page().unwrap()).unwrap(), limit: 2};
         writeln!(printer, "GDT Linear Address: 0x{:016X}", gdt.address.0);
         //CODE ENTRY
         let gdte1 = GlobalDescriptorTableEntry {
@@ -205,8 +216,7 @@ pub extern "sysv64" fn _start() -> ! {
 
     // IDT SETUP
     writeln!(printer, "\n=== INTERRUPT DESCRIPTOR TABLE ===\n");
-    //IDT
-    let idt = InterruptDescriptorTable {address: free_memory_area_allocator.physical_to_linear(free_memory_area_allocator.allocate_page().unwrap()).unwrap(), limit: 255};
+    let idt = InterruptDescriptorTable {address: u_alloc.physical_to_linear(u_alloc.allocate_page().unwrap()).unwrap(), limit: 255};
     writeln!(printer, "IDT Linear Address: 0x{:016X}", idt.address.0);
     {
         //Exception functions
@@ -222,25 +232,25 @@ pub extern "sysv64" fn _start() -> ! {
             descriptor_type: DescriptorType::InterruptGate,
         };
         //Write entries
-        idte.offset = exception_divide_error       as fn() as u64; idt.write_entry(&idte, 0x00);
-        idte.offset = exception_debug              as fn() as u64; idt.write_entry(&idte, 0x01);
-        idte.offset = exception_breakpoint         as fn() as u64; idt.write_entry(&idte, 0x03);
-        idte.offset = exception_overflow           as fn() as u64; idt.write_entry(&idte, 0x04);
-        idte.offset = exception_bound_range        as fn() as u64; idt.write_entry(&idte, 0x05);
-        idte.offset = exception_invalid_opcode     as fn() as u64; idt.write_entry(&idte, 0x06);
-        idte.offset = exception_no_fpu             as fn() as u64; idt.write_entry(&idte, 0x07);
-        idte.offset = exception_double             as fn() as u64; idt.write_entry(&idte, 0x08);
-        idte.offset = exception_invalid_tss        as fn() as u64; idt.write_entry(&idte, 0x0A);
-        idte.offset = exception_not_present        as fn() as u64; idt.write_entry(&idte, 0x0B);
-        idte.offset = exception_stack_segment      as fn() as u64; idt.write_entry(&idte, 0x0C);
-        idte.offset = exception_general_protection as fn() as u64; idt.write_entry(&idte, 0x0D);
-        idte.offset = exception_page_fault         as fn() as u64; idt.write_entry(&idte, 0x0E);
-        idte.offset = exception_fpu_error          as fn() as u64; idt.write_entry(&idte, 0x10);
-        idte.offset = exception_alignment          as fn() as u64; idt.write_entry(&idte, 0x11);
-        idte.offset = exception_machine            as fn() as u64; idt.write_entry(&idte, 0x12);
-        idte.offset = exception_simd               as fn() as u64; idt.write_entry(&idte, 0x13);
-        idte.offset = exception_virtualization     as fn() as u64; idt.write_entry(&idte, 0x14);
-        idte.offset = exception_control_protection as fn() as u64; idt.write_entry(&idte, 0x15);
+        idte.offset = exception_divide_error       as fn() as usize as u64; idt.write_entry(&idte, 0x00);
+        idte.offset = exception_debug              as fn() as usize as u64; idt.write_entry(&idte, 0x01);
+        idte.offset = exception_breakpoint         as fn() as usize as u64; idt.write_entry(&idte, 0x03);
+        idte.offset = exception_overflow           as fn() as usize as u64; idt.write_entry(&idte, 0x04);
+        idte.offset = exception_bound_range        as fn() as usize as u64; idt.write_entry(&idte, 0x05);
+        idte.offset = exception_invalid_opcode     as fn() as usize as u64; idt.write_entry(&idte, 0x06);
+        idte.offset = exception_no_fpu             as fn() as usize as u64; idt.write_entry(&idte, 0x07);
+        idte.offset = exception_double             as fn() as usize as u64; idt.write_entry(&idte, 0x08);
+        idte.offset = exception_invalid_tss        as fn() as usize as u64; idt.write_entry(&idte, 0x0A);
+        idte.offset = exception_not_present        as fn() as usize as u64; idt.write_entry(&idte, 0x0B);
+        idte.offset = exception_stack_segment      as fn() as usize as u64; idt.write_entry(&idte, 0x0C);
+        idte.offset = exception_general_protection as fn() as usize as u64; idt.write_entry(&idte, 0x0D);
+        idte.offset = exception_page_fault         as fn() as usize as u64; idt.write_entry(&idte, 0x0E);
+        idte.offset = exception_fpu_error          as fn() as usize as u64; idt.write_entry(&idte, 0x10);
+        idte.offset = exception_alignment          as fn() as usize as u64; idt.write_entry(&idte, 0x11);
+        idte.offset = exception_machine            as fn() as usize as u64; idt.write_entry(&idte, 0x12);
+        idte.offset = exception_simd               as fn() as usize as u64; idt.write_entry(&idte, 0x13);
+        idte.offset = exception_virtualization     as fn() as usize as u64; idt.write_entry(&idte, 0x14);
+        idte.offset = exception_control_protection as fn() as usize as u64; idt.write_entry(&idte, 0x15);
         //Test
         unsafe {idt.write_idtr();}
         //unsafe {asm!("ud2")} //test undefined opcode
@@ -250,10 +260,10 @@ pub extern "sysv64" fn _start() -> ! {
     // PIC SETUP
     writeln!(printer, "\n=== PROGRAMMABLE INTERRUPT CONTROLLER ===\n");
     unsafe {
-        pic::remap(0x20, 0x28).unwrap();
-        pic::enable_irq(0x01).unwrap();
+        pic::pic_remap(0x20, 0x28).unwrap();
+        pic::pic_enable_irq(0x01).unwrap();
         let idte = InterruptDescriptorTableEntry {
-            offset: interrupt_ps2_keyboard as extern "x86-interrupt" fn(InterruptStackFrame) as u64,
+            offset: interrupt_ps2_keyboard as extern "x86-interrupt" fn() as usize as u64,
             descriptor_table_index: 1,
             table_indicator: TableIndicator::GDT,
             requested_privilege_level: PrivilegeLevel::Supervisor,
@@ -262,17 +272,17 @@ pub extern "sysv64" fn _start() -> ! {
             interrupt_stack_table: 0,
             descriptor_type: DescriptorType::InterruptGate,
         };
-        idt.write_entry(&idte, 0x20 + 0x01);
+        idt.write_entry(&idte, 0x21);
         asm!("STI");
         //Test
         writeln!(printer, "{:08b} {:08b}", PORT_PIC1_DATA.read(), PORT_PIC2_DATA.read());
     }
 
     // PS/2 KEYBOARD
-    writeln!(printer, "\n=== PS/2 BUS ===\n");
-    let mut ps2_port1_present: bool = false;
-    let mut ps2_port2_present: bool = false;
+    writeln!(printer, "\n=== PERSONAL SYSTEM/2 BUS ===\n");
     unsafe {
+        let ps2_port1_present: bool;
+        let ps2_port2_present: bool;
         ps2::disable_port1();
         ps2::disable_port2();
         let a1 = ps2::read_memory(0x0000).unwrap();
@@ -298,39 +308,58 @@ pub extern "sysv64" fn _start() -> ! {
         else {writeln!(printer, "PS/2 Controller test failed.");}
     }
 
+    // APIC SETUP
+    writeln!(printer, "\n=== ADVANCED PROGRAMMABLE INTERRUPT CONTROLLER ===\n");
+    unsafe {
+        writeln!(printer, "APIC Present: {}", pic::apic_check());
+        writeln!(printer, "APIC Base: 0x{:16X}", pic::lapic_get_base());
+        pic::LAPIC_ADDRESS = (pic::lapic_get_base() as usize + oct4_to_usize(IDENTITY_OCT).unwrap()) as *mut u8;
+        let mut idte = InterruptDescriptorTableEntry {
+            offset: _interrupt_dummy as extern "x86-interrupt" fn() as usize as u64,
+            descriptor_table_index: 1,
+            table_indicator: TableIndicator::GDT,
+            requested_privilege_level: PrivilegeLevel::Supervisor,
+            segment_present: true,
+            privilege_level: PrivilegeLevel::Supervisor,
+            interrupt_stack_table: 0,
+            descriptor_type: DescriptorType::InterruptGate,
+        };
+        idt.write_entry(&idte, 0xFF);
+        pic::lapic_enable();
+        pic::lapic_spurious(0xFF);
+        writeln!(printer, "APIC ID:   0x{:1X}", pic::lapic_read_register(0x20).unwrap() >> 24);
+        writeln!(printer, "APIC 0xF0: 0x{:08X}", pic::lapic_read_register(0xF0).unwrap());
+        idte.offset = interrupt_timer as extern "x86-interrupt" fn() as usize as u64;
+        idt.write_entry(&idte, 0x30);
+        pic::lapic_timer(0x30, false, pic::TimerMode::Periodic);
+        pic::lapic_divide_config(pic::LapicDivide::Divide_1);
+    }
 
     // REGISTER TESTING
     writeln!(printer, "\n=== REGISTER TEST ===\n");
-    let mut cr3: u64;
-    let mut rip: u64;
-    unsafe {
-        asm!("MOV {cr3}, CR3",   cr3 = out(reg) cr3, options(nostack));
-        asm!("LEA {rip}, [RIP]", rip = out(reg) rip, options(nostack));
+    {
+        let mut cr3: u64;
+        let mut rip: u64;
+        unsafe {
+            asm!("MOV {cr3}, CR3",   cr3 = out(reg) cr3, options(nostack));
+            asm!("LEA {rip}, [RIP]", rip = out(reg) rip, options(nostack));
+        }
+        writeln!(printer, "CR3:    0x{:16X}", cr3);
+        writeln!(printer, "RIP:    0x{:16X}", rip);
     }
-    writeln!(printer, "CR3:    0x{:16X}", cr3);
-    writeln!(printer, "RIP:    0x{:16X}", rip);
-
+    
     //TEST
     unsafe {
-        //asm!("INT 3h")
-        /*loop {
-            while !ps2::poll_input() {}
-            let scancode = ps2::read_keyboard_set2();
-            writeln!(printer, "SCANCODE: 0x{:02X}", scancode);
-            if scancode == 0x29 {asm!("INT 21h")}
-        }*/
-        PS2_INDEX   = 0;
-        LEFT_SHIFT  = false;
-        RIGHT_SHIFT = false;
-        CAPS_LOCK   = false;
-        NUM_LOCK    = false;
+        pic::lapic_initial_count(1_000_000);
     }
 
-    // HALT COMPUTER
-    loop {
-        hlt();
-    }
-    //panic!("\n=== STARTUP COMPLETE ===")
+    // WAIT FOR INTERRUPTS
+    loop {unsafe {
+        if text_pipe.position > 0 {
+            write!(printer, "{}", text_pipe.clear());
+        }
+    }}
+    panic!("\n=== STARTUP COMPLETE ===")
 }
 
 
@@ -363,49 +392,63 @@ static mut LEFT_SHIFT:  bool = false;
 static mut RIGHT_SHIFT: bool = false;
 static mut CAPS_LOCK:   bool = false;
 static mut NUM_LOCK:    bool = false;
-extern "x86-interrupt" fn interrupt_ps2_keyboard(stack_frame: InterruptStackFrame) {
-    unsafe {
-        let printer = &mut *PANIC_WRITE_POINTER.unwrap();
-        while ps2::poll_input() {
-            let scancode = ps2::read_input();
-            PS2_SCANCODES[PS2_INDEX] = scancode;
-            PS2_INDEX += 1;
-            match ps2::scancodes_2(&PS2_SCANCODES[0..PS2_INDEX]) {
-                Ok(ps2_scan) => match ps2_scan {
-                    ps2::Ps2Scan::Finish(input_event) => {
-                        //writeln!(printer, "PS/2 KEYBOARD {:?}", input_event);
-                        //writeln!(printer, "PS/2 KEYBOARD SUCCESS: {:?}", &PS2_SCANCODES[0..PS2_INDEX]);
-                        if let ps2::InputEvent::DigitalKey(press_type, key_id) = input_event {match press_type {
-                            ps2::PressType::Press => match ps2::us_qwerty(key_id, CAPS_LOCK ^ (LEFT_SHIFT || RIGHT_SHIFT), NUM_LOCK) {
-                                ps2::KeyStr::Key(phys_id) => match phys_id {
-                                    ps2::KeyID::KeyLeftShift => {LEFT_SHIFT = true;}
-                                    ps2::KeyID::KeyRightShift => {RIGHT_SHIFT = true;}
-                                    ps2::KeyID::KeyCapsLock => {CAPS_LOCK = !CAPS_LOCK;}
-                                    ps2::KeyID::NumLock => {NUM_LOCK = !NUM_LOCK;}
-                                    _ => {}
-                                }
-                                ps2::KeyStr::Str(string) => {write!(printer, "{}", string);}
-                            }
-                            ps2::PressType::Unpress => match key_id {
-                                ps2::KeyID::KeyLeftShift => {LEFT_SHIFT = false;}
-                                ps2::KeyID::KeyRightShift => {RIGHT_SHIFT = false;}
+extern "x86-interrupt" fn interrupt_ps2_keyboard() {unsafe {
+    let printer = &mut *PANIC_WRITE_POINTER.unwrap();
+    while ps2::poll_input() {
+        let scancode = ps2::read_input();
+        PS2_SCANCODES[PS2_INDEX] = scancode;
+        PS2_INDEX += 1;
+        match ps2::scancodes_2(&PS2_SCANCODES[0..PS2_INDEX]) {
+            Ok(ps2_scan) => match ps2_scan {
+                ps2::Ps2Scan::Finish(input_event) => {
+                    //writeln!(printer, "PS/2 KEYBOARD {:?}", input_event);
+                    //writeln!(printer, "PS/2 KEYBOARD SUCCESS: {:?}", &PS2_SCANCODES[0..PS2_INDEX]);
+                    if let ps2::InputEvent::DigitalKey(press_type, key_id) = input_event {match press_type {
+                        ps2::PressType::Press => match ps2::us_qwerty(key_id, CAPS_LOCK ^ (LEFT_SHIFT || RIGHT_SHIFT), NUM_LOCK) {
+                            ps2::KeyStr::Key(phys_id) => match phys_id {
+                                ps2::KeyID::KeyLeftShift => {LEFT_SHIFT = true;}
+                                ps2::KeyID::KeyRightShift => {RIGHT_SHIFT = true;}
+                                ps2::KeyID::KeyCapsLock => {CAPS_LOCK = !CAPS_LOCK;}
+                                ps2::KeyID::NumLock => {NUM_LOCK = !NUM_LOCK;}
                                 _ => {}
-                            } 
-                        }}
-                        PS2_INDEX = 0;
-                    }
-                    ps2::Ps2Scan::Continue => {}
-                }
-                Err(error) => {
-                    writeln!(printer, "PS/2 KEYBOARD ERROR: {:?}", &PS2_SCANCODES[0..PS2_INDEX]);
+                            }
+                            ps2::KeyStr::Str(string) => {write!(printer, "{}", string);}
+                        }
+                        ps2::PressType::Unpress => match key_id {
+                            ps2::KeyID::KeyLeftShift => {LEFT_SHIFT = false;}
+                            ps2::KeyID::KeyRightShift => {RIGHT_SHIFT = false;}
+                            _ => {}
+                        } 
+                    }}
                     PS2_INDEX = 0;
                 }
+                ps2::Ps2Scan::Continue => {}
+            }
+            Err(error) => {
+                writeln!(printer, "PS/2 KEYBOARD ERROR: {:?} | {}", &PS2_SCANCODES[0..PS2_INDEX], error);
+                PS2_INDEX = 0;
             }
         }
-        pic::end_irq(0x01);
     }
-}
+    pic::pic_end_irq(0x01);
+}}
 
+//Timer Function Test
+static mut TIMER_PRINT: bool = false;
+static mut TIMER_TEXT_PIPE: *mut TextPipe = 0 as *mut TextPipe;
+extern "x86-interrupt" fn interrupt_timer() {unsafe {
+    if TIMER_PRINT {
+        let pipe = &mut *TIMER_TEXT_PIPE;
+        pipe.append("LAPIC TIMER INTERRUPT ");
+    }
+    TIMER_PRINT = !TIMER_PRINT;
+    pic::lapic_end_int()
+}}
+
+//Empty Function
+extern "x86-interrupt" fn _interrupt_dummy() {unsafe {
+    pic::lapic_end_int()
+}}
 
 // PANIC HANDLER
 //Panic Variables
@@ -415,6 +458,8 @@ static mut PANIC_WRITE_POINTER: Option<*mut dyn Write> = None;
 #[cfg(not(test))]
 #[panic_handler]
 fn panic_handler(panic_info: &PanicInfo) -> ! {
+    use x86_64::instructions::hlt;
+
     unsafe {
         let printer = &mut *PANIC_WRITE_POINTER.unwrap();
         write!(printer, "\nKernel Halt: ");
@@ -426,8 +471,7 @@ fn panic_handler(panic_info: &PanicInfo) -> ! {
             writeln!(printer, "Line:   {}", panic_location.line());
             writeln!(printer, "Column: {}", panic_location.column());
         }
-        hlt();
-        loop{};
+        loop {hlt();};
     }
 }
 
@@ -447,7 +491,7 @@ impl PageAllocator for NoneAllocator {
     fn allocate_page     (&self)                            -> Result<PhysicalAddress, &'static str> {
         Err("No Allocator: Allocate page called.")
     }
-    fn deallocate_page   (&self, physical: PhysicalAddress) -> Result<(),              &'static str> {
+    fn deallocate_page   (&self, _physical: PhysicalAddress) -> Result<(),              &'static str> {
         Err("No Allocator: De-allocate page called.")
     }
     fn physical_to_linear(&self, physical: PhysicalAddress) -> Result<LinearAddress,   &'static str> {
@@ -494,5 +538,28 @@ impl PageAllocator for UsableMemoryPageAllocator {
 
     fn physical_to_linear(&self, physical: PhysicalAddress) -> Result<LinearAddress,   &'static str> {
         Ok(LinearAddress(physical.add(self.identity_offset).0))
+    }
+}
+
+// PIPING
+struct TextPipe {
+    pub position: usize,
+    pub size: usize,
+    pub bytes: *mut [u8]
+}
+impl TextPipe {
+    pub unsafe fn append(&mut self, string: &str) {
+        if self.position >= self.size {return}
+        let bytes = string.as_bytes();
+        for i in 0..bytes.len() {
+            if self.position >= self.size {break}
+            (* self.bytes)[self.position] = bytes[i];
+            self.position += 1;
+        }
+    }
+    pub unsafe fn clear(&mut self) -> &str {
+        let ret = core::str::from_utf8(&(*self.bytes)[0..self.position]).unwrap();
+        self.position = 0;
+        ret
     }
 }

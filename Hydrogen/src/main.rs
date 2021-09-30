@@ -26,7 +26,6 @@ use photon::*;
 use gluon::*;
 use gluon::elf::*;
 use gluon::mem::*;
-use x86_64::structures::gdt::GlobalDescriptorTable;
 use core::cell::Cell;
 use core::cell::RefCell;
 use core::convert::TryInto;
@@ -807,7 +806,7 @@ impl<'a> PageAllocator for UefiPageAllocator<'a> {
     fn allocate_page     (&self)                            -> Result<PhysicalAddress, &'static str> {
         Ok(unsafe {allocate_page_zeroed(self.boot_services, MemoryType::LOADER_DATA)})
     }
-    fn deallocate_page   (&self, physical: PhysicalAddress) -> Result<(),              &'static str> {
+    fn deallocate_page   (&self, _physical: PhysicalAddress) -> Result<(),              &'static str> {
         Ok(())
     }
     fn physical_to_linear(&self, physical: PhysicalAddress) -> Result<LinearAddress,   &'static str> {
@@ -842,7 +841,7 @@ impl PageAllocator for ZonePageAllocator {
             Ok(PhysicalAddress(location as usize))
         }
     }
-    fn deallocate_page   (&self, physical: PhysicalAddress) -> Result<(),              &'static str> {
+    fn deallocate_page   (&self, _physical: PhysicalAddress) -> Result<(),              &'static str> {
         Ok(())
     }
     fn physical_to_linear(&self, physical: PhysicalAddress) -> Result<LinearAddress,   &'static str> {

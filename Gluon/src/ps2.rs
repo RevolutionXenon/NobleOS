@@ -21,12 +21,12 @@ pub unsafe fn write_memory(address: u8, data: u8) -> Result<(), &'static str> {
 }
 
 pub unsafe fn test_controller() -> bool {PORT_PS2_COMMAND.write(0xAA); while PORT_PS2_STATUS.read() & 0x01 == 0 {} PORT_PS2_DATA.read() == 0x55}
-pub unsafe fn test_port_1    () -> bool {PORT_PS2_COMMAND.write(0xAB); while PORT_PS2_STATUS.read() & 0x01 == 0 {} PORT_PS2_DATA.read() == 0x00}
-pub unsafe fn test_port_2    () -> bool {PORT_PS2_COMMAND.write(0xA9); while PORT_PS2_STATUS.read() & 0x01 == 0 {} PORT_PS2_DATA.read() == 0x00}
+pub unsafe fn test_port_1()     -> bool {PORT_PS2_COMMAND.write(0xAB); while PORT_PS2_STATUS.read() & 0x01 == 0 {} PORT_PS2_DATA.read() == 0x00}
+pub unsafe fn test_port_2()     -> bool {PORT_PS2_COMMAND.write(0xA9); while PORT_PS2_STATUS.read() & 0x01 == 0 {} PORT_PS2_DATA.read() == 0x00}
 
-pub unsafe fn enable_port1 () {PORT_PS2_COMMAND.write(0xAE)}
+pub unsafe fn enable_port1()  {PORT_PS2_COMMAND.write(0xAE)}
 pub unsafe fn disable_port1() {PORT_PS2_COMMAND.write(0xAD)}
-pub unsafe fn enable_port2 () {PORT_PS2_COMMAND.write(0xA8)}
+pub unsafe fn enable_port2()  {PORT_PS2_COMMAND.write(0xA8)}
 pub unsafe fn disable_port2() {PORT_PS2_COMMAND.write(0xA7)}
 
 pub unsafe fn enable_int_port1()  {write_memory(0x00, read_memory(0x00).unwrap() | 0x01).unwrap();}
@@ -321,7 +321,7 @@ pub enum Ps2Scan {
 
 pub fn scancodes_2(scancodes: &[u8]) -> Result<Ps2Scan, &'static str> {
     match scancodes.len() {
-        0x1 => match scancodes[0] {
+        0x01 => match scancodes[0] {
             0x01 => Ok(Ps2Scan::Finish(InputEvent::DigitalKey(PressType::Press, KeyID::KeyF09))),
             0x03 => Ok(Ps2Scan::Finish(InputEvent::DigitalKey(PressType::Press, KeyID::KeyF05))),
             0x04 => Ok(Ps2Scan::Finish(InputEvent::DigitalKey(PressType::Press, KeyID::KeyF03))),
