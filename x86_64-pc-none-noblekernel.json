@@ -21,7 +21,8 @@
       "-nodefaultlibs"
     ],
     "ld.lld": [
-      "--Bstatic"
+      "--Bstatic",
+      "-znotext"
     ]
   },
   "no-default-libraries": true,

@@ -122,35 +122,6 @@ pub fn oct4_to_pointer(pml4: usize)                                             
 pub fn io_wait() {
     unsafe {PORT_WAIT.write(0x00);}
 }
-/*pub fn cpuid(command: u32) -> (u32, u32, u32, u32) {
-    let r1: u32;
-    let r2: u32;
-    let r3: u32;
-    let r4: u32;
-    unsafe {asm!(
-        "PUSH RAX",
-        "PUSH RBX",
-        "PUSH RCX",
-        "PUSH RDX",
-        "MOV EAX, {command}",
-        "CPUID",
-        "MOV {r1}, EAX",
-        "MOV {r2}, EBX",
-        "MOV {r3}, ECX",
-        "MOV {r4}, EDX",
-        "POP RDX",
-        "POP RCX",
-        "POP RBX",
-        "POP RAX",
-        command = in(reg) command,
-        r1 = out(reg) r1,
-        r2 = out(reg) r2,
-        r3 = out(reg) r3,
-        r4 = out(reg) r4,
-        options(nostack)
-    )}
-    (r1, r2, r3, r4)
-}*/
 
 //Ports
 pub static mut PORT_PIC1_COMMAND:   PortGeneric<u8,  WriteOnlyAccess> = PortGeneric::<u8,  WriteOnlyAccess>::new(0x0020);
