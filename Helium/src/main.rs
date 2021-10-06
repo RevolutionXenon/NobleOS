@@ -37,7 +37,7 @@ use core::{fmt::Write, ptr::{write_volatile}, slice::from_raw_parts_mut};
 use core::panic::PanicInfo;
 
 //Constants
-const HELIUM_VERSION: &str = "vDEV-2021-09-29"; //CURRENT VERSION OF KERNEL
+const HELIUM_VERSION: &str = "vDEV-2021-10-06"; //CURRENT VERSION OF KERNEL
 static WHITESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
 static _BLACKSPACE: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
 static _BLUESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE,  background: COLOR_BGRX_BLACK};
