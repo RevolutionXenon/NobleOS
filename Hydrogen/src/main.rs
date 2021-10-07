@@ -79,6 +79,13 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     let graphics_output_protocol = unsafe {&mut *graphics_output_protocol.get()};
     let graphics_frame_pointer = graphics_output_protocol.frame_buffer().as_mut_ptr();
     unsafe {PHYSICAL_FRAME_POINTER = graphics_frame_pointer};
+    //Screen Variables
+    let whitespace = Character::<BGRX_DEPTH>::new(' ', COLOR_WHT_BGRX, COLOR_BLK_BGRX);
+    let bluespace  = Character::<BGRX_DEPTH>::new(' ', COLOR_BLU_BGRX, COLOR_BLK_BGRX);
+    let renderer = Renderer::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH>::new(graphics_frame_pointer);
+    let mut frame = CharacterFrame::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_FRAME_HEIGHT, F1_FRAME_WIDTH>::new(renderer, whitespace);
+    let mut printer = PrintWindow::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_PRINT_LINES, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, F1_PRINT_Y, F1_PRINT_X>::new(renderer, whitespace, whitespace);
+    let mut inputter = InputWindow::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_INPUT_LENGTH, F1_INPUT_WIDTH, F1_INPUT_Y, F1_INPUT_X>::new(renderer, whitespace);
     //Graphics Output Protocol set graphics mode
     set_graphics_mode(graphics_output_protocol);
     let _st = graphics_output_protocol.current_mode_info().stride();
@@ -87,14 +94,14 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     //Simple File System initialization
     let simple_file_system = match boot_services.locate_protocol::<SimpleFileSystem>() {
         Ok(sfs) => sfs,
-        Err(_) => panic!("Simple File System initialization failed at completion.")
+        Err(error) => panic!(uefi_error_readout(error.status())),
     };
     let simple_file_system = simple_file_system.expect("Simjple File System initialization failed at unsafe cell.");
     let simple_file_system = unsafe {&mut *simple_file_system.get()};
     //Input initialization
     let input = match boot_services.locate_protocol::<Input>() {
         Ok(ink) => ink,
-        Err(_) => panic!("Input initialization failed at completion.")
+        Err(error) => panic!(uefi_error_readout(error.status())),
     };
     let input = input.expect("Input initialization failed at unsafe cell.");
     let input = unsafe {&mut *input.get()};
@@ -106,8 +113,8 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     }
     //Locational Read Implementation
     impl<'a> LocationalRead for FileWrapper<'a>{
-        fn read(&mut self, offset: u64, buffer: &mut [u8]) -> Result<(), &'static str> {
-            self.file.set_position(offset);
+        fn read(&mut self, offset: usize, buffer: &mut [u8]) -> Result<(), &'static str> {
+            self.file.set_position(offset as u64);
             match self.file.read(buffer) {
                 Ok(completion) => {
                     let size = completion.unwrap(); 
@@ -124,22 +131,15 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     }
 
     // GRAPHICS SETUP
-    //Screen Variables
-    let whitespace = Character::<BGRX_DEPTH>::new(' ', COLOR_WHT_BGRX, COLOR_BLK_BGRX);
-    let bluespace  = Character::<BGRX_DEPTH>::new(' ', COLOR_BLU_BGRX, COLOR_BLK_BGRX);
-    let renderer = Renderer::<SCREEN_H_1920_1080_BRGX, SCREEN_W_1920_1080_BRGX, BGRX_DEPTH>::new(graphics_frame_pointer);
-    let mut frame = CharacterFrame::<SCREEN_H_1920_1080_BRGX, SCREEN_W_1920_1080_BRGX, BGRX_DEPTH, CHARFR_H_1920_1080_BRGX, CHARFR_W_1920_1080_BRGX>::new(renderer, whitespace);
-    let mut printer = PrintWindow::<SCREEN_H_1920_1080_BRGX, SCREEN_W_1920_1080_BRGX, BGRX_DEPTH, PRINTW_M_1920_1080_BRGX, PRINTW_H_1920_1080_BRGX, PRINTW_W_1920_1080_BRGX, PRINTW_Y_1920_1080_BRGX, PRINTW_X_1920_1080_BRGX>::new(renderer, whitespace, whitespace);
-    let mut inputter = InputWindow::<SCREEN_H_1920_1080_BRGX, SCREEN_W_1920_1080_BRGX, BGRX_DEPTH, INPUTW_L_1920_1080_BRGX, INPUTW_W_1920_1080_BRGX, INPUTW_Y_1920_1080_BRGX, INPUTW_X_1920_1080_BRGX>::new(renderer, whitespace);
     //User Interface initialization
-    frame.horizontal_line(PRINTW_Y_1920_1080_BRGX-1, 0,                         CHARFR_W_1920_1080_BRGX-1,  bluespace);
-    frame.horizontal_line(INPUTW_Y_1920_1080_BRGX-1, 0,                         CHARFR_W_1920_1080_BRGX-1,  bluespace);
-    frame.horizontal_line(INPUTW_Y_1920_1080_BRGX+1, 0,                         CHARFR_W_1920_1080_BRGX-1,  bluespace);
-    frame.vertical_line(0,                         PRINTW_Y_1920_1080_BRGX-1, INPUTW_Y_1920_1080_BRGX+1,  bluespace);
-    frame.vertical_line(CHARFR_W_1920_1080_BRGX-1, PRINTW_Y_1920_1080_BRGX-1, INPUTW_Y_1920_1080_BRGX+1,  bluespace);
+    frame.horizontal_line(F1_PRINT_Y-1,     0,            F1_FRAME_WIDTH-1,  bluespace);
+    frame.horizontal_line(F1_INPUT_Y-1,     0,            F1_FRAME_WIDTH-1,  bluespace);
+    frame.horizontal_line(F1_INPUT_Y+1,     0,            F1_FRAME_WIDTH-1,  bluespace);
+    frame.vertical_line(  0,                F1_PRINT_Y-1, F1_INPUT_Y+1,      bluespace);
+    frame.vertical_line(  F1_FRAME_WIDTH-1, F1_PRINT_Y-1, F1_INPUT_Y+1,      bluespace);
     frame.horizontal_string("NOBLE OS",            0, 0,                                                     bluespace);
-    frame.horizontal_string("HYDROGEN BOOTLOADER", 0, CHARFR_W_1920_1080_BRGX - 20 - HYDROGEN_VERSION.len(), bluespace);
-    frame.horizontal_string(HYDROGEN_VERSION,      0, CHARFR_W_1920_1080_BRGX -      HYDROGEN_VERSION.len(), bluespace);
+    frame.horizontal_string("HYDROGEN BOOTLOADER", 0, F1_FRAME_WIDTH - 20 - HYDROGEN_VERSION.len(), bluespace);
+    frame.horizontal_string(HYDROGEN_VERSION,      0, F1_FRAME_WIDTH -      HYDROGEN_VERSION.len(), bluespace);
     frame.render();
     writeln!(printer, "Hydrogen Bootloader     {}", HYDROGEN_VERSION);
     writeln!(printer, "Photon Graphics Library {}", PHOTON_VERSION);
@@ -157,9 +157,9 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     //Read kernel file
     let mut sfs_kernel_wrap = FileWrapper{file: &mut sfs_kernel};
     let mut kernel_program_buffer = [ELFProgramHeader::default(); 10];
-    let kernel = match ELFFile::new(&mut sfs_kernel_wrap, &mut kernel_program_buffer) {
-        Ok(elffile) =>  {writeln!(printer, "New ELF Reader System Success."); elffile},
-        Err(error) => {writeln!(printer, "New ELF Reader System Failure: {}", error); panic!()},
+    let mut kernel = match ELFFile::new(&mut sfs_kernel_wrap, &mut kernel_program_buffer) {
+        Ok(elffile) =>  elffile,
+        Err(error) => panic!(error),
     };
     //Check ELF header validity
     if kernel.file_header.binary_interface         != ApplicationBinaryInterface::None     {writeln!(printer, "Kernel load: Incorrect Application Binary Interface (ei_osabi). Should be SystemV/None (0x00)."); panic!();}
@@ -180,23 +180,28 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         writeln!(printer, "Kernel Code Size:                   0x{:16X}", kernel.memory_size());
     }
     //Allocate memory for code
-    let kernel_stack_size = PAGE_SIZE_2MIB;
-    writeln!(printer, "Kernel Memory Size (new): {}", kernel.memory_size());
-    let kernel_total_size = kernel.memory_size() as usize + kernel_stack_size;
-    let kernl_ptr_phys = unsafe { allocate_memory(boot_services, MemoryType::LOADER_CODE, kernel_total_size, PAGE_SIZE_4KIB as usize) };
+    let kernel_stack_size: usize = PAGE_SIZE_2MIB;
+    let kernel_total_size: usize = kernel.memory_size() as usize + kernel_stack_size;
+    let kernel_physical: *mut u8 = unsafe { allocate_memory(boot_services, MemoryType::LOADER_CODE, kernel_total_size, PAGE_SIZE_4KIB as usize) };
     //Load code into memory
-    for program_header in kernel.program_headers {
+    /*for program_header in kernel.program_headers {
         if program_header.program_type == ProgramType::Loadable {
             let mut buf:Vec<u8> = vec![0; program_header.file_size as usize];
-            kernel.file.read(program_header.file_offset, &mut buf);
+            kernel.file.read(program_header.file_offset as usize, &mut buf);
             unsafe {copy_nonoverlapping(buf.as_ptr(), kernl_ptr_phys.add(program_header.virtual_address as usize), program_header.memory_size as usize);}
         }
-    }
+    }*/
+    kernel.load(kernel_physical);
     //Dynamic Relocation
+    for program_header in kernel.program_headers {
+        if program_header.program_type == ProgramType::Dynamic {
+
+        }
+    }
 
     // BOOT LOAD
     let pml4_knenv: *mut u8;
-    unsafe{
+    unsafe {
         // PAGE TABLES
         //Page Map Level 4: Kernel Environment
         pml4_knenv = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
@@ -211,10 +216,10 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         let pml3_osiph:*mut u8 = create_pml3_offset_1gib(boot_services, 0 as *mut u8, PAGE_SIZE_512G);
         writeln!(printer, "PML3 OSIPH: 0o{0:016o} 0x{0:016X}", pml3_osiph as usize);
         //Page Map Level 3: Kernel
-        let pml3_kernl = create_pml3_offset_4kib(boot_services, kernl_ptr_phys, kernel_total_size);
+        let pml3_kernl = create_pml3_offset_4kib(boot_services, kernel_physical, kernel_total_size);
         writeln!(printer, "PML3 KERNL: 0o{0:016o} 0x{0:016X}", pml3_kernl as usize);
         //Page Map Level 3: Frame Buffer
-        let pml3_frame = create_pml3_offset_2mib(boot_services, graphics_frame_pointer, SCREEN_H_1920_1080_BRGX*SCREEN_W_1920_1080_BRGX*BGRX_DEPTH);
+        let pml3_frame = create_pml3_offset_2mib(boot_services, graphics_frame_pointer, F1_SCREEN_HEIGHT*F1_SCREEN_WIDTH*BGRX_DEPTH);
         writeln!(printer, "PML3 FRAME: 0o{0:016o} 0x{0:016X}", pml3_frame as usize);
         //Write PML4 Entries
         write_pte(pml4_knenv, pml3_efiph, PHYSM_PHYS_OCT, PAGE_SIZE_4KIB, false, false, false, false, false, true);
@@ -237,11 +242,11 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                 //Convert to usable type
                 let input_char = char::from(input_char16);
                 //User has hit enter
-                if input_char == '\r'{
+                if input_char == '\r' {
                     //Return to bottom of screen
                     printer.end_down();
                     //Execute command and reset input stack
-                    let mut buffer = [' '; INPUTW_L_1920_1080_BRGX];
+                    let mut buffer = [' '; F1_INPUT_LENGTH];
                     let command = &inputter.to_chararray(&mut buffer).iter().collect::<String>();
                     let boot_command_return = command_processor(&mut printer, &system_table_boot, command);
                     inputter.flush(whitespace);
@@ -324,8 +329,8 @@ fn panic_handler(panic_info: &PanicInfo) -> ! {
         if PHYSICAL_FRAME_POINTER != 0 as *mut u8 {
             let whitespace = Character::<BGRX_DEPTH>::new(' ', COLOR_WHT_BGRX, COLOR_BLK_BGRX);
             let blackspace = Character::<BGRX_DEPTH>::new(' ', COLOR_BLK_BGRX, COLOR_WHT_BGRX);
-            let renderer = Renderer::<SCREEN_H_1920_1080_BRGX, SCREEN_W_1920_1080_BRGX, BGRX_DEPTH>::new(PHYSICAL_FRAME_POINTER);
-            let mut printer = PrintWindow::<SCREEN_H_1920_1080_BRGX, SCREEN_W_1920_1080_BRGX, BGRX_DEPTH, PRINTW_H_1920_1080_BRGX, PRINTW_H_1920_1080_BRGX, PRINTW_W_1920_1080_BRGX, PRINTW_Y_1920_1080_BRGX, PRINTW_X_1920_1080_BRGX>::new(renderer, blackspace, whitespace);
+            let renderer = Renderer::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH>::new(PHYSICAL_FRAME_POINTER);
+            let mut printer = PrintWindow::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_PRINT_HEIGHT, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, F1_PRINT_Y, F1_PRINT_X>::new(renderer, blackspace, whitespace);
             printer.push_render("BOOTLOADER PANIC!\n", blackspace);
             writeln!(printer, "{}", panic_info);
         }
@@ -388,7 +393,7 @@ fn uefi_error_readout(error: Status) -> &'static str{
 fn set_graphics_mode(gop: &mut GraphicsOutput) {
     let mode:Mode = gop.modes().map(|mode| mode.expect("Graphics Output Protocol query of available modes failed.")).find(|mode| {
             let info = mode.info();
-            info.resolution() == (SCREEN_W_1920_1080_BRGX, SCREEN_H_1920_1080_BRGX)
+            info.resolution() == (F1_SCREEN_WIDTH, F1_SCREEN_HEIGHT)
         }).unwrap();
     gop.set_mode(&mode).expect_success("Graphics Output Protocol set mode failed.");
 }

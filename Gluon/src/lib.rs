@@ -2,7 +2,7 @@
 // Gluon is the Noble loading library:
 // Memory locations of important objects
 // Sizes and counts related to page tables
-// Macros, Structs, and Enums related to the contents of ELF files
+// Macros, Structs, and Enums related to the contents and handling of ELF files
 
 
 // HEADER
@@ -10,9 +10,15 @@
 #![no_std]
 
 //Imports
-use core::convert::{TryFrom};
+use core::convert::TryFrom;
+use core::intrinsics::copy_nonoverlapping;
 use elf_file_header::ELFFileHeader;
+use elf_file_header::ObjectType;
 use elf_program_header::ELFProgramHeader;
+use elf_program_header::ProgramType;
+use elf_dynamic_table::DynamicTableIterator;
+use elf_dynamic_table::DynamicEntryType;
+use elf_dynamic_table::RelocationType;
 
 //Constants
 pub const GLUON_VERSION:  &    str   = "vDEV-2021-08-12";                             //CURRENT VERSION OF GRAPHICS LIBRARY
@@ -40,8 +46,7 @@ pub const PAGE_NMBR_LVL4:      usize = 0o____________100_000_000_0000_usize;    
 
 // MACROS
 //Numeric Enum
-macro_rules!numeric_enum {
-    (
+macro_rules!numeric_enum {(
         #[repr($repr:ident)]
         $(#[$a:meta])*
         $vis:vis enum $name:ident {
@@ -69,27 +74,27 @@ macro_rules!numeric_enum {
 // TRAITS
 //Locational Read
 pub trait LocationalRead {
-    fn read(&mut self, offset: u64, buffer: &mut [u8]) -> Result<(), &'static str>;
+    fn read(&mut self, offset: usize, buffer: &mut [u8]) -> Result<(), &'static str>;
 }
 
 
 // STRUCTS
 //Full ELF File Header
-pub struct ELFFile<'a> {
-    pub file:            &'a mut dyn LocationalRead,
-    pub file_header:                 ELFFileHeader,
-    pub program_headers: &'a         [ELFProgramHeader],
+pub struct ELFFile<'a, LR: 'a+LocationalRead> {
+    pub file:            &'a mut LR,
+    pub file_header:             ELFFileHeader,
+    pub program_headers: &'a     [ELFProgramHeader],
 }
-impl<'a> ELFFile<'a> {
+impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
     // CONSTRUCTOR
-    pub fn new(file: &'a mut dyn LocationalRead, program_header_buffer: &'a mut [ELFProgramHeader]) -> Result<ELFFile<'a>, &'static str> {
+    pub fn new(file: &'a mut LR, program_header_buffer: &'a mut [ELFProgramHeader]) -> Result<ELFFile<'a, LR>, &'static str> {
         //Load File Header
         let file_header = match ELFFileHeader::new(&{let mut buf:[u8; 0x40] = [0u8; 0x40]; match file.read(0x00,  &mut buf) {Ok(_) => (), Err(error) => return Err(error)}; buf}) {Ok(result) => result, Err(error) => return Err(error)};
         //Load Program Headers
         if file_header.program_header_number as usize > program_header_buffer.len() {return Err("ELF File: More than the given maximum number of program headers found.")}
         for i in 0..file_header.program_header_number as usize {
             //New Program Header
-            program_header_buffer[i] = match ELFProgramHeader::new(&{let mut buf:[u8; 0x38] = [0u8; 0x38]; match file.read((file_header.header_size + i as u16 *file_header.program_header_entry_size) as u64, &mut buf) {Ok(_) => (), Err(error) => return Err(error)}; buf}, file_header.bit_width, file_header.endianness) {
+            program_header_buffer[i] = match ELFProgramHeader::new(&{let mut buf:[u8; 0x38] = [0u8; 0x38]; match file.read(file_header.header_size as usize + i*file_header.program_header_entry_size as usize, &mut buf) {Ok(_) => (), Err(error) => return Err(error)}; buf}, file_header.bit_width, file_header.endianness) {
                 Ok(valid_program_header)    => valid_program_header,
                 Err(invalid_program_header) => invalid_program_header
             }
@@ -127,7 +132,76 @@ impl<'a> ELFFile<'a> {
         //Return
         return if loadable_found {program_highest_address - program_lowest_address} else {0};
     }
+
+    //Load File Into Memory (Very Important to Allocate Memory First)
+    pub fn load(&mut self, location: *mut u8) {
+        for program_header in self.program_headers {
+            if program_header.program_type == ProgramType::Loadable {
+                const buffer_size: usize = 512;
+                let mut buffer: [u8; buffer_size] = [0u8; buffer_size];
+                let count = program_header.file_size as usize/buffer_size;
+                for i in 0..count {
+                    self.file.read(program_header.file_offset as usize+i*buffer_size, &mut buffer);
+                    unsafe {copy_nonoverlapping(buffer.as_ptr(), location.add(program_header.virtual_address as usize + i*buffer_size as usize), buffer_size)}
+                }
+                let leftover: usize = program_header.file_size as usize %buffer_size;
+                if leftover != 0 {
+                    self.file.read(program_header.file_offset as usize + count*buffer_size, &mut buffer[0..leftover]);
+                    unsafe {copy_nonoverlapping(buffer.as_ptr(), location.add(program_header.virtual_address as usize + count*buffer_size as usize), leftover)}
+                }
+            }
+        }
+    }
+
+    //Do Relocation (Very Important to Load First)
+    pub fn relocate(&mut self, location: *mut u8) -> Result<(), &'static str> {
+        if self.file_header.object_type != ObjectType::Shared {return Err("ELF File: Object Type Not Yet Supported for Relocation.")}
+        for program_header in self.program_headers {
+            if program_header.program_type == ProgramType::Dynamic {
+                let mut symbol_table_address:                 Option<*const u8> = None;
+                let mut symbol_table_entry_size:              Option<u64>       = None;
+                let mut string_table_address:                 Option<*const u8> = None;
+                let mut string_table_size:                    Option<u64>       = None;
+                let mut implicit_relocation_table_address:    Option<*const u8> = None;
+                let mut implicit_relocation_table_size:       Option<u64>       = None;
+                let mut implicit_relocation_table_entry_size: Option<u64>       = None;
+                let mut explicit_relocation_table_address:    Option<*const u8> = None;
+                let mut explicit_relocation_table_size:       Option<u64>       = None;
+                let mut explicit_relocation_table_entry_size: Option<u64>       = None;
+                let mut procedure_linkage_table_address:      Option<*const u8> = None;
+                let mut procedure_linkage_table_size:         Option<u64>       = None;
+                let mut procedure_linkage_table_type:         RelocationType    = RelocationType::Explicit;
+
+                for dynamic_entry_read in DynamicTableIterator::new(self.file, &self.file_header, program_header) {
+                    match dynamic_entry_read {
+                        Ok(dynamic_entry) => {
+                            match dynamic_entry.entry_type {
+                                DynamicEntryType::Null                             => return Err("ELF File: Encountered Null Dynamic Entry During Relocation."),
+                                DynamicEntryType::ProcedureLinkageTableSize        => procedure_linkage_table_size         = Some(dynamic_entry.value),
+                                DynamicEntryType::ProcedureLinkageTableAddress     => procedure_linkage_table_address      = Some(dynamic_entry.value as *mut u8),
+                                DynamicEntryType::StringTableAddress               => string_table_address                 = Some(dynamic_entry.value as *mut u8),
+                                DynamicEntryType::SymbolTableAddress               => symbol_table_address                 = Some(dynamic_entry.value as *mut u8),
+                                DynamicEntryType::ExplicitRelocationTableAddress   => explicit_relocation_table_address    = Some(dynamic_entry.value as *mut u8),
+                                DynamicEntryType::ExplicitRelocationTableSize      => explicit_relocation_table_size       = Some(dynamic_entry.value),
+                                DynamicEntryType::ExplicitRelocationTableEntrySize => explicit_relocation_table_entry_size = Some(dynamic_entry.value),
+                                DynamicEntryType::StringTableSize                  => string_table_size                    = Some(dynamic_entry.value),
+                                DynamicEntryType::SymbolTableEntrySize             => symbol_table_entry_size              = Some(dynamic_entry.value),
+                                DynamicEntryType::ImplicitRelocationTableAddress   => implicit_relocation_table_address    = Some(dynamic_entry.value as *mut u8),
+                                DynamicEntryType::ImplicitRelocationTableSize      => implicit_relocation_table_size       = Some(dynamic_entry.value),
+                                DynamicEntryType::ImplicitRelocationTableEntrySize => implicit_relocation_table_entry_size = Some(dynamic_entry.value),
+                                DynamicEntryType::ProcedureLinkageTableType        => procedure_linkage_table_type         = RelocationType::try_from(dynamic_entry.value).map_err(|_| "ELF File: Encountered Invalid PLT Type Value.")?,
+                                _ => {},
+                            }
+                        }
+                        Err(_) => (),
+                    }
+                }
+            }
+        }
+        return Err("ELF File: Dynamic Relocation Program Header Not Found.");
+    }
 }
+
 
 
 // MODULES
@@ -354,7 +428,7 @@ pub mod elf_file_header {
 pub mod elf_program_header {
     // IMPORTS
     use core::convert::{TryFrom, TryInto};
-    use crate::{BitWidth, Endianness, elf_file_header::ELFFileHeader};
+    use crate::{BitWidth, Endianness};
 
     // STRUCTS
     //Program Header
@@ -387,7 +461,6 @@ pub mod elf_program_header {
         // CONSTRUCTOR
         //New
         pub fn new(head: &[u8], bit_width: BitWidth, endianness: Endianness) -> Result<ELFProgramHeader, ELFProgramHeader> {
-            let diagnostic: &str;
             if bit_width == BitWidth::W64 && head.len() != 0x38 {return Err(default_diagnostic("ELF Program Header: Length of data given to parse from incorrect."))};
             let (_u16_fb, u32_fb, u64_fb): (fn([u8;2]) -> u16, fn([u8;4]) -> u32, fn([u8;8]) -> u64) = match endianness {
                 Endianness::Little => (u16::from_le_bytes, u32::from_le_bytes, u64::from_le_bytes),
@@ -430,6 +503,136 @@ pub mod elf_program_header {
     }
 }
 
+//Dynamic Table
+pub mod elf_dynamic_table {
+    // IMPORTS
+    use core::convert::TryFrom;
+    use crate::{BitWidth, Endianness, LocationalRead, elf_file_header::ELFFileHeader, elf_program_header::ELFProgramHeader};
+    
+    // STRUCTS
+    //Dynamic Entry
+    #[derive(Clone, Copy)]
+    pub struct DynamicEntry {
+        pub entry_type: DynamicEntryType,
+        pub value:      u64,
+    }
+
+    //Dynamic Table Iterator
+    pub struct DynamicTableIterator<'a, R: 'a+LocationalRead> {
+        file:   &'a mut R,
+        bit_width:      BitWidth,
+        endianness:     Endianness,
+        offset:         u64,
+        entry_count:    u64,
+        entry_position: u64,
+    }
+    impl<'a, R: 'a+LocationalRead> DynamicTableIterator<'a, R> {
+        // CONSTRUCTOR
+        pub fn new(file: &'a mut R, file_header: &ELFFileHeader, program_header: &ELFProgramHeader) -> Self{
+            DynamicTableIterator {
+                file,
+                bit_width: file_header.bit_width,
+                endianness: file_header.endianness,
+                offset: program_header.file_offset,
+                entry_count: program_header.file_size / match file_header.bit_width{W32 => 8, W64 => 16},
+                entry_position: 0,
+            }
+        }
+
+        // FUNCTIONS
+        //Get Entry
+        fn entry(&mut self) -> Result<DynamicEntry, &'static str> {
+            let (_u16_fb, u32_fb, u64_fb): (fn([u8;2]) -> u16, fn([u8;4]) -> u32, fn([u8;8]) -> u64) = match self.endianness {
+                Endianness::Little => (u16::from_le_bytes, u32::from_le_bytes, u64::from_le_bytes),
+                Endianness::Big    => (u16::from_be_bytes, u32::from_be_bytes, u64::from_be_bytes),
+            };
+            match self.bit_width {
+                BitWidth::W32 => {
+                    let mut b1 = [0u8; 4];
+                    let mut b2 = [0u8; 4];
+                    self.file.read(self.offset as usize + 8*self.entry_position as usize, &mut b1)?;
+                    self.file.read(self.offset as usize + 8*self.entry_position as usize + 4, &mut b2)?;
+                    Ok(DynamicEntry{
+                        entry_type: DynamicEntryType::try_from(u32_fb(b1) as u64).map_err(|_| "Unrecognized Dynamic Entry Type.")?,
+                        value: u32_fb(b2) as u64,
+                    })
+                }
+                BitWidth::W64 => {
+                    let mut b1 = [0u8; 8];
+                    let mut b2 = [0u8; 8];
+                    self.file.read(self.offset as usize + 16*self.entry_position as usize, &mut b1)?;
+                    self.file.read(self.offset as usize + 16*self.entry_position as usize + 8, &mut b2)?;
+                    Ok(DynamicEntry{
+                        entry_type: DynamicEntryType::try_from(u64_fb(b1)).map_err(|_| "Unrecognized Dynamic Entry Type.")?,
+                        value: u64_fb(b2),
+                    })
+                },
+            }
+        }
+    }
+    impl<'a, R: 'a+LocationalRead> Iterator for DynamicTableIterator<'a, R> {
+        type Item = Result<DynamicEntry, &'static str>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.entry_position >= self.entry_count {
+                None
+            }
+            else {
+                let entry = self.entry();
+                match entry {
+                    Ok(e) => if e.entry_type == DynamicEntryType::Null {return None}
+                    Err(_) => (),
+                }
+                self.entry_position += 1;
+                Some(entry)
+            }
+        }
+    }
+
+    // ENUMS
+    //Dynamic Entry Type
+    numeric_enum! {
+        #[repr(u64)]
+        #[derive(PartialEq)]
+        #[derive(Clone, Copy)]
+        pub enum DynamicEntryType {
+            Null                                     = 0x00,
+            Needed                                   = 0x01,
+            ProcedureLinkageTableSize                = 0x02,
+            ProcedureLinkageTableAddress             = 0x03,
+            SymbolHashTableAddress                   = 0x04,
+            StringTableAddress                       = 0x05,
+            SymbolTableAddress                       = 0x06,
+            ExplicitRelocationTableAddress           = 0x07,
+            ExplicitRelocationTableSize              = 0x08,
+            ExplicitRelocationTableEntrySize         = 0x09,
+            StringTableSize                          = 0x0A,
+            SymbolTableEntrySize                     = 0x0B,
+            InitializationFunctionAddress            = 0x0C,
+            TerminationFunctionAddress               = 0x0D,
+            StringTableNameOffset                    = 0x0E,
+            StringTablePathOffset                    = 0x0F,
+            SymbolicResolutionFlag                   = 0x10,
+            ImplicitRelocationTableAddress           = 0x11,
+            ImplicitRelocationTableSize              = 0x12,
+            ImplicitRelocationTableEntrySize         = 0x13,
+            ProcedureLinkageTableType                = 0x14,
+            DebugAddress                             = 0x15,
+            TextRelocationFlag                       = 0x16,
+            JumpRelocationAddress                    = 0x17,
+            BindNowFlag                              = 0x18,
+        }
+    }
+
+    //Relocation Type
+    numeric_enum!{
+        #[repr(u64)]
+        pub enum RelocationType {
+            Explicit = 0x07,
+            Implicit = 0x11,
+        }
+    }
+}
 
 // ENUMS
 //Bit Width

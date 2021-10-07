@@ -35,19 +35,19 @@ pub extern "sysv64" fn _start() -> ! {
     //Screen Variables
     let whitespace = Character::<BGRX_DEPTH>::new(' ', COLOR_WHT_BGRX, COLOR_BLK_BGRX);
     let redspace   = Character::<BGRX_DEPTH>::new(' ', COLOR_RED_BGRX, COLOR_BLK_BGRX);
-    let renderer = Renderer::<SCREEN_H_1920_1080_BRGX, SCREEN_W_1920_1080_BRGX, BGRX_DEPTH>::new(FRAME_VIRT_PTR);
-    let mut frame = CharacterFrame::<SCREEN_H_1920_1080_BRGX, SCREEN_W_1920_1080_BRGX, BGRX_DEPTH, CHARFR_H_1920_1080_BRGX, CHARFR_W_1920_1080_BRGX>::new(renderer, whitespace);
-    let mut printer = PrintWindow::<SCREEN_H_1920_1080_BRGX, SCREEN_W_1920_1080_BRGX, BGRX_DEPTH, PRINTW_M_1920_1080_BRGX, PRINTW_H_1920_1080_BRGX, PRINTW_W_1920_1080_BRGX, PRINTW_Y_1920_1080_BRGX, PRINTW_X_1920_1080_BRGX>::new(renderer, whitespace, whitespace);
-    let mut inputter = InputWindow::<SCREEN_H_1920_1080_BRGX, SCREEN_W_1920_1080_BRGX, BGRX_DEPTH, INPUTW_L_1920_1080_BRGX, INPUTW_W_1920_1080_BRGX, INPUTW_Y_1920_1080_BRGX, INPUTW_X_1920_1080_BRGX>::new(renderer, whitespace);
+    let renderer = Renderer::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH>::new(FRAME_VIRT_PTR);
+    let mut frame = CharacterFrame::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_FRAME_HEIGHT, F1_FRAME_WIDTH>::new(renderer, whitespace);
+    let mut printer = PrintWindow::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_PRINT_LINES, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, F1_PRINT_Y, F1_PRINT_X>::new(renderer, whitespace, whitespace);
+    let mut inputter = InputWindow::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_INPUT_LENGTH, F1_INPUT_WIDTH, F1_INPUT_Y, F1_INPUT_X>::new(renderer, whitespace);
     //User Interface initialization
-    frame.horizontal_line(PRINTW_Y_1920_1080_BRGX-1, 0,                         CHARFR_W_1920_1080_BRGX-1,  redspace);
-    frame.horizontal_line(INPUTW_Y_1920_1080_BRGX-1, 0,                         CHARFR_W_1920_1080_BRGX-1,  redspace);
-    frame.horizontal_line(INPUTW_Y_1920_1080_BRGX+1, 0,                         CHARFR_W_1920_1080_BRGX-1,  redspace);
-    frame.vertical_line(  0,                         PRINTW_Y_1920_1080_BRGX-1, INPUTW_Y_1920_1080_BRGX+1,  redspace);
-    frame.vertical_line(  CHARFR_W_1920_1080_BRGX-1, PRINTW_Y_1920_1080_BRGX-1, INPUTW_Y_1920_1080_BRGX+1,  redspace);
+    frame.horizontal_line(F1_PRINT_Y-1, 0,                         F1_FRAME_WIDTH-1,  redspace);
+    frame.horizontal_line(F1_INPUT_Y-1, 0,                         F1_FRAME_WIDTH-1,  redspace);
+    frame.horizontal_line(F1_INPUT_Y+1, 0,                         F1_FRAME_WIDTH-1,  redspace);
+    frame.vertical_line(  0,                         F1_PRINT_Y-1, F1_INPUT_Y+1,  redspace);
+    frame.vertical_line(  F1_FRAME_WIDTH-1, F1_PRINT_Y-1, F1_INPUT_Y+1,  redspace);
     frame.horizontal_string("NOBLE OS",      0, 0,                                                   redspace);
-    frame.horizontal_string("HELIUM KERNEL", 0, CHARFR_W_1920_1080_BRGX - 14 - HELIUM_VERSION.len(), redspace);
-    frame.horizontal_string(HELIUM_VERSION,  0, CHARFR_W_1920_1080_BRGX -      HELIUM_VERSION.len(), redspace);
+    frame.horizontal_string("HELIUM KERNEL", 0, F1_FRAME_WIDTH - 14 - HELIUM_VERSION.len(), redspace);
+    frame.horizontal_string(HELIUM_VERSION,  0, F1_FRAME_WIDTH -      HELIUM_VERSION.len(), redspace);
     frame.render();
     writeln!(printer, "Welcome to Noble OS");
     writeln!(printer, "Helium Kernel           {}", HELIUM_VERSION);
@@ -68,8 +68,8 @@ fn panic_handler(panic_info: &PanicInfo) -> ! {
     unsafe {
         let whitespace = Character::<BGRX_DEPTH>::new(' ', COLOR_WHT_BGRX, COLOR_BLK_BGRX);
             let blackspace = Character::<BGRX_DEPTH>::new(' ', COLOR_BLK_BGRX, COLOR_WHT_BGRX);
-            let renderer = Renderer::<SCREEN_H_1920_1080_BRGX, SCREEN_W_1920_1080_BRGX, BGRX_DEPTH>::new(FRAME_VIRT_PTR);
-            let mut printer = PrintWindow::<SCREEN_H_1920_1080_BRGX, SCREEN_W_1920_1080_BRGX, BGRX_DEPTH, PRINTW_H_1920_1080_BRGX, PRINTW_H_1920_1080_BRGX, PRINTW_W_1920_1080_BRGX, PRINTW_Y_1920_1080_BRGX, PRINTW_X_1920_1080_BRGX>::new(renderer, blackspace, whitespace);
+            let renderer = Renderer::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH>::new(FRAME_VIRT_PTR);
+            let mut printer = PrintWindow::<F1_SCREEN_HEIGHT, F1_SCREEN_WIDTH, BGRX_DEPTH, F1_PRINT_HEIGHT, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, F1_PRINT_Y, F1_PRINT_X>::new(renderer, blackspace, whitespace);
             printer.push_render("KERNEL PANIC!\n", blackspace);
             writeln!(printer, "{}", panic_info);
         
