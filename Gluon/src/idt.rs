@@ -56,7 +56,8 @@ impl GlobalDescriptorTable {
             gdt = in(reg) &gdt_bytes,
             cs  = in(reg) code_selector,
             ss  = in(reg) segment_selector,
-            options(nostack));
+            options(nostack)
+        );
     }
 }
 

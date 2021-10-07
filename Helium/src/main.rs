@@ -52,13 +52,15 @@ pub extern "sysv64" fn _start() -> ! {
     let pixel_renderer: PixelRendererHWD<ColorBGRX>;
     let character_renderer: CharacterTwoToneRenderer16x16<ColorBGRX>;
     let mut printer: PrintWindow::<F1_PRINT_LINES, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>;
+    let mut inputter: InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>;
     {
         pixel_renderer = PixelRendererHWD {pointer: oct4_to_pointer(FRAME_BUFFER_OCT).unwrap() as *mut ColorBGRX, height: F1_SCREEN_HEIGHT, width: F1_SCREEN_WIDTH};
         character_renderer = CharacterTwoToneRenderer16x16::<ColorBGRX> {renderer: &pixel_renderer, height: F1_FRAME_HEIGHT, width: F1_FRAME_WIDTH, y: 0, x: 0};
         let mut frame: FrameWindow::<F1_FRAME_HEIGHT, F1_FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = FrameWindow::<F1_FRAME_HEIGHT, F1_FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, WHITESPACE, 0, 0);
-        let mut _inputter: InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, WHITESPACE, F1_INPUT_Y, F1_INPUT_X);
+        inputter = InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, WHITESPACE, F1_INPUT_Y, F1_INPUT_X);
         printer = PrintWindow::<F1_PRINT_LINES, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, WHITESPACE, WHITESPACE, F1_PRINT_Y, F1_PRINT_X);
-        unsafe {PANIC_WRITE_POINTER = Some(&mut printer as &mut dyn Write as *mut dyn Write)};
+        unsafe {GLOBAL_WRITE_POINTER = Some(&mut printer as &mut dyn Write as *mut dyn Write)};
+        unsafe {GLOBAL_INPUT_POINTER = Some(&mut inputter as *mut InputWindow<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>)};
         //User Interface initialization
         frame.horizontal_line(F1_PRINT_Y-1, 0, F1_FRAME_WIDTH-1, REDSPACE);
         frame.horizontal_line(F1_INPUT_Y-1, 0, F1_FRAME_WIDTH-1, REDSPACE);
@@ -323,7 +325,7 @@ pub extern "sysv64" fn _start() -> ! {
         writeln!(printer, "CR3:    0x{:16X}", cr3);
         writeln!(printer, "RIP:    0x{:16X}", rip);
     }
-    
+
     // CREATE THREADS
     writeln!(printer, "\n=== THREAD STACK TEST===\n");
     unsafe {
@@ -411,7 +413,8 @@ static mut RIGHT_SHIFT: bool = false;
 static mut CAPS_LOCK:   bool = false;
 static mut NUM_LOCK:    bool = false;
 extern "x86-interrupt" fn interrupt_ps2_keyboard() {unsafe {
-    let printer = &mut *PANIC_WRITE_POINTER.unwrap();
+    let printer = &mut *GLOBAL_WRITE_POINTER.unwrap();
+    let inputter: &mut InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = &mut *GLOBAL_INPUT_POINTER.unwrap();
     while ps2::poll_input() {
         let scancode = ps2::read_input();
         PS2_SCANCODES[PS2_INDEX] = scancode;
@@ -430,7 +433,11 @@ extern "x86-interrupt" fn interrupt_ps2_keyboard() {unsafe {
                                 ps2::KeyID::NumLock => {NUM_LOCK = !NUM_LOCK;}
                                 _ => {}
                             }
-                            ps2::KeyStr::Str(string) => {write!(printer, "{}", string);}
+                            ps2::KeyStr::Str(string) => {
+                                for char in string.chars() {
+                                    inputter.push_render(CharacterTwoTone::<ColorBGRX> {codepoint: char, foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK}, WHITESPACE);
+                                }
+                            }
                         }
                         ps2::PressType::Unpress => match key_id {
                             ps2::KeyID::KeyLeftShift => {LEFT_SHIFT = false;}
@@ -516,29 +523,27 @@ unsafe extern "sysv64" fn scheduler() -> u64 {
     else if (TIMER_PIPE.read_block  || TIMER_PIPE.write_wait) && !TIMER_PIPE.write_block                           {MULTITASKING_INDEX = 1; MULTITASKING_STACKS[1]}
     else if  !TIMER_PIPE.read_block && !TIMER_PIPE.read_wait  && !TIMER_PIPE.write_block && !TIMER_PIPE.write_wait {MULTITASKING_INDEX = 2; MULTITASKING_STACKS[2]}
     else {panic!("Unexpected ring buffer state.");}
-    /*if MULTITASKING_INDEX == 0 || MULTITASKING_INDEX == 1 {MULTITASKING_INDEX = 2; MULTITASKING_STACKS[2]}
-    else {MULTITASKING_INDEX = 1; MULTITASKING_STACKS[1]}*/
 }
 fn read_loop() {unsafe {
-    let printer = &mut *PANIC_WRITE_POINTER.unwrap();
+    let printer = &mut *GLOBAL_WRITE_POINTER.unwrap();
     loop {
         write_volatile(&mut TIMER_PIPE.read_block as *mut bool, true);
-        writeln!(printer, "{:?}", TIMER_PIPE.read(&mut [0xFF; 4096]));
+        write!(printer, "{}", core::str::from_utf8(TIMER_PIPE.read(&mut [0xFF; 4096])).unwrap());
         write_volatile(&mut TIMER_PIPE.read_block as *mut bool, false);
         write_volatile(&mut TIMER_PIPE.write_wait as *mut bool, false);
         write_volatile(&mut TIMER_PIPE.read_wait as *mut bool, true);
-        while read_volatile(&TIMER_PIPE.read_wait) {};
+        asm!("INT 30h");
     }
 }}
 fn byte_loop() {unsafe {
     loop {
         write_volatile(&mut TIMER_PIPE.write_block as *mut bool, true);
         TIMER_VAL = TIMER_VAL.wrapping_add(1);
-        TIMER_PIPE.write(&[TIMER_VAL, TIMER_VAL]);
+        TIMER_PIPE.write("Hello World! ".as_bytes());
         write_volatile(&mut TIMER_PIPE.write_block as *mut bool, false);
         write_volatile(&mut TIMER_PIPE.read_wait as *mut bool, false);
         write_volatile(&mut TIMER_PIPE.write_wait as *mut bool, true);
-        while read_volatile(&TIMER_PIPE.write_wait) {};
+        asm!("INT 30h");
     }
 }}
 
@@ -571,7 +576,8 @@ unsafe fn exception_control_protection() {asm!("MOV RSP, [{}+RIP]", sym MULTITAS
 
 // PANIC HANDLER
 //Panic Variables
-static mut PANIC_WRITE_POINTER: Option<*mut dyn Write> = None;
+static mut GLOBAL_WRITE_POINTER: Option<*mut dyn Write> = None;
+static mut GLOBAL_INPUT_POINTER: Option<*mut InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>> = None;
 
 //Panic Handler
 #[cfg(not(test))]
@@ -580,7 +586,7 @@ fn panic_handler(panic_info: &PanicInfo) -> ! {
     use x86_64::instructions::hlt;
 
     unsafe {
-        let printer = &mut *PANIC_WRITE_POINTER.unwrap();
+        let printer = &mut *GLOBAL_WRITE_POINTER.unwrap();
         write!(printer, "\nKernel Halt: ");
         if let Some(panic_message) = panic_info.message() {
             writeln!(printer, "{}", panic_message);

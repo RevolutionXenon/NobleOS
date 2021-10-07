@@ -447,16 +447,16 @@ impl                  <const LINES: usize, const HEIGHT: usize, const WIDTH: usi
 }
 
 //Input Window
-pub struct InputWindow<'s, const LENGTH: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>>                                                  where [(); LENGTH*4]: {
-    screen: &'s dyn CharacterRenderer<Color, Character>,
+pub struct InputWindow<const LENGTH: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>>                                                  where [(); LENGTH*4]: {
+    screen: *const dyn CharacterRenderer<Color, Character>,
     input_buffer:   [Character; LENGTH],
     input_p:        usize,
     y:              usize,
     x:              usize,
 }
-impl                  <'s, const LENGTH: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>> InputWindow<'s, LENGTH, WIDTH, Color, Character> where [(); LENGTH*4]: {
+impl                  <const LENGTH: usize, const WIDTH: usize, Color: ColorFormat, Character: CharacterFormat<Color>> InputWindow<LENGTH, WIDTH, Color, Character> where [(); LENGTH*4]: {
     // CONSTRUCTOR
-    pub fn new(character_renderer: &'s dyn CharacterRenderer<Color, Character>, whitespace: Character, y: usize, x: usize) -> Self {
+    pub fn new(character_renderer: *const dyn CharacterRenderer<Color, Character>, whitespace: Character, y: usize, x: usize) -> Self {
         InputWindow {
             screen: character_renderer,
             input_buffer: [whitespace; LENGTH],
@@ -500,7 +500,7 @@ impl                  <'s, const LENGTH: usize, const WIDTH: usize, Color: Color
             self.render(whitespace);
         }
         else {
-            self.screen.render_character(self.input_buffer[p%WIDTH], self.y, p+self.x);
+            unsafe {& *self.screen}.render_character(self.input_buffer[p%WIDTH], self.y, p+self.x);
         }
     }
 
@@ -510,10 +510,10 @@ impl                  <'s, const LENGTH: usize, const WIDTH: usize, Color: Color
         let full: usize = self.input_buffer.len() - overhang;
         let line_width: usize = if self.input_p < full {WIDTH} else {overhang};
         for x in 0..line_width {
-            self.screen.render_character(self.input_buffer[self.input_p/WIDTH+x], self.y, x+self.x);
+            unsafe {& *self.screen}.render_character(self.input_buffer[self.input_p/WIDTH+x], self.y, x+self.x);
         }
         for x in line_width..WIDTH {
-            self.screen.render_character(whitespace, self.y, x+self.x)
+            unsafe {& *self.screen}.render_character(whitespace, self.y, x+self.x)
         }
     }
 
