@@ -10,7 +10,7 @@ qemu = []
 photon = {path = "../Photon"}
 gluon = {path = "../Gluon"}
 uefi = "0.11.0"
-uefi-services = {version = "0.8.0", no_panic_handler = true}
+uefi-services = {version = "0.8.0", features = ["no_panic_handler"]}
 rlibc = "1.0.0"
 log = "0.4.14"
 x86_64 = "0.14.4"

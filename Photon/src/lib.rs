@@ -8,6 +8,8 @@
 // HEADER
 //Flags
 #![no_std]
+#![feature(const_generics)]
+#![feature(const_evaluatable_checked)]
 
 //Modules
 pub mod font_handler;
@@ -20,89 +22,109 @@ use core::ptr::write_volatile;
 use crate::font_handler::retrieve_font_bitmap;
 
 //Constants
-pub const PHOTON_VERSION:      & str                   = "vDEV-2021-08-09";        //CURRENT VERSION OF GRAPHICS LIBRARY
-pub const PIXL_SCRN_X_DIM:       usize                 = 1920;                     //PIXEL WIDTH OF SCREEN
-pub const PIXL_SCRN_Y_DIM:       usize                 = 1080;                     //PIXEL HEIGHT OF SCREEN
-pub const PIXL_SCRN_B_DEP:       usize                 = 4;                        //PIXEL BIT DEPTH
-pub const COLR_PRBLK:            [u8; PIXL_SCRN_B_DEP] = [0x00, 0x00, 0x00, 0x00]; //COLOR PURE BLACK
-pub const COLR_PRRED:            [u8; PIXL_SCRN_B_DEP] = [0x00, 0x00, 0xFF, 0x00]; //COLOR PURE RED
-pub const COLR_PRGRN:            [u8; PIXL_SCRN_B_DEP] = [0x00, 0xFF, 0x00, 0x00]; //COLOR PURE GREEN
-pub const COLR_PRBLU:            [u8; PIXL_SCRN_B_DEP] = [0xFF, 0x00, 0x00, 0x00]; //COLOR PURE BLUE
-pub const COLR_PRWHT:            [u8; PIXL_SCRN_B_DEP] = [0xFF, 0xFF, 0xFF, 0x00]; //COLOR PURE WHITE
-pub const CHAR_SCRN_X_DIM:       usize                 = 120;                      //TEXT MODE WIDTH OF ENTIRE SCREEN
-pub const CHAR_SCRN_Y_DIM:       usize                 = 67;                       //TEXT MODE HEIGHT OF ENTIRE SCREEN
-pub const CHAR_PRNT_X_POS:       usize                 = 1;                        //TEXT MODE HORIZONTAL POSITION OF PRINT RESULT WINDOW
-pub const CHAR_PRNT_Y_POS:       usize                 = 2;                        //TEXT MODE VERTICAL POSITION OF PRINT RESULT WINDOW
-pub const CHAR_PRNT_X_DIM:       usize                 = 118;                      //TEXT MODE WIDTH OF PRINT RESULT WINDOW
-pub const CHAR_PRNT_Y_DIM_DSP:   usize                 = 62;                       //TEXT MODE HEIGHT OF PRINT RESULT WINDOW ON SCREEN
-pub const CHAR_PRNT_Y_DIM_MEM:   usize                 = 400;                      //TEXT MODE HEIGHT OF PRINT RESULT WINDOW IN MEMORY
-pub const CHAR_INPT_X_POS:       usize                 = 1;                        //TEXT MODE HORIZONTAL POSITION OF INPUT WINDOW
-pub const CHAR_INPT_Y_POS:       usize                 = 65;                       //TEXT MODE VERTICAL POSITION OF INPUT WINDOW
-pub const CHAR_INPT_X_DIM:       usize                 = 118;                      //TEXT MODE WIDTH OF INPUT WINDOW
-pub const CHAR_INPT_Y_DIM:       usize                 = 1;                        //TEXT MODE HEIGHT OF INPUT WINDOW
-pub const CHAR_INPT_Y_DIM_MEM:   usize                 = 1;                        //TEXT MODE HEIGHT OF INPUT WINDOW IN MEMORY
+pub const PHOTON_VERSION:      & str                   = "vDEV-2021-08-13";          //CURRENT VERSION OF GRAPHICS LIBRARY
 
 
 // STRUCTS
 //Character
 #[derive(Copy, Clone)]
-pub struct Character {
-    codepoint: char,
-    foreground: [u8; PIXL_SCRN_B_DEP],
-    background: [u8; PIXL_SCRN_B_DEP]
+pub struct Character<const PIXEL_WIDTH: usize> {
+    codepoint:      char,
+    foreground:     [u8; PIXEL_WIDTH],
+    background:     [u8; PIXEL_WIDTH],
 }
-impl Character{
+impl<const PIXEL_WIDTH: usize> Character<PIXEL_WIDTH> {
     // CONSTRUCTOR
-    pub fn new(codepoint: char, foreground: [u8; PIXL_SCRN_B_DEP], background: [u8;PIXL_SCRN_B_DEP]) -> Character{
-        return Character{
-            codepoint:  codepoint,
-            foreground: foreground,
-            background: background
+    pub fn new(codepoint: char, foreground: [u8;PIXEL_WIDTH], background:  [u8;PIXEL_WIDTH]) -> Self {
+        Character {
+            codepoint,
+            foreground,
+            background,
         }
     }
 }
 
 //Screen
-pub struct Screen<'a>{
+pub struct Screen<
+    //Screen Constants
+    const SCREEN_H: usize,
+    const SCREEN_W: usize,
+    const SCREEN_P: usize,
+    const CHARFR_H: usize,
+    const CHARFR_W: usize,
+    //Print Result Window Constants
+    const PRINTW_M: usize,
+    const PRINTW_H: usize,
+    const PRINTW_W: usize,
+    const PRINTW_Y: usize,
+    const PRINTW_X: usize,
+    //Input Window Constants
+    const INPUTW_M: usize,
+    const INPUTW_H: usize,
+    const INPUTW_W: usize,
+    const INPUTW_Y: usize,
+    const INPUTW_X: usize,
+    //Where Bound
+    > where [(); CHARFR_H*CHARFR_W]: Sized, [(); PRINTW_M*PRINTW_W]: Sized, [(); INPUTW_M*INPUTW_W]: Sized {
     //Screen variables
-    pub screen_physical: *   mut u8,
-    pub screen_charframe:&'a mut [Character;CHAR_SCRN_X_DIM*CHAR_SCRN_Y_DIM],
-    //Input Window Variables
-    pub input_stack:     &'a mut [Character; CHAR_INPT_X_DIM * CHAR_INPT_Y_DIM_MEM],
-    pub input_p:         &'a mut usize,
+    pub screen:       *mut u8,
+    pub charframe:        [Character<SCREEN_P>; CHARFR_H*CHARFR_W],
     //Print Result Window Variables
-    pub print_buffer:    &'a mut [Character; CHAR_PRNT_X_DIM * CHAR_PRNT_Y_DIM_MEM],
-    pub print_y:         &'a mut usize,
-    pub print_x:         &'a mut usize,
-    pub print_fore:      &'a mut [u8; PIXL_SCRN_B_DEP],
-    pub print_back:      &'a mut [u8; PIXL_SCRN_B_DEP],
+    pub print_buffer:     [Character<SCREEN_P>; PRINTW_M*PRINTW_W],
+    pub print_y:           usize,
+    pub print_x:           usize,
+    pub print_whitespace:  Character<SCREEN_P>,
+    //Input Window Variables
+    pub input_buffer:     [Character<SCREEN_P>; INPUTW_M*INPUTW_W],
+    pub input_p:           usize,
 }
-impl<'a> Screen<'a>{
+impl<
+    const SCREEN_H: usize, const SCREEN_W: usize, const SCREEN_P: usize, const CHARFR_H: usize, const CHARFR_W: usize, 
+    const PRINTW_M: usize, const PRINTW_H: usize, const PRINTW_W: usize, const PRINTW_Y: usize, const PRINTW_X: usize,
+    const INPUTW_M: usize, const INPUTW_H: usize, const INPUTW_W: usize, const INPUTW_Y: usize, const INPUTW_X: usize,
+> Screen<
+        SCREEN_H, SCREEN_W, SCREEN_P, CHARFR_H, CHARFR_W,
+        PRINTW_M, PRINTW_H, PRINTW_W, PRINTW_Y, PRINTW_X,
+        INPUTW_M, INPUTW_H, INPUTW_W, INPUTW_Y, INPUTW_X,
+> where [(); CHARFR_H*CHARFR_W]:, [(); PRINTW_M*PRINTW_W]:, [(); INPUTW_M*INPUTW_W]: {
+    // CONSTRUCTOR
+    pub fn new(physical_pointer: *mut u8, whitespace: Character<SCREEN_P>) -> Self {
+        Screen { 
+            screen: physical_pointer,
+            charframe: [whitespace; CHARFR_H*CHARFR_W],
+            print_buffer: [whitespace; PRINTW_M*PRINTW_W],
+            print_y: PRINTW_M - 1,
+            print_x: 0,
+            print_whitespace: whitespace,
+            input_buffer: [whitespace; INPUTW_M*INPUTW_W],
+            input_p: 0
+        }
+    }
+
     // BASIC FUNCTIONS
     //Render character to physical screen
-    pub fn character_render(&mut self, c: Character, y: usize, x: usize){
+    pub fn character_render(&mut self, character: Character<SCREEN_P>, y: usize, x: usize) {
         //Check valid character position
-        if x >= CHAR_SCRN_X_DIM || y >= CHAR_SCRN_Y_DIM {
+        if y >= CHARFR_H || x >= CHARFR_W {
             return;
         }
         //Find bitmap
-        let bitmap = retrieve_font_bitmap(&c.codepoint);
+        let bitmap = retrieve_font_bitmap(&character.codepoint);
         //Loop through bitmap
-        for byte_row in 0..16{
-            for byte_column in 0..2{
-                for bit in 0..8{
+        for byte_row in 0..16 {
+            for byte_column in 0..2 {
+                for bit in 0..8 {
                     //Get position of of pixel in width*height space
-                    let pixel_index = (y*16 + byte_row)*PIXL_SCRN_X_DIM + (x*16 + byte_column*8 + bit);
+                    let pixel_index = (y*16 + byte_row)*SCREEN_W + (x*16 + byte_column*8 + bit);
                     //Get color from bitmap bit and Character
-                    let color:[u8;4] = 
-                        if bitmap[byte_row*2 + byte_column] & (1 << bit) != 0{c.foreground}
-                        else {c.background};
+                    let color: [u8; SCREEN_P] = 
+                        if bitmap[byte_row*2 + byte_column] & (1 << bit) != 0{character.foreground}
+                        else {character.background};
                     //Write color to screen
                     unsafe{
-                        //let mut t = self.screen_physical[pixel_index*PIXL_SCRN_B_DEP..(pixel_index+1)*PIXL_SCRN_B_DEP].as_mut_ptr();
-                        for i in 0..4{
+                        for i in 0..SCREEN_P {
                             write_volatile(
-                                self.screen_physical.add(pixel_index*PIXL_SCRN_B_DEP + i),
+                                self.screen.add(pixel_index*SCREEN_P + i),
                                 color[i]
                             );
                         }
@@ -113,95 +135,95 @@ impl<'a> Screen<'a>{
     }
 
     //Draw character to characterframe screen
-    pub fn character_draw(&mut self, c: Character, y: usize, x: usize){
+    pub fn character_draw(&mut self, character: Character<SCREEN_P>, y: usize, x: usize) {
         //Check valid character position
-        if y >= CHAR_SCRN_Y_DIM || x >= CHAR_SCRN_X_DIM {
+        if y >= CHARFR_H || x >= CHARFR_W {
             return;
         }
         //Set character
-        self.screen_charframe[y*CHAR_SCRN_X_DIM + x] = c;
+        self.charframe[y*CHARFR_W + x] = character;
     }
 
     //Input character to input stack
-    pub fn character_input(&mut self, c: Character) -> usize{
+    pub fn character_input(&mut self, character: Character<SCREEN_P>, whitespace: Character<SCREEN_P>) -> usize {
         let mut render:usize = 0;
         //control character booleans
-        let control:bool = (c.codepoint as u32) < 0x20;                    //Determines if character is a control character
-        let control_newline:bool = c.codepoint=='\n' || c.codepoint=='\r'; //Determines if character is a newline character
-        let printable:bool = !control || control_newline;                  //Determines if a character is printable
-        let control_backwards:bool = c.codepoint=='\x08';                  //Determines if character types backwards (i.e. backspace)
-        let end_forward:bool = *self.input_p >= self.input_stack.len();    //Determines if the end of the stack is reached and position can no longer move forward
-        let end_backward:bool = *self.input_p <= 0;                        //Determines if the beginning of the stack is reached and position can no longer move backwards
+        let control:bool = (character.codepoint as u32) < 0x20;                        //Determines if character is a control character
+        let control_newline:bool = character.codepoint=='\n' || character.codepoint=='\r'; //Determines if character is a newline character
+        let printable:bool = !control || control_newline;                          //Determines if a character is printable
+        let control_backwards:bool = character.codepoint=='\x08';                      //Determines if character types backwards (i.e. backspace)
+        let end_forward:bool = self.input_p >= self.input_buffer.len();           //Determines if the end of the stack is reached and position can no longer move forward
+        let end_backward:bool = self.input_p <= 0;                                //Determines if the beginning of the stack is reached and position can no longer move backwards
         //add printable character to stack
         if printable && !end_forward {
-            self.input_stack[*self.input_p] = c;
-            render = *self.input_p;
-            *self.input_p = *self.input_p + 1;
+            self.input_buffer[self.input_p] = character;
+            render = self.input_p;
+            self.input_p = self.input_p + 1;
         }
         //backspace handling
         else if control_backwards && !end_backward {
-            *self.input_p = *self.input_p - 1;
-            render = *self.input_p;
-            self.input_stack[*self.input_p] = Character::new(' ', c.foreground, c.background);
+            self.input_p = self.input_p - 1;
+            render = self.input_p;
+            self.input_buffer[self.input_p] = whitespace;
         }
         return render;
     }
 
     //Input string to print buffer
-    pub fn string_print(&mut self, s: &str, foreground: [u8;4], background: [u8;4]) -> bool{
+    pub fn string_print(&mut self, string: &str, whitespace: Character<SCREEN_P>) -> bool {
         let mut render:bool = false;
         //begin writing to the buffer
-        for codepoint in s.chars(){
+        for codepoint in string.chars() {
             let control = (codepoint as u32) < 0x20;
             let control_newline = codepoint=='\n' || codepoint=='\r';
             let control_backwards = codepoint=='\x08';
-            let end_forward = *self.print_x >= CHAR_PRNT_X_DIM;
-            let end_backward = *self.print_x <= 0;
+            let end_forward = self.print_x >= PRINTW_W;
+            let end_backward = self.print_x <= 0;
             //move to next line (line feed, carriage return, end of line moving forward)
             if (control_newline || end_forward) &! control_backwards {
                 //reset xbuffer
-                *self.print_x=0;
+                self.print_x=0;
                 //move buffer up
-                for y in 0..CHAR_PRNT_Y_DIM_MEM-1{
-                    for x in 0..CHAR_PRNT_X_DIM{
-                        self.print_buffer[y*CHAR_PRNT_X_DIM+x] = self.print_buffer[(y+1)*CHAR_PRNT_X_DIM+x];
+                for y in 0..PRINTW_M-1 {
+                    for x in 0..PRINTW_W {
+                        self.print_buffer[y*PRINTW_W+x] = self.print_buffer[(y+1)*PRINTW_W+x];
                     }
                 }
                 //fill last line with spaces
-                for x in 0..CHAR_PRNT_X_DIM{
-                    self.print_buffer[(CHAR_PRNT_Y_DIM_MEM-1)*CHAR_PRNT_X_DIM+x] = Character::new(' ', foreground, background);
+                for x in 0..PRINTW_W {
+                    self.print_buffer[(PRINTW_M-1)*PRINTW_W+x] = whitespace;
                 }
                 render = true;
             }
             //move to previous line (beginning of line moving backward)
             if control_backwards && end_backward {
                 //reset xbuffer
-                *self.print_x = CHAR_PRNT_X_DIM;
+                self.print_x = PRINTW_W;
                 //move buffer down
-                for y in (1..CHAR_PRNT_Y_DIM_MEM).rev(){
-                    for x in 0..CHAR_PRNT_X_DIM{
-                        self.print_buffer[y*CHAR_PRNT_X_DIM+x] = self.print_buffer[(y-1)*CHAR_PRNT_X_DIM+x];
+                for y in (1..PRINTW_M).rev() {
+                    for x in 0..PRINTW_W{
+                        self.print_buffer[y*PRINTW_W+x] = self.print_buffer[(y-1)*PRINTW_W+x];
                     }
                 }
                 //fill first line with spaces
-                for x in 0..CHAR_PRNT_X_DIM{
-                    self.print_buffer[x] = Character::new(' ', foreground, background);
+                for x in 0..PRINTW_W {
+                    self.print_buffer[x] = whitespace;
                 }
                 render = true;
             }
             //unprint character (backspace)
             if control_backwards {
                 //move xbuffer back one
-                *self.print_x = *self.print_x - 1;
+                self.print_x = self.print_x - 1;
                 //remove character
-                self.print_buffer[(CHAR_PRNT_Y_DIM_MEM - 1) * CHAR_PRNT_X_DIM + *self.print_x] = Character::new(' ', foreground, background);
+                self.print_buffer[(PRINTW_M - 1) * PRINTW_W + self.print_x] = whitespace;
             }
             //print character (not: line Feed, carriage return, backspace)
-            if !control{
+            if !control {
                 //place character
-                self.print_buffer[(CHAR_PRNT_Y_DIM_MEM - 1) * CHAR_PRNT_X_DIM + *self.print_x] = Character::new(codepoint, foreground, background);
+                self.print_buffer[(PRINTW_M - 1) * PRINTW_W + self.print_x] = Character::new(codepoint, whitespace.foreground, whitespace.background);
                 //move xbuffer right
-                *self.print_x = *self.print_x + 1;
+                self.print_x = self.print_x + 1;
             }
         }
         return render;
@@ -210,232 +232,180 @@ impl<'a> Screen<'a>{
 
     // COMPOSITE FUNCTIONS
     //Render entire charframe
-    pub fn characterframe_render(&mut self){
-        for y in 0..CHAR_SCRN_Y_DIM{
-            for x in 0..CHAR_SCRN_X_DIM{
-                self.character_render(self.screen_charframe[y*CHAR_SCRN_X_DIM + x], y, x);
+    pub fn characterframe_render(&mut self) {
+        for y in 0..CHARFR_H {
+            for x in 0..CHARFR_W {
+                self.character_render(self.charframe[y*CHARFR_W + x], y, x);
             }
         }
     }
 
     //Draw character to characterframe screen and render it to physical screen
-    pub fn character_draw_render(&mut self, c: Character, y: usize, x: usize){
-        self.character_draw(c, y, x);
-        self.character_render(c, y, x)
+    pub fn character_draw_render(&mut self, character: Character<SCREEN_P>, y: usize, x: usize) {
+        self.character_draw(character, y, x);
+        self.character_render(character, y, x);
     }
 
     //Render entire inputstack
-    pub fn inputstack_draw_render(&mut self){
-        for x in 0..CHAR_INPT_X_DIM{
-            self.character_draw_render(self.input_stack[*self.input_p/CHAR_INPT_X_DIM+x], CHAR_INPT_Y_POS, CHAR_INPT_X_POS + x);
+    pub fn inputstack_draw_render(&mut self) {
+        for x in 0..INPUTW_W {
+            self.character_draw_render(self.input_buffer[self.input_p/INPUTW_W+x], INPUTW_Y, INPUTW_X + x);
         }
     }
 
     //Render entire printbuffer
-    pub fn printbuffer_draw_render(&mut self){
-        for y in 0..CHAR_PRNT_Y_DIM_DSP{
-            for x in 0..CHAR_PRNT_X_DIM{
-                self.character_draw_render(self.print_buffer[(*self.print_y + y) * CHAR_PRNT_X_DIM + x], y + CHAR_PRNT_Y_POS, x + CHAR_PRNT_X_POS);
+    pub fn printbuffer_draw_render(&mut self) {
+        for y in 0..PRINTW_H {
+            for x in 0..PRINTW_W {
+                self.character_draw_render(self.print_buffer[(self.print_y + y) * PRINTW_W + x], y + PRINTW_Y, x + PRINTW_X);
             }
         }
     }
 
     //Input character to input stack, draw it to characterframe, and render it to physical screen
-    pub fn character_input_draw_render(&mut self, c: Character){
-        let p:usize = self.character_input(c);
-        if p % CHAR_INPT_X_DIM == 0 || p % CHAR_INPT_X_DIM == CHAR_INPT_X_DIM - 1 {
+    pub fn character_input_draw_render(&mut self, character: Character<SCREEN_P>, whitespace: Character<SCREEN_P>) {
+        let p: usize = self.character_input(character, whitespace);
+        if p % INPUTW_W == 0 || p % INPUTW_W == INPUTW_W - 1 {
             self.inputstack_draw_render();
         }
-        else{
-            self.character_draw_render(self.input_stack[p%CHAR_INPT_X_DIM], CHAR_INPT_Y_POS, CHAR_INPT_X_POS + p);
+        else {
+            self.character_draw_render(self.input_buffer[p%INPUTW_W], INPUTW_Y, INPUTW_X + p);
         }
     }
 
     //Input string to print buffer, draw it to characterframe, and render it to physical screen
-    pub fn string_print_draw_render(&mut self, s: &str, foreground: [u8;4], background: [u8;4]) {
-        self.string_print(s, foreground, background);
+    pub fn string_print_draw_render(&mut self, character: &str, whitespace: Character<SCREEN_P>) {
+        self.string_print(character, whitespace);
         self.printbuffer_draw_render();
     }
 
     //Remove all information from input stack and replace with Character given
-    pub fn input_flush(&mut self, c: Character) {
-        for i in 0..CHAR_INPT_X_DIM * CHAR_INPT_Y_DIM_MEM{
-            self.input_stack[i] = c;
+    pub fn input_flush(&mut self, whitespace: Character<SCREEN_P>) {
+        for i in 0..INPUTW_M*INPUTW_W {
+            self.input_buffer[i] = whitespace;
         }
-        *self.input_p = 0;
+        self.input_p = 0;
         self.inputstack_draw_render();
     }
 
     //Return input characterstack as char array
-    pub fn input_as_chararray(&mut self) -> [char; CHAR_INPT_X_DIM*CHAR_INPT_Y_DIM_MEM]{
-        let mut value = [' ';CHAR_INPT_X_DIM*CHAR_INPT_Y_DIM_MEM];
-        for i in 0..CHAR_INPT_X_DIM * CHAR_INPT_Y_DIM_MEM{
-            value[i] = self.input_stack[i].codepoint;
+    pub fn input_as_chararray(&mut self, blankpoint: char) -> [char;INPUTW_M*INPUTW_W] {
+        let mut buffer: [char; INPUTW_M*INPUTW_W] = [blankpoint; INPUTW_M*INPUTW_W];
+        for i in 0..INPUTW_M*INPUTW_W {
+            buffer[i] = self.input_buffer[i].codepoint;
         }
-        return value;
+        return buffer;
     }
 
 
     // DRAWING
     //Horizontal Line
-    pub fn draw_hline(&mut self, y: usize, x1: usize, x2:usize, foreground: [u8;4], background: [u8;4]){
+    pub fn draw_hline(&mut self, y: usize, x1: usize, x2:usize, whitespace: Character<SCREEN_P>){
         {
-            let pos: usize = y*CHAR_SCRN_X_DIM + x1;
-            let draw: &mut Character = &mut self.screen_charframe[pos];
-            let check: char = (*draw).codepoint;
-            if      check == '═' {*draw = Character::new('═', foreground, background);}
-            else if check == '║' {*draw = Character::new('╠', foreground, background);}
-            else if check == '╔' {*draw = Character::new('╔', foreground, background);}
-            else if check == '╗' {*draw = Character::new('╦', foreground, background);}
-            else if check == '╚' {*draw = Character::new('╚', foreground, background);}
-            else if check == '╝' {*draw = Character::new('╩', foreground, background);}
-            else if check == '╞' {*draw = Character::new('╞', foreground, background);}
-            else if check == '╠' {*draw = Character::new('╠', foreground, background);}
-            else if check == '╡' {*draw = Character::new('═', foreground, background);}
-            else if check == '╣' {*draw = Character::new('╬', foreground, background);}
-            else if check == '╥' {*draw = Character::new('╔', foreground, background);}
-            else if check == '╦' {*draw = Character::new('╦', foreground, background);}
-            else if check == '╨' {*draw = Character::new('╚', foreground, background);}
-            else if check == '╩' {*draw = Character::new('╩', foreground, background);}
-            else if check == '╬' {*draw = Character::new('╬', foreground, background);}
-            else                 {*draw = Character::new('╞', foreground, background);}
+            let pos: usize = y*CHARFR_W + x1;
+            let check: char = self.charframe[pos].codepoint;
+            let write = match check {
+                '═' => '═', '║' => '╠', '╔' => '╔', '╗' => '╦',
+                '╚' => '╚', '╝' => '╩', '╞' => '╞', '╠' => '╠',
+                '╡' => '═', '╣' => '╬', '╥' => '╔', '╦' => '╦',
+                '╨' => '╚', '╩' => '╩', '╬' => '╬',  _  => '╞',
+            };
+            self.charframe[pos] = Character::new(write, whitespace.foreground, whitespace.background);
         }
-        for x in x1+1..x2{
-            let pos: usize = y*CHAR_SCRN_X_DIM + x;
-            let draw: &mut Character = &mut self.screen_charframe[pos];
-            let check: char = (*draw).codepoint;
-            if      check == '═' {*draw = Character::new('═', foreground, background);}
-            else if check == '║' {*draw = Character::new('╬', foreground, background);}
-            else if check == '╔' {*draw = Character::new('╦', foreground, background);}
-            else if check == '╗' {*draw = Character::new('╦', foreground, background);}
-            else if check == '╚' {*draw = Character::new('╩', foreground, background);}
-            else if check == '╝' {*draw = Character::new('╩', foreground, background);}
-            else if check == '╞' {*draw = Character::new('═', foreground, background);}
-            else if check == '╠' {*draw = Character::new('╬', foreground, background);}
-            else if check == '╡' {*draw = Character::new('═', foreground, background);}
-            else if check == '╣' {*draw = Character::new('╬', foreground, background);}
-            else if check == '╥' {*draw = Character::new('╦', foreground, background);}
-            else if check == '╦' {*draw = Character::new('╦', foreground, background);}
-            else if check == '╨' {*draw = Character::new('╩', foreground, background);}
-            else if check == '╩' {*draw = Character::new('╩', foreground, background);}
-            else if check == '╬' {*draw = Character::new('╬', foreground, background);}
-            else                 {*draw = Character::new('═', foreground, background);}
+        for x in x1+1..x2 {
+            let pos: usize = y*CHARFR_W + x;
+            let check: char = self.charframe[pos].codepoint;
+            let write = match check {
+                '═' => '═', '║' => '╬', '╔' => '╦', '╗' => '╦',
+                '╚' => '╩', '╝' => '╩', '╞' => '═', '╠' => '╬',
+                '╡' => '═', '╣' => '╬', '╥' => '╦', '╦' => '╦',
+                '╨' => '╩', '╩' => '╩', '╬' => '╬',  _  => '═',
+            };
+            self.charframe[pos] = Character::new(write, whitespace.foreground, whitespace.background);
         }
         {
-            let pos: usize = y*CHAR_SCRN_X_DIM + x2;
-            let draw: &mut Character = &mut self.screen_charframe[pos];
-            let check: char = (*draw).codepoint;
-            if      check == '═' {*draw = Character::new('═', foreground, background);}
-            else if check == '║' {*draw = Character::new('╣', foreground, background);}
-            else if check == '╔' {*draw = Character::new('╦', foreground, background);}
-            else if check == '╗' {*draw = Character::new('╗', foreground, background);}
-            else if check == '╚' {*draw = Character::new('╩', foreground, background);}
-            else if check == '╝' {*draw = Character::new('╝', foreground, background);}
-            else if check == '╞' {*draw = Character::new('═', foreground, background);}
-            else if check == '╠' {*draw = Character::new('╬', foreground, background);}
-            else if check == '╡' {*draw = Character::new('╡', foreground, background);}
-            else if check == '╣' {*draw = Character::new('╣', foreground, background);}
-            else if check == '╥' {*draw = Character::new('╗', foreground, background);}
-            else if check == '╦' {*draw = Character::new('╦', foreground, background);}
-            else if check == '╨' {*draw = Character::new('╝', foreground, background);}
-            else if check == '╩' {*draw = Character::new('╩', foreground, background);}
-            else if check == '╬' {*draw = Character::new('╬', foreground, background);}
-            else                 {*draw = Character::new('╡', foreground, background);}
+            let pos: usize = y*CHARFR_W + x2;
+            let check: char = self.charframe[pos].codepoint;
+            let write = match check {
+                '═' => '═', '║' => '╣', '╔' => '╦', '╗' => '╗',
+                '╚' => '╩', '╝' => '╝', '╞' => '═', '╠' => '╬',
+                '╡' => '╡', '╣' => '╣', '╥' => '╗', '╦' => '╦',
+                '╨' => '╝', '╩' => '╩', '╬' => '╬',  _  => '╡',
+            };
+            self.charframe[pos] = Character::new(write, whitespace.foreground, whitespace.background);
         }
     }
 
     //Vertical Line
-    pub fn draw_vline(&mut self, x: usize, y1: usize, y2:usize, foreground: [u8;4], background: [u8;4]){
+    pub fn draw_vline(&mut self, x: usize, y1: usize, y2:usize, whitespace: Character<SCREEN_P>) {
         {
-            let pos: usize = y1*CHAR_SCRN_X_DIM + x;
-            let draw: &mut Character = &mut self.screen_charframe[pos];
-            let check: char = (*draw).codepoint;
-            if      check == '═' {*draw = Character::new('╦', foreground, background);}
-            else if check == '║' {*draw = Character::new('║', foreground, background);}
-            else if check == '╔' {*draw = Character::new('╔', foreground, background);}
-            else if check == '╗' {*draw = Character::new('╗', foreground, background);}
-            else if check == '╚' {*draw = Character::new('╠', foreground, background);}
-            else if check == '╝' {*draw = Character::new('╣', foreground, background);}
-            else if check == '╞' {*draw = Character::new('╔', foreground, background);}
-            else if check == '╠' {*draw = Character::new('╠', foreground, background);}
-            else if check == '╡' {*draw = Character::new('╗', foreground, background);}
-            else if check == '╣' {*draw = Character::new('╣', foreground, background);}
-            else if check == '╥' {*draw = Character::new('╥', foreground, background);}
-            else if check == '╦' {*draw = Character::new('╦', foreground, background);}
-            else if check == '╨' {*draw = Character::new('║', foreground, background);}
-            else if check == '╩' {*draw = Character::new('╬', foreground, background);}
-            else if check == '╬' {*draw = Character::new('╬', foreground, background);}
-            else                 {*draw = Character::new('╥', foreground, background);}
+            let pos: usize = y1*CHARFR_W + x;
+            let check: char = self.charframe[pos].codepoint;
+            let write = match check {
+                '═' => '╦', '║' => '║', '╔' => '╔', '╗' => '╗',
+                '╚' => '╠', '╝' => '╣', '╞' => '╔', '╠' => '╠',
+                '╡' => '╗', '╣' => '╣', '╥' => '╥', '╦' => '╦', 
+                '╨' => '║', '╩' => '╬', '╬' => '╬',  _  => '╥',
+            };
+            self.charframe[pos] = Character::new(write, whitespace.foreground, whitespace.background);
         }
-        for y in y1+1..y2{
-            let pos: usize = y*CHAR_SCRN_X_DIM + x;
-            let draw: &mut Character = &mut self.screen_charframe[pos];
-            let check: char = (*draw).codepoint;
-            if      check == '═' {*draw = Character::new('╬', foreground, background);}
-            else if check == '║' {*draw = Character::new('║', foreground, background);}
-            else if check == '╔' {*draw = Character::new('╠', foreground, background);}
-            else if check == '╗' {*draw = Character::new('╣', foreground, background);}
-            else if check == '╚' {*draw = Character::new('╠', foreground, background);}
-            else if check == '╝' {*draw = Character::new('╣', foreground, background);}
-            else if check == '╞' {*draw = Character::new('╠', foreground, background);}
-            else if check == '╠' {*draw = Character::new('╠', foreground, background);}
-            else if check == '╡' {*draw = Character::new('╣', foreground, background);}
-            else if check == '╣' {*draw = Character::new('╣', foreground, background);}
-            else if check == '╥' {*draw = Character::new('║', foreground, background);}
-            else if check == '╦' {*draw = Character::new('╬', foreground, background);}
-            else if check == '╨' {*draw = Character::new('║', foreground, background);}
-            else if check == '╩' {*draw = Character::new('╬', foreground, background);}
-            else if check == '╬' {*draw = Character::new('╬', foreground, background);}
-            else                 {*draw = Character::new('║', foreground, background);}
+        for y in y1+1..y2 {
+            let pos: usize = y*CHARFR_W + x;
+            let check: char = self.charframe[pos].codepoint;
+            let write = match check {
+                '═' => '╬', '║' => '║', '╔' => '╠', '╗' => '╣',
+                '╚' => '╠', '╝' => '╣', '╞' => '╠', '╠' => '╠',
+                '╡' => '╣', '╣' => '╣', '╥' => '║', '╦' => '╬',
+                '╨' => '║', '╩' => '╬', '╬' => '╬',  _  => '║',
+            };
+            self.charframe[pos] = Character::new(write, whitespace.foreground, whitespace.background);
         }
         {
-            let pos: usize = y2*CHAR_SCRN_X_DIM + x;
-            let draw: &mut Character = &mut self.screen_charframe[pos];
-            let check: char = (*draw).codepoint;
-            if      check == '═' {*draw = Character::new('╩', foreground, background);}
-            else if check == '║' {*draw = Character::new('║', foreground, background);}
-            else if check == '╔' {*draw = Character::new('╠', foreground, background);}
-            else if check == '╗' {*draw = Character::new('╣', foreground, background);}
-            else if check == '╚' {*draw = Character::new('╚', foreground, background);}
-            else if check == '╝' {*draw = Character::new('╝', foreground, background);}
-            else if check == '╞' {*draw = Character::new('╚', foreground, background);}
-            else if check == '╠' {*draw = Character::new('╠', foreground, background);}
-            else if check == '╡' {*draw = Character::new('╝', foreground, background);}
-            else if check == '╣' {*draw = Character::new('╣', foreground, background);}
-            else if check == '╥' {*draw = Character::new('║', foreground, background);}
-            else if check == '╦' {*draw = Character::new('╬', foreground, background);}
-            else if check == '╨' {*draw = Character::new('╨', foreground, background);}
-            else if check == '╩' {*draw = Character::new('╩', foreground, background);}
-            else if check == '╬' {*draw = Character::new('╬', foreground, background);}
-            else                 {*draw = Character::new('╨', foreground, background);}
+            let pos: usize = y2*CHARFR_W + x;
+            let check: char = self.charframe[pos].codepoint;
+            let write = match check {
+                '═' => '╩', '║' => '║', '╔' => '╠', '╗' => '╣',
+                '╚' => '╚', '╝' => '╝', '╞' => '╚', '╠' => '╠',
+                '╡' => '╝', '╣' => '╣', '╥' => '║', '╦' => '╬',
+                '╨' => '╨', '╩' => '╩', '╬' => '╬',  _  => '╨',
+            };
+            self.charframe[pos] = Character::new(write, whitespace.foreground, whitespace.background);
         }
     }
 
     //Place string in arbitrary location on screen
-    pub fn draw_string(&mut self, s: &str, y: usize, x: usize, foreground: [u8;4], background: [u8;4]){
-        let mut p = y*CHAR_SCRN_X_DIM + x;
+    pub fn draw_string(&mut self, string: &str, y: usize, x: usize, whitespace: Character<SCREEN_P>) {
+        let mut p = y*CHARFR_W + x;
         //Check validity
-        if p + s.len() >= self.screen_charframe.len() {return;}
+        if p + string.len() >= self.charframe.len() {return;}
         //Place characters on screen
-        for c in s.chars(){
-            self.screen_charframe[p] = Character::new(c, foreground, background);
+        for c in string.chars() {
+            self.charframe[p] = Character::new(c, whitespace.foreground, whitespace.background);
             p += 1;
         }
     }
 }
-impl<'a> Write for Screen<'a>{
-    fn write_str(&mut self, s: &str) -> Result {
-        self.string_print(s, *self.print_fore, *self.print_back);
+impl<
+    const SCREEN_H: usize, const SCREEN_W: usize, const SCREEN_P: usize, const CHARFR_H: usize, const CHARFR_W: usize, 
+    const PRINTW_M: usize, const PRINTW_H: usize, const PRINTW_W: usize, const PRINTW_Y: usize, const PRINTW_X: usize,
+    const INPUTW_M: usize, const INPUTW_H: usize, const INPUTW_W: usize, const INPUTW_Y: usize, const INPUTW_X: usize,> 
+    Write for Screen< 
+        SCREEN_H, SCREEN_W, SCREEN_P, CHARFR_H, CHARFR_W,
+        PRINTW_M, PRINTW_H, PRINTW_W, PRINTW_Y, PRINTW_X,
+        INPUTW_M, INPUTW_H, INPUTW_W, INPUTW_Y, INPUTW_X,
+> where [(); CHARFR_H*CHARFR_W]:, [(); PRINTW_M*PRINTW_W]:, [(); INPUTW_M*INPUTW_W]: {
+    fn write_str(&mut self, string: &str) -> Result {
+        self.string_print(string, self.print_whitespace);
         return Ok(());
     }
 
-    fn write_char(&mut self, c: char) -> Result {
-        self.string_print(c.encode_utf8(&mut [0; 4]), *self.print_fore, *self.print_back);
+    fn write_char(&mut self, codepoint: char) -> Result {
+        self.string_print(codepoint.encode_utf8(&mut [0; 4]), self.print_whitespace);
         return Ok(());
     }
 
-    fn write_fmt(mut self: &mut Self, args: Arguments<'_>) -> Result {
-        let r = core::fmt::write(&mut self, args);
+    fn write_fmt(mut self: &mut Self, arguments: Arguments<'_>) -> Result {
+        let r = core::fmt::write(&mut self, arguments);
         self.printbuffer_draw_render();
         return r;
     }

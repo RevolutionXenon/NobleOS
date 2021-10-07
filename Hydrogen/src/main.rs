@@ -35,8 +35,10 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt::Write;
 use core::intrinsics::copy_nonoverlapping;
-use core::mem::transmute;
+use core::panic::PanicInfo;
 use core::ptr;
+use core::ptr::null;
+use core::ptr::null_mut;
 use core::ptr::read_volatile;
 use core::ptr::write_volatile;
 use uefi::alloc::exit_boot_services;
@@ -57,14 +59,39 @@ use x86_64::registers::control::*;
 
 //Constants
 const HYDROGEN_VERSION: & str = "vDEV-2021-08-13"; //CURRENT VERSION OF BOOTLOADER
+pub const PIXL_SCRN_X_DIM:       usize                 = 1920;                     //PIXEL WIDTH OF SCREEN
+pub const PIXL_SCRN_Y_DIM:       usize                 = 1080;                     //PIXEL HEIGHT OF SCREEN
+pub const PIXL_SCRN_B_DEP:       usize                 = 4;                        //PIXEL BIT DEPTH
+pub const COLR_PRBLK:            [u8; PIXL_SCRN_B_DEP] = [0x00, 0x00, 0x00, 0x00]; //COLOR PURE BLACK
+pub const COLR_PRRED:            [u8; PIXL_SCRN_B_DEP] = [0x00, 0x00, 0xFF, 0x00]; //COLOR PURE RED
+pub const COLR_PRGRN:            [u8; PIXL_SCRN_B_DEP] = [0x00, 0xFF, 0x00, 0x00]; //COLOR PURE GREEN
+pub const COLR_PRBLU:            [u8; PIXL_SCRN_B_DEP] = [0xFF, 0x00, 0x00, 0x00]; //COLOR PURE BLUE
+pub const COLR_PRWHT:            [u8; PIXL_SCRN_B_DEP] = [0xFF, 0xFF, 0xFF, 0x00]; //COLOR PURE WHITE
+pub const CHAR_SCRN_X_DIM:       usize                 = 120;                      //TEXT MODE WIDTH OF ENTIRE SCREEN
+pub const CHAR_SCRN_Y_DIM:       usize                 = 67;                       //TEXT MODE HEIGHT OF ENTIRE SCREEN
+pub const CHAR_PRNT_X_POS:       usize                 = 1;                        //TEXT MODE HORIZONTAL POSITION OF PRINT RESULT WINDOW
+pub const CHAR_PRNT_Y_POS:       usize                 = 2;                        //TEXT MODE VERTICAL POSITION OF PRINT RESULT WINDOW
+pub const CHAR_PRNT_X_DIM:       usize                 = 118;                      //TEXT MODE WIDTH OF PRINT RESULT WINDOW
+pub const CHAR_PRNT_Y_DIM_DSP:   usize                 = 62;                       //TEXT MODE HEIGHT OF PRINT RESULT WINDOW ON SCREEN
+pub const CHAR_PRNT_Y_DIM_MEM:   usize                 = 400;                      //TEXT MODE HEIGHT OF PRINT RESULT WINDOW IN MEMORY
+pub const CHAR_INPT_X_POS:       usize                 = 1;                        //TEXT MODE HORIZONTAL POSITION OF INPUT WINDOW
+pub const CHAR_INPT_Y_POS:       usize                 = 65;                       //TEXT MODE VERTICAL POSITION OF INPUT WINDOW
+pub const CHAR_INPT_X_DIM:       usize                 = 118;                      //TEXT MODE WIDTH OF INPUT WINDOW
+pub const CHAR_INPT_Y_DIM_DSP:   usize                 = 1;                        //TEXT MODE HEIGHT OF INPUT WINDOW
+pub const CHAR_INPT_Y_DIM_MEM:   usize                 = 1;                        //TEXT MODE HEIGHT OF INPUT WINDOW IN MEMORY
 
+type FullScreen = Screen<
+    PIXL_SCRN_Y_DIM,     PIXL_SCRN_X_DIM,     PIXL_SCRN_B_DEP, CHAR_SCRN_Y_DIM, CHAR_SCRN_X_DIM,
+    CHAR_PRNT_Y_DIM_MEM, CHAR_PRNT_Y_DIM_DSP, CHAR_PRNT_X_DIM, CHAR_PRNT_Y_POS, CHAR_PRNT_X_POS,
+    CHAR_PRNT_Y_DIM_MEM, CHAR_INPT_Y_DIM_DSP, CHAR_INPT_X_DIM, CHAR_INPT_Y_POS, CHAR_INPT_X_POS,
+>;
 
 // MAIN
 //Main Entry Point After UEFI Boot
 #[entry]
 fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     // UEFI INITILIZATION
-    //Utilities initialization (Alloc & Logger)
+    //Utilities initialization (Alloc)
     uefi_services::init(&system_table_boot).expect_success("UEFI Initialization: Utilities initialization failed.");
     let boot_services = system_table_boot.boot_services();
     //Console reset
@@ -118,49 +145,49 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                         Err("UEFI File Read: Buffer exceeds end of file.")
                     }
                 },
-                Err(error) => match error.status(){
-                    uefi::Status::NO_MEDIA         => Err("UEFI File Read: No Media."),
-                    uefi::Status::DEVICE_ERROR     => Err("UEFI File Read: Device Error."),
-                    uefi::Status::VOLUME_CORRUPTED => Err("UEFI File Read: Volume Corrupted."),
-                    uefi::Status::BUFFER_TOO_SMALL => Err("UEFI File Read: Buffer Too Small."),
-                    _                              => Err("EUFI File Read: Unexpected Error.")
-                }
+                Err(error) => Err(uefi_error_readout(error.status())),
             }
         }
     }
 
     // GRAPHICS SETUP
     //Screen variables
-    let     screen_physical:  *mut u8                                               = graphics_frame_pointer;
+    /*let     screen_physical:  *mut u8                                               = graphics_frame_pointer;
     let mut screen_charframe:      [Character; CHAR_SCRN_X_DIM*CHAR_SCRN_Y_DIM]     = [Character::new(' ', COLR_PRWHT, COLR_PRBLK); CHAR_SCRN_X_DIM*CHAR_SCRN_Y_DIM];
     //Input Window variables
     let mut input_stack:           [Character; CHAR_INPT_X_DIM*CHAR_INPT_Y_DIM_MEM] = [Character::new(' ', COLR_PRWHT, COLR_PRBLK); CHAR_INPT_X_DIM*CHAR_INPT_Y_DIM_MEM];
     let mut input_p:               usize                                            = 0;
     //Print Result Window variables
     let mut print_buffer:          [Character; CHAR_PRNT_X_DIM*CHAR_PRNT_Y_DIM_MEM] = [Character::new(' ', COLR_PRWHT, COLR_PRBLK); CHAR_PRNT_X_DIM*CHAR_PRNT_Y_DIM_MEM];
-    let mut print_y:               usize                                            = CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP;
+    let mut print_y:               usize                                            = CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM;
     let mut print_x:               usize                                            = 0;
     //Screen struct
     let mut screen:Screen = Screen{
-        screen_physical:       screen_physical,
-        screen_charframe: &mut screen_charframe,
-        input_stack:      &mut input_stack,
+        screen:       screen_physical,
+        charframe: &mut screen_charframe,
+        input_buffer:      &mut input_stack,
         input_p:          &mut input_p,
         print_buffer:     &mut print_buffer,
         print_y:          &mut print_y,
         print_x:          &mut print_x,
         print_fore:       &mut COLR_PRWHT,
         print_back:       &mut COLR_PRBLK,
-    };
+    };*/
+    let blue =  [0xFF, 0x00, 0x00, 0x00];
+    let white = [0xFF, 0xFF, 0xFF, 0x00];
+    let black = [0x00, 0x00, 0x00, 0x00];
+    let whitespace = Character::<4>::new(' ', white, black);
+    let bluespace = Character::<4>::new(' ', blue, black);
+    let screen = FullScreen::new(graphics_frame_pointer, Character::<4>::new(' ', white, black));
     //User Interface initialization
-    screen.draw_hline(CHAR_PRNT_Y_POS-1, 0,                 CHAR_SCRN_X_DIM-1,  COLR_PRBLU, COLR_PRBLK);
-    screen.draw_hline(CHAR_INPT_Y_POS-1, 0,                 CHAR_SCRN_X_DIM-1,  COLR_PRBLU, COLR_PRBLK);
-    screen.draw_hline(CHAR_INPT_Y_POS+1, 0,                 CHAR_SCRN_X_DIM-1,  COLR_PRBLU, COLR_PRBLK);
-    screen.draw_vline(0,                 CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1,  COLR_PRBLU, COLR_PRBLK);
-    screen.draw_vline(CHAR_SCRN_X_DIM-1, CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1,  COLR_PRBLU, COLR_PRBLK);
-    screen.draw_string("NOBLE OS",            0, 0,                                             COLR_PRBLU, COLR_PRBLK);
-    screen.draw_string("HYDROGEN BOOTLOADER", 0, CHAR_SCRN_X_DIM - 20 - HYDROGEN_VERSION.len(), COLR_PRBLU, COLR_PRBLK);
-    screen.draw_string(HYDROGEN_VERSION,      0, CHAR_SCRN_X_DIM -      HYDROGEN_VERSION.len(), COLR_PRBLU, COLR_PRBLK);
+    screen.draw_hline(CHAR_PRNT_Y_POS-1, 0,                 CHAR_SCRN_X_DIM-1,  bluespace);
+    screen.draw_hline(CHAR_INPT_Y_POS-1, 0,                 CHAR_SCRN_X_DIM-1,  bluespace);
+    screen.draw_hline(CHAR_INPT_Y_POS+1, 0,                 CHAR_SCRN_X_DIM-1,  bluespace);
+    screen.draw_vline(0,                 CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1,  bluespace);
+    screen.draw_vline(CHAR_SCRN_X_DIM-1, CHAR_PRNT_Y_POS-1, CHAR_INPT_Y_POS+1,  bluespace);
+    screen.draw_string("NOBLE OS",            0, 0,                                             bluespace);
+    screen.draw_string("HYDROGEN BOOTLOADER", 0, CHAR_SCRN_X_DIM - 20 - HYDROGEN_VERSION.len(), bluespace);
+    screen.draw_string(HYDROGEN_VERSION,      0, CHAR_SCRN_X_DIM -      HYDROGEN_VERSION.len(), bluespace);
     screen.characterframe_render();
     writeln!(screen, "Hydrogen Bootloader     {}", HYDROGEN_VERSION);
     writeln!(screen, "Photon Graphics Library {}", PHOTON_VERSION);
@@ -261,9 +288,9 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                 //User has hit enter
                 if input_char == '\r'{
                     //Return to bottom of screen
-                    *screen.print_y = CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP;
+                    screen.print_y = CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP;
                     //Execute command and reset input stack
-                    let command = &screen.input_as_chararray()[0..*screen.input_p].iter().collect::<String>();
+                    let command = &screen.input_as_chararray(' ')[0..screen.input_p].iter().collect::<String>();
                     let boot_command_return = command_processor(&mut screen, &system_table_boot, command);
                     screen.input_flush(Character::new(' ', COLR_PRWHT, COLR_PRBLK));
                     //Check return code
@@ -281,29 +308,29 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
                 }
                 //User has typed a character
                 else {
-                    screen.character_input_draw_render(Character::new(input_char, COLR_PRWHT, COLR_PRBLK));
+                    screen.character_input_draw_render(Character::new(input_char, white, black), whitespace);
                 }
             }
             //Modifier or Control Key
             Key::Special(scancode) =>{
-                if scancode == ScanCode::UP && *screen.print_y > 0 {
-                    *screen.print_y -= 1;
+                if scancode == ScanCode::UP && screen.print_y > 0 {
+                    screen.print_y -= 1;
                     screen.printbuffer_draw_render();
                 }
-                else if scancode == ScanCode::DOWN && *screen.print_y < CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP{
-                    *screen.print_y += 1;
+                else if scancode == ScanCode::DOWN && screen.print_y < CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP{
+                    screen.print_y += 1;
                     screen.printbuffer_draw_render();
                 }
                 else if scancode == ScanCode::END{
-                    *screen.print_y = CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP;
+                    screen.print_y = CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP;
                     screen.printbuffer_draw_render();
                 }
                 else if scancode == ScanCode::PAGE_UP{
-                    *screen.print_y = if *screen.print_y > CHAR_PRNT_Y_DIM_DSP {*screen.print_y - CHAR_PRNT_Y_DIM_DSP} else {0};
+                    screen.print_y = if screen.print_y > CHAR_PRNT_Y_DIM_DSP {screen.print_y - CHAR_PRNT_Y_DIM_DSP} else {0};
                     screen.printbuffer_draw_render();
                 }
                 else if scancode == ScanCode::PAGE_DOWN{
-                    *screen.print_y = if *screen.print_y < CHAR_PRNT_Y_DIM_MEM - 2*CHAR_PRNT_Y_DIM_DSP {*screen.print_y + CHAR_PRNT_Y_DIM_DSP} else {CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP};
+                    screen.print_y = if screen.print_y < CHAR_PRNT_Y_DIM_MEM - 2*CHAR_PRNT_Y_DIM_DSP {screen.print_y + CHAR_PRNT_Y_DIM_DSP} else {CHAR_PRNT_Y_DIM_MEM - CHAR_PRNT_Y_DIM_DSP};
                     screen.printbuffer_draw_render();
                 }
             }
@@ -335,6 +362,23 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     writeln!(screen, "Halt reached.");
     unsafe {asm!("HLT");}
     loop {}
+}
+
+
+// PANIC HANDLER
+//Panic State Variables
+//static mut panic_screen_pointer: *mut Screen = 0 as *mut Screen;
+
+//Panic Handler
+#[panic_handler]
+fn panic_handler(panic_info: &PanicInfo) -> ! {
+    unsafe {
+        //if panic_screen_pointer != null_mut(){
+        //    let panic_screen: Screen = panic_screen_pointer.try;
+        //}
+        asm!("HLT");
+        loop {}
+    }
 }
 
 
@@ -399,7 +443,7 @@ fn set_graphics_mode(gop: &mut GraphicsOutput) {
 
 // COMMAND PROCESSOR
 //Evaluate and execute a bootloader command and return a code
-fn command_processor(screen: &mut Screen, system_table: &SystemTable<Boot>, command: &str) -> u8 {
+fn command_processor(screen: &mut FullScreen, system_table: &SystemTable<Boot>, command: &str) -> u8 {
     //Print command
     writeln!(screen, ">{}", command);
     //Assess command
@@ -445,7 +489,7 @@ fn command_processor(screen: &mut Screen, system_table: &SystemTable<Boot>, comm
 }
 
 //Display memory map contents to console
-fn command_mem(screen: &mut Screen, boot_service: &BootServices){
+fn command_mem(screen: &mut FullScreen, boot_service: &BootServices){
     //Estimated map size
     let map_size = boot_service.memory_map_size();
     writeln!(screen, "Map size: {}", map_size);
@@ -492,7 +536,7 @@ fn command_mem(screen: &mut Screen, boot_service: &BootServices){
 }
 
 //Display the raw contents of a part of memory
-fn command_peek(screen: &mut Screen, command: &str) {
+fn command_peek(screen: &mut FullScreen, command: &str) {
     //Read subcommand from arguments
     let split:Vec<&str> = command.split(" ").collect();
     //Handle if number of arguments is incorrect

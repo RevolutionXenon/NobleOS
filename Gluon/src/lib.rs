@@ -80,7 +80,7 @@ pub struct ELFFile<'a> {
     pub file_header:                 ELFFileHeader,
     pub program_headers: &'a         [ELFProgramHeader],
 }
-impl<'a> ELFFile<'a>{
+impl<'a> ELFFile<'a> {
     // CONSTRUCTOR
     pub fn new(file: &'a mut dyn LocationalRead, program_header_buffer: &'a mut [ELFProgramHeader]) -> Result<ELFFile<'a>, &'static str> {
         //Load File Header
