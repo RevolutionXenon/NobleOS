@@ -48,7 +48,7 @@ pub unsafe fn pic_enable_irq(irq: u8)  -> Result<(), &'static str> {
 }
 
 //Send End IRQ Signal
-pub unsafe extern "sysv64" fn pic_end_irq(irq: u8) -> Result<(), &'static str> {
+pub unsafe fn pic_end_irq(irq: u8) -> Result<(), &'static str> {
     if irq < 16 {
         if irq > 7 { PORT_PIC2_COMMAND.write(0x20);}
         PORT_PIC1_COMMAND.write(0x20);
@@ -56,9 +56,6 @@ pub unsafe extern "sysv64" fn pic_end_irq(irq: u8) -> Result<(), &'static str> {
     }
     else {Err("PIC: IRQ out of bounds on end of interrupt.")}
 }
-
-// PROGRAMMABLE INTERVAL TIMER
-
 
 
 // ADVANCED PROGRAMMABLE INTERRUPT CONTROLLER
@@ -95,10 +92,6 @@ pub unsafe fn lapic_write_register(register: usize, data: u32) -> Result<(), &'s
     write_volatile((LAPIC_ADDRESS.add(register)) as *mut u32, data);
     Ok(())
 }
-
-//Reg 0x0080: Task Priority Register
-
-//Reg 0x00A0: Processor Priority Register
 
 //Reg 0x00B0: End of Interrupt
 pub unsafe fn lapic_end_int() {

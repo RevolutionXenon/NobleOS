@@ -128,9 +128,8 @@ pub extern "sysv64" fn _start() -> ! {
         writeln!(printer, "Free memory found: {}Pg or {}MiB {}KiB", free_page_count, (free_page_count*PAGE_SIZE_4KIB)/MIB, ((free_page_count*PAGE_SIZE_4KIB) % MIB)/KIB);
         //"Allocate" memory space for table
         let usable_table = unsafe {from_raw_parts_mut(oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut UsableMemoryEntry, free_page_count)};
-        for i in 0..(free_page_count+PAGE_SIZE_4KIB-1)/PAGE_SIZE_4KIB {
-            let entry = usable_table[i];
-            usable_table[i] = UsableMemoryEntry{address: entry.address, present: false}
+        for entry in usable_table.iter_mut().take((free_page_count+PAGE_SIZE_4KIB-1)/PAGE_SIZE_4KIB) {
+            *entry = UsableMemoryEntry{address: entry.address, present: false}
         }
         //Create free memory area allocator
         u_alloc = UsableMemoryPageAllocator{table: oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut UsableMemoryEntry, len: usable_table.len(), identity_offset: oct4_to_usize(IDENTITY_OCT).unwrap()};
@@ -267,7 +266,7 @@ pub extern "sysv64" fn _start() -> ! {
         pic::pic_remap(0x20, 0x28).unwrap();
         pic::pic_enable_irq(0x01).unwrap();
         let idte = InterruptDescriptorTableEntry {
-            offset: irq_01_asm as unsafe extern "x86-interrupt" fn() as usize as u64,
+            offset: irq_01_rust as unsafe extern "x86-interrupt" fn() as usize as u64,
             descriptor_table_index: 1,
             table_indicator: TableIndicator::GDT,
             requested_privilege_level: PrivilegeLevel::Supervisor,
@@ -434,8 +433,8 @@ fn read_loop() {unsafe {
     let printer = &mut *GLOBAL_WRITE_POINTER.unwrap();
     loop {
         write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::ReadBlock);
-        //write!(printer, "{}", core::str::from_utf8(TIMER_PIPE.read(&mut [0xFF; 4096])).unwrap());
-        writeln!(printer, "{:?}", TIMER_PIPE.read(&mut [0xFF; 4096])).unwrap();
+        write!(printer, "{}", core::str::from_utf8(TIMER_PIPE.read(&mut [0xFF; 4096])).unwrap());
+        //writeln!(printer, "{:?}", TIMER_PIPE.read(&mut [0xFF; 4096])).unwrap();
         write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::ReadWait);
         asm!("INT 30h");
     }
@@ -444,7 +443,8 @@ fn byte_loop() {unsafe {
     loop {
         write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::WriteBlock);
         TIMER_VAL = TIMER_VAL.wrapping_add(1);
-        TIMER_PIPE.write(&[ps2::read_status()]);
+        TIMER_PIPE.write("Hello World! ".as_bytes());
+        //TIMER_PIPE.write(&[ps2::read_status()]);
         write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::WriteWait);
         asm!("INT 30h");
     }
@@ -497,63 +497,7 @@ fn ps2_keyboard() {unsafe {
 //PS/2 Keyboard IRQ
 static mut PS2_SCANCODES: [u8;9] = [0u8;9];
 static mut PS2_INDEX:   usize = 0x00;
-#[naked] unsafe extern "x86-interrupt" fn irq_01_asm() {
-    asm!(
-        "CLI",
-        //Save Program State
-        "PUSH RAX", "PUSH RBP", "PUSH R15", "PUSH R14",
-        "PUSH R13", "PUSH R12", "PUSH R11", "PUSH R10",
-        "PUSH R9",  "PUSH R8",  "PUSH RDI", "PUSH RSI",
-        "PUSH RDX", "PUSH RCX", "PUSH RBX", "PUSH 0",
-        "SUB RSP, 100h",
-        "MOVAPS XMMWORD PTR [RSP + 0xf0], XMM15", "MOVAPS XMMWORD PTR [RSP + 0xe0], XMM14",
-        "MOVAPS XMMWORD PTR [RSP + 0xd0], XMM13", "MOVAPS XMMWORD PTR [RSP + 0xc0], XMM12",
-        "MOVAPS XMMWORD PTR [RSP + 0xb0], XMM11", "MOVAPS XMMWORD PTR [RSP + 0xa0], XMM10",
-        "MOVAPS XMMWORD PTR [RSP + 0x90], XMM9",  "MOVAPS XMMWORD PTR [RSP + 0x80], XMM8",
-        "MOVAPS XMMWORD PTR [RSP + 0x70], XMM7",  "MOVAPS XMMWORD PTR [RSP + 0x60], XMM6",
-        "MOVAPS XMMWORD PTR [RSP + 0x50], XMM5",  "MOVAPS XMMWORD PTR [RSP + 0x40], XMM4",
-        "MOVAPS XMMWORD PTR [RSP + 0x30], XMM3",  "MOVAPS XMMWORD PTR [RSP + 0x20], XMM2",
-        "MOVAPS XMMWORD PTR [RSP + 0x10], XMM1",  "MOVAPS XMMWORD PTR [RSP + 0x00], XMM0",
-        //Save stack pointer
-        "MOV RAX, [{stack_index}+RIP]",
-        "SHL RAX, 3",
-        "LEA RCX, [{stack_array}+RIP]",
-        "MOV [RCX+RAX], RSP",
-        //Swap to kernel stack
-        "MOV RSP, [{kernel_stack}+RIP]",
-        //Call Rust Code
-        "CALL {rust_call}",
-        //Call scheduler
-        "CALL {scheduler}",
-        //Swap to thread stack
-        "MOV RSP, RAX",
-        //Load program state
-        "MOVAPS XMM0,  XMMWORD PTR [RSP + 0x00]", "MOVAPS XMM1,  XMMWORD PTR [RSP + 0x10]",
-        "MOVAPS XMM2,  XMMWORD PTR [RSP + 0x20]", "MOVAPS XMM3,  XMMWORD PTR [RSP + 0x30]",
-        "MOVAPS XMM4,  XMMWORD PTR [RSP + 0x40]", "MOVAPS XMM5,  XMMWORD PTR [RSP + 0x50]",
-        "MOVAPS XMM6,  XMMWORD PTR [RSP + 0x60]", "MOVAPS XMM7,  XMMWORD PTR [RSP + 0x70]",
-        "MOVAPS XMM8,  XMMWORD PTR [RSP + 0x80]", "MOVAPS XMM9,  XMMWORD PTR [RSP + 0x90]",
-        "MOVAPS XMM10, XMMWORD PTR [RSP + 0xA0]", "MOVAPS XMM11, XMMWORD PTR [RSP + 0xB0]",
-        "MOVAPS XMM12, XMMWORD PTR [RSP + 0xC0]", "MOVAPS XMM13, XMMWORD PTR [RSP + 0xD0]",
-        "MOVAPS XMM14, XMMWORD PTR [RSP + 0xE0]", "MOVAPS XMM15, XMMWORD PTR [RSP + 0xF0]",
-        "ADD RSP, 100h",
-        "POP RBX", "POP RBX", "POP RCX", "POP RDX",
-        "POP RSI", "POP RDI", "POP R8",  "POP R9",
-        "POP R10", "POP R11", "POP R12", "POP R13",
-        "POP R14", "POP R15", "POP RBP", "POP RAX",
-        //Enter code
-        "STI",
-        "IRETQ",
-        //Symbols
-        stack_array  = sym TASK_STACKS,
-        stack_index  = sym TASK_INDEX,
-        kernel_stack = sym TASK_STACKS,
-        rust_call    = sym irq_01_rust,
-        scheduler    = sym scheduler,
-        options(noreturn),
-    )
-}
-unsafe extern "sysv64" fn irq_01_rust() {
+unsafe extern "x86-interrupt" fn irq_01_rust() {
     while ps2::poll_input() {
         let scancode = ps2::read_input();
         PS2_SCANCODES[PS2_INDEX] = scancode;
@@ -757,17 +701,17 @@ struct RingBuffer<TYPE, const SIZE: usize> {
 }
 impl<TYPE, const SIZE: usize> RingBuffer<TYPE, SIZE> where TYPE: Clone+Copy {
     pub fn write(&mut self, data: &[TYPE]) {
-        for i in 0..data.len() {
-            self.data[self.write_head] = data[i];
+        for item in data {
+            self.data[self.write_head] = *item;
             self.write_head += 1;
             if self.write_head == SIZE {self.write_head = 0};
         }
     }
     pub fn read<'f>(&mut self, buffer: &'f mut [TYPE]) -> &'f [TYPE] {
         let mut j = 0;
-        for i in 0..buffer.len() {
+        for item in &mut *buffer {
             if self.read_head == self.write_head {break}
-            buffer[i] = self.data[self.read_head];
+            *item = self.data[self.read_head];
             j +=1;
             self.read_head += 1;
             if self.read_head == SIZE {self.read_head = 0}
