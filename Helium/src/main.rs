@@ -30,8 +30,7 @@ use gluon::mem::*;
 use gluon::pci::*;
 use gluon::idt::*;
 use x86_64::registers::control::Cr3;
-use core::ptr::read_volatile;
-use core::ptr::slice_from_raw_parts_mut;
+use core::convert::TryFrom;
 use core::{fmt::Write, ptr::{write_volatile}, slice::from_raw_parts_mut};
 #[cfg(not(test))]
 use core::panic::PanicInfo;
@@ -149,7 +148,7 @@ pub extern "sysv64" fn _start() -> ! {
         RIGHT_SHIFT = false;
         CAPS_LOCK   = false;
         NUM_LOCK    = false;
-        MULTITASKING_INDEX = 0;
+        TASK_INDEX  = 0;
     }
 
     // PCI TESTING
@@ -268,7 +267,7 @@ pub extern "sysv64" fn _start() -> ! {
         pic::pic_remap(0x20, 0x28).unwrap();
         pic::pic_enable_irq(0x01).unwrap();
         let idte = InterruptDescriptorTableEntry {
-            offset: interrupt_ps2_keyboard as extern "x86-interrupt" fn() as usize as u64,
+            offset: irq_01_asm as unsafe extern "x86-interrupt" fn() as usize as u64,
             descriptor_table_index: 1,
             table_indicator: TableIndicator::GDT,
             requested_privilege_level: PrivilegeLevel::Supervisor,
@@ -333,28 +332,38 @@ pub extern "sysv64" fn _start() -> ! {
         const STACK_SIZE: usize = 0o377;
         let mut group1: [PhysicalAddress;STACK_SIZE] = [PhysicalAddress(0);STACK_SIZE];
         let mut group2: [PhysicalAddress;STACK_SIZE] = [PhysicalAddress(0);STACK_SIZE];
+        let mut group3: [PhysicalAddress;STACK_SIZE] = [PhysicalAddress(0);STACK_SIZE];
         for i in 0..STACK_SIZE {
             group1[i] = u_alloc.allocate_page().unwrap();
             group2[i] = u_alloc.allocate_page().unwrap();
+            group3[i] = u_alloc.allocate_page().unwrap();
         }
         //Edit page maps
         let pml3 = PageMap::new(pml4.read_entry(KERNEL_OCT).unwrap().physical, PageMapLevel::L3, &u_alloc).unwrap();
         pml3.map_pages_group_4kib(&group1, 0o001_000_000, true, false, true).unwrap();
         pml3.map_pages_group_4kib(&group2, 0o001_000_400, true, false, true).unwrap();
+        pml3.map_pages_group_4kib(&group3, 0o001_001_000, true, false, true).unwrap();
         let s1p = oct_to_usize_4(KERNEL_OCT, 1, 0, 0o377, 0).unwrap() as u64;
         let s2p = oct_to_usize_4(KERNEL_OCT, 1, 0, 0o777, 0).unwrap() as u64;
+        let s3p = oct_to_usize_4(KERNEL_OCT, 1, 1, 0o377, 0).unwrap() as u64;
         let i1p = read_loop as fn() as usize as u64;
         let i2p = byte_loop as fn() as usize as u64;
-        MULTITASKING_STACKS[1] = create_task(i1p, 0x08, 0x00000202, s1p, 0x10);
-        MULTITASKING_STACKS[2] = create_task(i2p, 0x08, 0x00000202, s2p, 0x10);
+        let i3p = ps2_keyboard as fn() as usize as u64;
+        TASK_STACKS[1] = create_task(i1p, 0x08, 0x00000202, s1p, 0x10);
+        TASK_STACKS[2] = create_task(i2p, 0x08, 0x00000202, s2p, 0x10);
+        TASK_STACKS[3] = create_task(i3p, 0x08, 0x00000202, s3p, 0x10);
         writeln!(printer, "Thread 1 (PIPE READ AND PRINT):");
         writeln!(printer, "  Stack Pointer Before Init: 0x{:16X}", s1p);
-        writeln!(printer, "  Stack Pointer After Init:  0x{:16X}", MULTITASKING_STACKS[1]);
+        writeln!(printer, "  Stack Pointer After Init:  0x{:16X}", TASK_STACKS[1]);
         writeln!(printer, "  Instruction Pointer:       0x{:16X}", i1p);
         writeln!(printer, "Thread 2 (PIPE WRITE):");
         writeln!(printer, "  Stack Pointer Before Init: 0x{:16X}", s2p);
-        writeln!(printer, "  Stack Pointer After Init:  0x{:16X}", MULTITASKING_STACKS[2]);
+        writeln!(printer, "  Stack Pointer After Init:  0x{:16X}", TASK_STACKS[2]);
         writeln!(printer, "  Instruction Pointer:       0x{:16X}", i2p);
+        writeln!(printer, "Thread 3 (PS2 KEYBOARD):");
+        writeln!(printer, "  Stack Pointer Before Init: 0x{:16X}", s3p);
+        writeln!(printer, "  Stack Pointer After Init:  0x{:16X}", TASK_STACKS[3]);
+        writeln!(printer, "  Instruction Pointer:       0x{:16X}", i3p);
     }
 
     // APIC SETUP
@@ -390,7 +399,14 @@ pub extern "sysv64" fn _start() -> ! {
     loop {unsafe {asm!("HLT")}}
 }
 
-// TASKING FUNCTIONS
+// TASKING
+//Global variables
+static mut GLOBAL_WRITE_POINTER: Option<*mut dyn Write> = None;
+static mut GLOBAL_INPUT_POINTER: Option<*mut InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>> = None;
+static mut TASK_INDEX: usize = 0;
+static mut TASK_STACKS: [u64; 4] = [0;4];
+
+//Task Creation Function
 unsafe fn create_task(instruction_pointer: u64, code_selector: u16, eflags_image: u32, stack_pointer: u64, stack_selector: u16) -> u64 {
     write_volatile((stack_pointer as *mut u64).sub(1), stack_selector as u64);
     write_volatile((stack_pointer as *mut u64).sub(2), stack_pointer);
@@ -403,66 +419,165 @@ unsafe fn create_task(instruction_pointer: u64, code_selector: u16, eflags_image
     stack_pointer - 424
 }
 
+//Scheduler
+unsafe extern "sysv64" fn scheduler() -> u64 {
+    if      INPUT_PIPE.state == RingBufferState::WriteWait || INPUT_PIPE.state == RingBufferState::ReadBlock  {TASK_INDEX = 3; TASK_STACKS[3]}
+    else if TIMER_PIPE.state == RingBufferState::WriteWait || TIMER_PIPE.state == RingBufferState::ReadBlock  {TASK_INDEX = 1; TASK_STACKS[1]}
+    else if TIMER_PIPE.state == RingBufferState::ReadWait  || TIMER_PIPE.state == RingBufferState::WriteBlock {TASK_INDEX = 2; TASK_STACKS[2]}
+    else                                                                                                      {TASK_INDEX = 0; TASK_STACKS[0]}
+}
 
-// INTERRUPT FUNCTIONS
-//PS/2 Keyboard function
-static mut PS2_SCANCODES: [u8;9] = [0u8;9];
-static mut PS2_INDEX:   usize = 0x00;
+//Pipe Testing
+static mut TIMER_VAL: u8 = 0xFF;
+static mut TIMER_PIPE: RingBuffer<u8, 4096> = RingBuffer{data: [0xFF; 4096], read_head: 0, write_head: 0, state: RingBufferState::ReadWait};
+fn read_loop() {unsafe {
+    let printer = &mut *GLOBAL_WRITE_POINTER.unwrap();
+    loop {
+        write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::ReadBlock);
+        //write!(printer, "{}", core::str::from_utf8(TIMER_PIPE.read(&mut [0xFF; 4096])).unwrap());
+        writeln!(printer, "{:?}", TIMER_PIPE.read(&mut [0xFF; 4096])).unwrap();
+        write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::ReadWait);
+        asm!("INT 30h");
+    }
+}}
+fn byte_loop() {unsafe {
+    loop {
+        write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::WriteBlock);
+        TIMER_VAL = TIMER_VAL.wrapping_add(1);
+        TIMER_PIPE.write(&[ps2::read_status()]);
+        write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::WriteWait);
+        asm!("INT 30h");
+    }
+}}
+
+//PS/2 Keyboard
 static mut LEFT_SHIFT:  bool = false;
 static mut RIGHT_SHIFT: bool = false;
 static mut CAPS_LOCK:   bool = false;
 static mut NUM_LOCK:    bool = false;
-extern "x86-interrupt" fn interrupt_ps2_keyboard() {unsafe {
+static mut INPUT_PIPE: RingBuffer<ps2::InputEvent, 512> = RingBuffer{data: [ps2::InputEvent{device_id: 0xFF, event_type: ps2::InputEventType::Blank, event_id: 0, event_data: 0}; 512], read_head: 0, write_head: 0, state: RingBufferState::Free};
+fn ps2_keyboard() {unsafe {
     let printer = &mut *GLOBAL_WRITE_POINTER.unwrap();
     let inputter: &mut InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = &mut *GLOBAL_INPUT_POINTER.unwrap();
+    loop {
+        write_volatile(&mut INPUT_PIPE.state as *mut RingBufferState, RingBufferState::ReadBlock);
+        let mut buffer = [ps2::InputEvent{device_id: 0xFF, event_type: ps2::InputEventType::Blank, event_id: 0, event_data: 0}; 512];
+        let input_events = INPUT_PIPE.read(&mut buffer);
+        for input_event in input_events {
+            if input_event.event_type == ps2::InputEventType::DigitalKey {
+                match ps2::KeyID::try_from(input_event.event_id) {Ok(key_id) => {
+                    match ps2::PressType::try_from(input_event.event_data) {Ok(press_type) => {
+                        match ps2::us_qwerty(key_id, CAPS_LOCK ^ (LEFT_SHIFT || RIGHT_SHIFT), NUM_LOCK) {
+                            ps2::KeyStr::Key(key_id) => { match (key_id, press_type) {
+                                (ps2::KeyID::NumLock,       ps2::PressType::Press)   => {NUM_LOCK    = !NUM_LOCK;}
+                                (ps2::KeyID::KeyCapsLock,   ps2::PressType::Press)   => {CAPS_LOCK   = !CAPS_LOCK;}
+                                (ps2::KeyID::KeyLeftShift,  ps2::PressType::Press)   => {LEFT_SHIFT  = true;}
+                                (ps2::KeyID::KeyLeftShift,  ps2::PressType::Unpress) => {LEFT_SHIFT  = false;}
+                                (ps2::KeyID::KeyRightShift, ps2::PressType::Press)   => {RIGHT_SHIFT = true;}
+                                (ps2::KeyID::KeyRightShift, ps2::PressType::Unpress) => {RIGHT_SHIFT = false;}
+                                _ => {}
+                            }},
+                            ps2::KeyStr::Str(s) => {match press_type {ps2::PressType::Press => {
+                                for codepoint in s.chars() {
+                                    inputter.push_render(CharacterTwoTone{codepoint, foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK}, WHITESPACE);
+                                }
+                            } ps2::PressType::Unpress => {}}}
+                        }
+                    } Err(_) => {writeln!(printer, "Input Event Error: Unknown Press Type");}}
+                } Err(_) => {writeln!(printer, "Input Event Error: Unknown Key ID");}}
+            }
+        }
+        write_volatile(&mut INPUT_PIPE.state as *mut RingBufferState, RingBufferState::Free);
+        asm!("INT 30h");
+    }
+}}
+
+
+// INTERRUPT FUNCTIONS
+//PS/2 Keyboard IRQ
+static mut PS2_SCANCODES: [u8;9] = [0u8;9];
+static mut PS2_INDEX:   usize = 0x00;
+#[naked] unsafe extern "x86-interrupt" fn irq_01_asm() {
+    asm!(
+        "CLI",
+        //Save Program State
+        "PUSH RAX", "PUSH RBP", "PUSH R15", "PUSH R14",
+        "PUSH R13", "PUSH R12", "PUSH R11", "PUSH R10",
+        "PUSH R9",  "PUSH R8",  "PUSH RDI", "PUSH RSI",
+        "PUSH RDX", "PUSH RCX", "PUSH RBX", "PUSH 0",
+        "SUB RSP, 100h",
+        "MOVAPS XMMWORD PTR [RSP + 0xf0], XMM15", "MOVAPS XMMWORD PTR [RSP + 0xe0], XMM14",
+        "MOVAPS XMMWORD PTR [RSP + 0xd0], XMM13", "MOVAPS XMMWORD PTR [RSP + 0xc0], XMM12",
+        "MOVAPS XMMWORD PTR [RSP + 0xb0], XMM11", "MOVAPS XMMWORD PTR [RSP + 0xa0], XMM10",
+        "MOVAPS XMMWORD PTR [RSP + 0x90], XMM9",  "MOVAPS XMMWORD PTR [RSP + 0x80], XMM8",
+        "MOVAPS XMMWORD PTR [RSP + 0x70], XMM7",  "MOVAPS XMMWORD PTR [RSP + 0x60], XMM6",
+        "MOVAPS XMMWORD PTR [RSP + 0x50], XMM5",  "MOVAPS XMMWORD PTR [RSP + 0x40], XMM4",
+        "MOVAPS XMMWORD PTR [RSP + 0x30], XMM3",  "MOVAPS XMMWORD PTR [RSP + 0x20], XMM2",
+        "MOVAPS XMMWORD PTR [RSP + 0x10], XMM1",  "MOVAPS XMMWORD PTR [RSP + 0x00], XMM0",
+        //Save stack pointer
+        "MOV RAX, [{stack_index}+RIP]",
+        "SHL RAX, 3",
+        "LEA RCX, [{stack_array}+RIP]",
+        "MOV [RCX+RAX], RSP",
+        //Swap to kernel stack
+        "MOV RSP, [{kernel_stack}+RIP]",
+        //Call Rust Code
+        "CALL {rust_call}",
+        //Call scheduler
+        "CALL {scheduler}",
+        //Swap to thread stack
+        "MOV RSP, RAX",
+        //Load program state
+        "MOVAPS XMM0,  XMMWORD PTR [RSP + 0x00]", "MOVAPS XMM1,  XMMWORD PTR [RSP + 0x10]",
+        "MOVAPS XMM2,  XMMWORD PTR [RSP + 0x20]", "MOVAPS XMM3,  XMMWORD PTR [RSP + 0x30]",
+        "MOVAPS XMM4,  XMMWORD PTR [RSP + 0x40]", "MOVAPS XMM5,  XMMWORD PTR [RSP + 0x50]",
+        "MOVAPS XMM6,  XMMWORD PTR [RSP + 0x60]", "MOVAPS XMM7,  XMMWORD PTR [RSP + 0x70]",
+        "MOVAPS XMM8,  XMMWORD PTR [RSP + 0x80]", "MOVAPS XMM9,  XMMWORD PTR [RSP + 0x90]",
+        "MOVAPS XMM10, XMMWORD PTR [RSP + 0xA0]", "MOVAPS XMM11, XMMWORD PTR [RSP + 0xB0]",
+        "MOVAPS XMM12, XMMWORD PTR [RSP + 0xC0]", "MOVAPS XMM13, XMMWORD PTR [RSP + 0xD0]",
+        "MOVAPS XMM14, XMMWORD PTR [RSP + 0xE0]", "MOVAPS XMM15, XMMWORD PTR [RSP + 0xF0]",
+        "ADD RSP, 100h",
+        "POP RBX", "POP RBX", "POP RCX", "POP RDX",
+        "POP RSI", "POP RDI", "POP R8",  "POP R9",
+        "POP R10", "POP R11", "POP R12", "POP R13",
+        "POP R14", "POP R15", "POP RBP", "POP RAX",
+        //Enter code
+        "STI",
+        "IRETQ",
+        //Symbols
+        stack_array  = sym TASK_STACKS,
+        stack_index  = sym TASK_INDEX,
+        kernel_stack = sym TASK_STACKS,
+        rust_call    = sym irq_01_rust,
+        scheduler    = sym scheduler,
+        options(noreturn),
+    )
+}
+unsafe extern "sysv64" fn irq_01_rust() {
     while ps2::poll_input() {
         let scancode = ps2::read_input();
         PS2_SCANCODES[PS2_INDEX] = scancode;
         PS2_INDEX += 1;
-        match ps2::scancodes_2(&PS2_SCANCODES[0..PS2_INDEX]) {
+        match ps2::scancodes_2(&PS2_SCANCODES[0..PS2_INDEX], 0x00) {
             Ok(ps2_scan) => match ps2_scan {
                 ps2::Ps2Scan::Finish(input_event) => {
-                    //writeln!(printer, "PS/2 KEYBOARD {:?}", input_event);
-                    //writeln!(printer, "PS/2 KEYBOARD SUCCESS: {:?}", &PS2_SCANCODES[0..PS2_INDEX]);
-                    if let ps2::InputEvent::DigitalKey(press_type, key_id) = input_event {match press_type {
-                        ps2::PressType::Press => match ps2::us_qwerty(key_id, CAPS_LOCK ^ (LEFT_SHIFT || RIGHT_SHIFT), NUM_LOCK) {
-                            ps2::KeyStr::Key(phys_id) => match phys_id {
-                                ps2::KeyID::KeyLeftShift => {LEFT_SHIFT = true;}
-                                ps2::KeyID::KeyRightShift => {RIGHT_SHIFT = true;}
-                                ps2::KeyID::KeyCapsLock => {CAPS_LOCK = !CAPS_LOCK;}
-                                ps2::KeyID::NumLock => {NUM_LOCK = !NUM_LOCK;}
-                                _ => {}
-                            }
-                            ps2::KeyStr::Str(string) => {
-                                for char in string.chars() {
-                                    inputter.push_render(CharacterTwoTone::<ColorBGRX> {codepoint: char, foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK}, WHITESPACE);
-                                }
-                            }
-                        }
-                        ps2::PressType::Unpress => match key_id {
-                            ps2::KeyID::KeyLeftShift => {LEFT_SHIFT = false;}
-                            ps2::KeyID::KeyRightShift => {RIGHT_SHIFT = false;}
-                            _ => {}
-                        } 
-                    }}
+                    INPUT_PIPE.write(&[input_event]);
+                    write_volatile(&mut INPUT_PIPE.state as *mut RingBufferState, RingBufferState::WriteWait);
                     PS2_INDEX = 0;
                 }
                 ps2::Ps2Scan::Continue => {}
             }
             Err(error) => {
+                let printer = &mut *GLOBAL_WRITE_POINTER.unwrap();
                 writeln!(printer, "PS/2 KEYBOARD ERROR: {:?} | {}", &PS2_SCANCODES[0..PS2_INDEX], error);
                 PS2_INDEX = 0;
             }
         }
     }
-    pic::pic_end_irq(0x01);
-}}
+    pic::pic_end_irq(0x01).unwrap();
+}
 
-//Timer Function Test
-static mut MULTITASKING_INDEX: usize = 0;
-static mut MULTITASKING_STACKS: [u64; 3] = [0;3];
-static mut TIMER_VAL: u8 = 0xFF;
-static mut TIMER_PIPE: RingBuffer = RingBuffer{data: [0xFF; 4096], read_head: 0, write_head: 0, read_block: false, read_wait: false, write_block: false, write_wait: false };
+//LAPIC Timer
 #[naked] unsafe extern "x86-interrupt" fn interrupt_timer() {
     asm!(
         //Save Program State
@@ -479,7 +594,7 @@ static mut TIMER_PIPE: RingBuffer = RingBuffer{data: [0xFF; 4096], read_head: 0,
         "MOVAPS XMMWORD PTR [RSP + 0x50], XMM5",  "MOVAPS XMMWORD PTR [RSP + 0x40], XMM4",
         "MOVAPS XMMWORD PTR [RSP + 0x30], XMM3",  "MOVAPS XMMWORD PTR [RSP + 0x20], XMM2",
         "MOVAPS XMMWORD PTR [RSP + 0x10], XMM1",  "MOVAPS XMMWORD PTR [RSP + 0x00], XMM0",
-        //Save stack pointer << these lines of code are the only ones I've edited between okay and broken
+        //Save stack pointer
         "MOV RAX, [{stack_index}+RIP]",
         "SHL RAX, 3",
         "LEA RCX, [{stack_array}+RIP]",
@@ -509,43 +624,14 @@ static mut TIMER_PIPE: RingBuffer = RingBuffer{data: [0xFF; 4096], read_head: 0,
         //Enter code
         "IRETQ",
         //Symbols
-        stack_array  = sym MULTITASKING_STACKS,
-        stack_index  = sym MULTITASKING_INDEX,
-        kernel_stack = sym MULTITASKING_STACKS,
+        stack_array  = sym TASK_STACKS,
+        stack_index  = sym TASK_INDEX,
+        kernel_stack = sym TASK_STACKS,
         scheduler    = sym scheduler,
         lapic_eoi    = sym pic::lapic_end_int,
         options(noreturn),
     )
 }
-unsafe extern "sysv64" fn scheduler() -> u64 {
-    
-    if      (TIMER_PIPE.write_block || TIMER_PIPE.read_wait)  && !TIMER_PIPE.read_block                            {MULTITASKING_INDEX = 2; MULTITASKING_STACKS[2]}
-    else if (TIMER_PIPE.read_block  || TIMER_PIPE.write_wait) && !TIMER_PIPE.write_block                           {MULTITASKING_INDEX = 1; MULTITASKING_STACKS[1]}
-    else if  !TIMER_PIPE.read_block && !TIMER_PIPE.read_wait  && !TIMER_PIPE.write_block && !TIMER_PIPE.write_wait {MULTITASKING_INDEX = 2; MULTITASKING_STACKS[2]}
-    else {panic!("Unexpected ring buffer state.");}
-}
-fn read_loop() {unsafe {
-    let printer = &mut *GLOBAL_WRITE_POINTER.unwrap();
-    loop {
-        write_volatile(&mut TIMER_PIPE.read_block as *mut bool, true);
-        write!(printer, "{}", core::str::from_utf8(TIMER_PIPE.read(&mut [0xFF; 4096])).unwrap());
-        write_volatile(&mut TIMER_PIPE.read_block as *mut bool, false);
-        write_volatile(&mut TIMER_PIPE.write_wait as *mut bool, false);
-        write_volatile(&mut TIMER_PIPE.read_wait as *mut bool, true);
-        asm!("INT 30h");
-    }
-}}
-fn byte_loop() {unsafe {
-    loop {
-        write_volatile(&mut TIMER_PIPE.write_block as *mut bool, true);
-        TIMER_VAL = TIMER_VAL.wrapping_add(1);
-        TIMER_PIPE.write("Hello World! ".as_bytes());
-        write_volatile(&mut TIMER_PIPE.write_block as *mut bool, false);
-        write_volatile(&mut TIMER_PIPE.read_wait as *mut bool, false);
-        write_volatile(&mut TIMER_PIPE.write_wait as *mut bool, true);
-        asm!("INT 30h");
-    }
-}}
 
 //Empty Function
 extern "x86-interrupt" fn _interrupt_dummy() {unsafe {
@@ -553,33 +639,28 @@ extern "x86-interrupt" fn _interrupt_dummy() {unsafe {
 }}
 
 //Exception Functions (Just panic for now)
-unsafe fn exception_divide_error()       {asm!("MOV RSP, [{}+RIP]", sym MULTITASKING_STACKS); panic!("Interrupt Vector 0x00 (#DE): Divide Error")}
-unsafe fn exception_debug()              {asm!("MOV RSP, [{}+RIP]", sym MULTITASKING_STACKS); panic!("Interrupt Vector 0x01 (#DB): Debug Exception")}
-unsafe fn exception_breakpoint()         {asm!("MOV RSP, [{}+RIP]", sym MULTITASKING_STACKS); panic!("Interrupt Vector 0x03 (#BP): Breakpoint")}
-unsafe fn exception_overflow()           {asm!("MOV RSP, [{}+RIP]", sym MULTITASKING_STACKS); panic!("Interrupt Vector 0x04 (#OF): Overflow")}
-unsafe fn exception_bound_range()        {asm!("MOV RSP, [{}+RIP]", sym MULTITASKING_STACKS); panic!("Interrupt Vector 0x05 (#BR): Bound Range Exceeded")}
-unsafe fn exception_invalid_opcode()     {asm!("MOV RSP, [{}+RIP]", sym MULTITASKING_STACKS); panic!("Interrupt Vector 0x06 (#UD): Invalid Opcode")}
-unsafe fn exception_no_fpu()             {asm!("MOV RSP, [{}+RIP]", sym MULTITASKING_STACKS); panic!("Interrupt Vector 0x07 (#NM): No Floating Point Unit")}
-unsafe fn exception_double()             {asm!("MOV RSP, [{}+RIP]", sym MULTITASKING_STACKS); panic!("Interrupt Vector 0x08 (#DF): Double Fault")}
-unsafe fn exception_invalid_tss()        {asm!("MOV RSP, [{}+RIP]", sym MULTITASKING_STACKS); panic!("Interrupt Vector 0x0A (#TS): Invalid Task State Segment")}
-unsafe fn exception_not_present()        {asm!("MOV RSP, [{}+RIP]", sym MULTITASKING_STACKS); panic!("Interrupt Vector 0x0B (#NP): Segment Not Present")}
-unsafe fn exception_stack_segment()      {asm!("MOV RSP, [{}+RIP]", sym MULTITASKING_STACKS); panic!("Interrupt Vector 0x0C (#SS): Stack Segment Fault")}
-unsafe fn exception_general_protection() {asm!("MOV RSP, [{}+RIP]", sym MULTITASKING_STACKS); panic!("Interrupt Vector 0x0D (#GP): General Protection Error")}
-unsafe fn exception_page_fault()         {asm!("MOV RSP, [{}+RIP]", sym MULTITASKING_STACKS); panic!("Interrupt Vector 0x0E (#PF): Page Fault")}
-unsafe fn exception_fpu_error()          {asm!("MOV RSP, [{}+RIP]", sym MULTITASKING_STACKS); panic!("Interrupt Vector 0x10 (#MF): Floating Point Math Fault")}
-unsafe fn exception_alignment()          {asm!("MOV RSP, [{}+RIP]", sym MULTITASKING_STACKS); panic!("Interrupt Vector 0x11 (#AC): Alignment Check")}
-unsafe fn exception_machine()            {asm!("MOV RSP, [{}+RIP]", sym MULTITASKING_STACKS); panic!("Interrupt Vector 0x12 (#MC): Machine Check")}
-unsafe fn exception_simd()               {asm!("MOV RSP, [{}+RIP]", sym MULTITASKING_STACKS); panic!("Interrupt Vector 0x13 (#XM): SIMD Floating Point Math Exception")}
-unsafe fn exception_virtualization()     {asm!("MOV RSP, [{}+RIP]", sym MULTITASKING_STACKS); panic!("Interrupt Vector 0x14 (#VE): Virtualization Exception")}
-unsafe fn exception_control_protection() {asm!("MOV RSP, [{}+RIP]", sym MULTITASKING_STACKS); panic!("Interrupt Vector 0x15 (#CP): Control Protection Exception")}
+unsafe fn exception_divide_error()       {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x00 (#DE): Divide Error")}
+unsafe fn exception_debug()              {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x01 (#DB): Debug Exception")}
+unsafe fn exception_breakpoint()         {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x03 (#BP): Breakpoint")}
+unsafe fn exception_overflow()           {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x04 (#OF): Overflow")}
+unsafe fn exception_bound_range()        {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x05 (#BR): Bound Range Exceeded")}
+unsafe fn exception_invalid_opcode()     {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x06 (#UD): Invalid Opcode")}
+unsafe fn exception_no_fpu()             {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x07 (#NM): No Floating Point Unit")}
+unsafe fn exception_double()             {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x08 (#DF): Double Fault")}
+unsafe fn exception_invalid_tss()        {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x0A (#TS): Invalid Task State Segment")}
+unsafe fn exception_not_present()        {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x0B (#NP): Segment Not Present")}
+unsafe fn exception_stack_segment()      {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x0C (#SS): Stack Segment Fault")}
+unsafe fn exception_general_protection() {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x0D (#GP): General Protection Error")}
+unsafe fn exception_page_fault()         {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x0E (#PF): Page Fault")}
+unsafe fn exception_fpu_error()          {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x10 (#MF): Floating Point Math Fault")}
+unsafe fn exception_alignment()          {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x11 (#AC): Alignment Check")}
+unsafe fn exception_machine()            {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x12 (#MC): Machine Check")}
+unsafe fn exception_simd()               {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x13 (#XM): SIMD Floating Point Math Exception")}
+unsafe fn exception_virtualization()     {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x14 (#VE): Virtualization Exception")}
+unsafe fn exception_control_protection() {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x15 (#CP): Control Protection Exception")}
 
 
 // PANIC HANDLER
-//Panic Variables
-static mut GLOBAL_WRITE_POINTER: Option<*mut dyn Write> = None;
-static mut GLOBAL_INPUT_POINTER: Option<*mut InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>> = None;
-
-//Panic Handler
 #[cfg(not(test))]
 #[panic_handler]
 fn panic_handler(panic_info: &PanicInfo) -> ! {
@@ -668,32 +749,39 @@ impl PageAllocator for UsableMemoryPageAllocator {
 
 // PIPING
 #[repr(C)]
-struct RingBuffer {
+struct RingBuffer<TYPE, const SIZE: usize> {
+    state:       RingBufferState,
     read_head:   usize,
-    read_block:  bool,
-    read_wait:   bool,
     write_head:  usize,
-    write_block: bool,
-    write_wait:  bool,
-    data:        [u8; 4096],
+    data:        [TYPE; SIZE],
 }
-impl RingBuffer {
-    pub fn write(&mut self, data: &[u8]) {
+impl<TYPE, const SIZE: usize> RingBuffer<TYPE, SIZE> where TYPE: Clone+Copy {
+    pub fn write(&mut self, data: &[TYPE]) {
         for i in 0..data.len() {
             self.data[self.write_head] = data[i];
             self.write_head += 1;
-            if self.write_head == 4096 {self.write_head = 0};
+            if self.write_head == SIZE {self.write_head = 0};
         }
     }
-    pub fn read<'f>(&mut self, buffer: &'f mut [u8]) -> &'f [u8] {
+    pub fn read<'f>(&mut self, buffer: &'f mut [TYPE]) -> &'f [TYPE] {
         let mut j = 0;
         for i in 0..buffer.len() {
             if self.read_head == self.write_head {break}
             buffer[i] = self.data[self.read_head];
             j +=1;
             self.read_head += 1;
-            if self.read_head == 4096 {self.read_head = 0}
+            if self.read_head == SIZE {self.read_head = 0}
         }
         &buffer[0..j]
     }
+}
+
+#[repr(u8)]
+#[derive(PartialEq)]
+pub enum RingBufferState {
+    Free = 0x00,
+    WriteBlock = 0x01,
+    WriteWait = 0x02,
+    ReadBlock = 0x03,
+    ReadWait = 0x04,
 }

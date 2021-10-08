@@ -48,7 +48,7 @@ pub unsafe fn pic_enable_irq(irq: u8)  -> Result<(), &'static str> {
 }
 
 //Send End IRQ Signal
-pub unsafe fn pic_end_irq(irq: u8) -> Result<(), &'static str> {
+pub unsafe extern "sysv64" fn pic_end_irq(irq: u8) -> Result<(), &'static str> {
     if irq < 16 {
         if irq > 7 { PORT_PIC2_COMMAND.write(0x20);}
         PORT_PIC1_COMMAND.write(0x20);

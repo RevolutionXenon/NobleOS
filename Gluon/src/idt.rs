@@ -1,6 +1,10 @@
-
+// GLUON: IDT
+// Structs and enums related to the contents and handling of x86-64 GDT and IDT structures
 
 // HEADER
+//Flags
+#![allow(asm_sub_register)]
+
 //Imports
 use crate::{*, mem::LinearAddress};
 
@@ -226,8 +230,8 @@ impl InterruptDescriptorTable {
     pub fn write_entry(&self, entry: &InterruptDescriptorTableEntry, position: u16) -> Result<(), &'static str> {
         if position >  self.limit {return Err("Interrupt Descriptor Table: Entry position out of bounds on write.")}
         let data = entry.to_bytes()?;
-        for i in 0..12 {
-            unsafe {*((self.address.0) as *mut u8).add((position as usize)*16).add(i) = data[i]}
+        for (i, byte) in data.iter().enumerate().take(12) {
+            unsafe {*((self.address.0) as *mut u8).add((position as usize)*16).add(i) = *byte}
         }
         Ok(())
     }
@@ -235,8 +239,8 @@ impl InterruptDescriptorTable {
     pub fn read_entry_raw(&self, position: u16) -> Result<[u8;16], &'static str> {
         if position > self.limit {return Err("Interrupt Descriptor Table: Entry position out of bounds on raw read.")}
         let mut result: [u8;16] = [0u8;16];
-        for i in 0..16 {
-            result[i] = unsafe {*((self.address.0) as *mut u8).add(position as usize * 16).add(i)}
+        for (i, byte) in result.iter_mut().enumerate() {
+            *byte = unsafe {*((self.address.0) as *mut u8).add(position as usize * 16).add(i)}
         }
         Ok(result)
     }
