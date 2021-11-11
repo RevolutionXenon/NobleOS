@@ -6,7 +6,7 @@
 #![allow(asm_sub_register)]
 
 //Imports
-use crate::{*, mem::LinearAddress};
+use crate::{*, x86_64_paging::LinearAddress};
 
 
 // GLOBAL DESCRIPTOR TABLE

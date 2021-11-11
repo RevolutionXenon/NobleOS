@@ -21,12 +21,13 @@
 #![feature(asm)]
 
 //Imports
-pub mod elf;
-pub mod idt;
-pub mod mem;
-pub mod pci;
-pub mod pic;
-pub mod ps2;
+pub mod sysv_executable;
+pub mod x86_64_paging;
+pub mod x86_64_pci;
+pub mod x86_64_ps2;
+pub mod x86_64_segmentation;
+pub mod x86_64_syscall;
+pub mod x86_64_timers;
 use core::convert::TryFrom;
 use x86_64::instructions::port::*;
 
@@ -69,6 +70,7 @@ pub const HIGHER_HALF_57:   usize = 0o_177_000_000_000_000_000_0000_usize; //HIG
 pub const HIGHER_HALF_48:   usize = 0o_177_777_000_000_000_000_0000_usize; //HIGHER HALF SIGN EXTENSION IN FOUR LEVEL PAGE MAP (48-bit address space)
 pub const PHYSICAL_OCT:     usize = 0o_________000__________________usize; //PML4 OFFSET OF PHYSICAL MEMORY PHYSICAL LOCATION
 pub const KERNEL_OCT:       usize = 0o_________400__________________usize; //PML4 OFFSET OF KERNEL VIRTUAL LOCATION
+pub const STACKS_OCT:       usize = 0o_________772__________________usize; //PML4 OFFSET OF KERNEL STACKS
 pub const PROGRAMS_OCT:     usize = 0o_________773__________________usize; //PML4 OFFSET OF PROGRAMS STORED BY BOOTLOADER
 pub const FRAME_BUFFER_OCT: usize = 0o_________774__________________usize; //PML4 OFFSET OF SCREEN BUFFERS
 pub const FREE_MEMORY_OCT:  usize = 0o_________775__________________usize; //PML4 OFFSET OF FREE PHYSICAL MEMORY VIRTUAL LOCATION

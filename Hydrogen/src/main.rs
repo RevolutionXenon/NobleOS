@@ -24,8 +24,8 @@ extern crate alloc;
 //Imports
 use photon::*;
 use gluon::*;
-use gluon::elf::*;
-use gluon::mem::*;
+use gluon::sysv_executable::*;
+use gluon::x86_64_paging::*;
 use core::cell::Cell;
 use core::cell::RefCell;
 use core::convert::TryInto;

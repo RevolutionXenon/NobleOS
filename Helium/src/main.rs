@@ -2,9 +2,9 @@
 // Helium is the Noble Kernel:
 // (PLANNED) Program loading
 // (PLANNED) Thread management
-// (PLANNED) Code execution
-// (PLANNED) CPU time sharing
-// (PLANNED) Interrupt handling
+// Code execution
+// CPU time sharing
+// Interrupt handling
 // (PLANNED) System call handling
 // (PLANNED) Pipe management
 
@@ -21,14 +21,12 @@
 #![feature(panic_info_message)]
 #![feature(start)]
 
-use gluon::idt::GlobalDescriptorTable;
-use gluon::idt::GlobalDescriptorTableEntry;
 //Imports
 use photon::*;
 use gluon::*;
-use gluon::mem::*;
-use gluon::pci::*;
-use gluon::idt::*;
+use gluon::x86_64_paging::*;
+use gluon::x86_64_pci::*;
+use gluon::x86_64_segmentation::*;
 use x86_64::registers::control::Cr3;
 use core::convert::TryFrom;
 use core::{fmt::Write, ptr::{write_volatile}, slice::from_raw_parts_mut};
@@ -36,7 +34,7 @@ use core::{fmt::Write, ptr::{write_volatile}, slice::from_raw_parts_mut};
 use core::panic::PanicInfo;
 
 //Constants
-const HELIUM_VERSION: &str = "vDEV-2021-10-06"; //CURRENT VERSION OF KERNEL
+const HELIUM_VERSION: &str = "vDEV-2021-10-09"; //CURRENT VERSION OF KERNEL
 static WHITESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
 static _BLACKSPACE: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
 static _BLUESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE,  background: COLOR_BGRX_BLACK};
@@ -263,8 +261,8 @@ pub extern "sysv64" fn _start() -> ! {
     // PIC SETUP
     writeln!(printer, "\n=== PROGRAMMABLE INTERRUPT CONTROLLER ===\n");
     unsafe {
-        pic::pic_remap(0x20, 0x28).unwrap();
-        pic::pic_enable_irq(0x01).unwrap();
+        x86_64_timers::pic_remap(0x20, 0x28).unwrap();
+        x86_64_timers::pic_enable_irq(0x01).unwrap();
         let idte = InterruptDescriptorTableEntry {
             offset: irq_01_rust as unsafe extern "x86-interrupt" fn() as usize as u64,
             descriptor_table_index: 1,
@@ -286,20 +284,20 @@ pub extern "sysv64" fn _start() -> ! {
     unsafe {
         let ps2_port1_present: bool;
         let ps2_port2_present: bool;
-        ps2::disable_port1();
-        ps2::disable_port2();
-        let a1 = ps2::read_memory(0x0000).unwrap();
-        ps2::write_memory(0, a1 & 0b1011_1100).unwrap();
-        if ps2::test_controller() {
+        x86_64_ps2::disable_port1();
+        x86_64_ps2::disable_port2();
+        let a1 = x86_64_ps2::read_memory(0x0000).unwrap();
+        x86_64_ps2::write_memory(0, a1 & 0b1011_1100).unwrap();
+        if x86_64_ps2::test_controller() {
             writeln!(printer, "PS/2 Controller test succeeded.");
-            ps2_port1_present = ps2::test_port_1();
-            ps2_port2_present = ps2::test_port_2();
+            ps2_port1_present = x86_64_ps2::test_port_1();
+            ps2_port2_present = x86_64_ps2::test_port_2();
             if ps2_port1_present || ps2_port2_present {
                 writeln!(printer, "PS/2 Port tests succeeded:");
                 if ps2_port1_present {
                     writeln!(printer, "  PS/2 Port 1 Present.");
-                    ps2::enable_port1();
-                    ps2::enable_int_port1();
+                    x86_64_ps2::enable_port1();
+                    x86_64_ps2::enable_int_port1();
                 }
                 if ps2_port2_present {
                     writeln!(printer, "  PS/2 Port 2 Present.");
@@ -368,9 +366,9 @@ pub extern "sysv64" fn _start() -> ! {
     // APIC SETUP
     writeln!(printer, "\n=== ADVANCED PROGRAMMABLE INTERRUPT CONTROLLER ===\n");
     unsafe {
-        writeln!(printer, "APIC Present: {}", pic::apic_check());
-        writeln!(printer, "APIC Base: 0x{:16X}", pic::lapic_get_base());
-        pic::LAPIC_ADDRESS = (pic::lapic_get_base() as usize + oct4_to_usize(IDENTITY_OCT).unwrap()) as *mut u8;
+        writeln!(printer, "APIC Present: {}", x86_64_timers::apic_check());
+        writeln!(printer, "APIC Base: 0x{:16X}", x86_64_timers::lapic_get_base());
+        x86_64_timers::LAPIC_ADDRESS = (x86_64_timers::lapic_get_base() as usize + oct4_to_usize(IDENTITY_OCT).unwrap()) as *mut u8;
         let mut idte = InterruptDescriptorTableEntry {
             offset: _interrupt_dummy as extern "x86-interrupt" fn() as usize as u64,
             descriptor_table_index: 1,
@@ -382,21 +380,22 @@ pub extern "sysv64" fn _start() -> ! {
             descriptor_type: DescriptorType::InterruptGate,
         };
         idt.write_entry(&idte, 0xFF);
-        pic::lapic_enable();
-        pic::lapic_spurious(0xFF);
-        writeln!(printer, "APIC ID:   0x{:1X}", pic::lapic_read_register(0x20).unwrap() >> 24);
-        writeln!(printer, "APIC 0xF0: 0x{:08X}", pic::lapic_read_register(0xF0).unwrap());
+        x86_64_timers::lapic_enable();
+        x86_64_timers::lapic_spurious(0xFF);
+        writeln!(printer, "APIC ID:   0x{:1X}", x86_64_timers::lapic_read_register(0x20).unwrap() >> 24);
+        writeln!(printer, "APIC 0xF0: 0x{:08X}", x86_64_timers::lapic_read_register(0xF0).unwrap());
         idte.offset = interrupt_timer as unsafe extern "x86-interrupt" fn() as usize as u64;
         idt.write_entry(&idte, 0x30);
-        pic::lapic_timer(0x30, false, pic::TimerMode::Periodic);
-        pic::lapic_divide_config(pic::LapicDivide::Divide_128);
+        x86_64_timers::lapic_timer(0x30, false, x86_64_timers::TimerMode::Periodic);
+        x86_64_timers::lapic_divide_config(x86_64_timers::LapicDivide::Divide_128);
     }
 
     // FINISH LOADING
     writeln!(printer, "\n=== STARTUP COMPLETE ===\n");
-    unsafe {pic::lapic_initial_count(100_000);}
+    unsafe {x86_64_timers::lapic_initial_count(100_000);}
     loop {unsafe {asm!("HLT")}}
 }
+
 
 // TASKING
 //Global variables
@@ -426,7 +425,7 @@ unsafe extern "sysv64" fn scheduler() -> u64 {
     else                                                                                                      {TASK_INDEX = 0; TASK_STACKS[0]}
 }
 
-//Pipe Testing
+//Pipe Testing Task
 static mut TIMER_VAL: u8 = 0xFF;
 static mut TIMER_PIPE: RingBuffer<u8, 4096> = RingBuffer{data: [0xFF; 4096], read_head: 0, write_head: 0, state: RingBufferState::ReadWait};
 fn read_loop() {unsafe {
@@ -450,38 +449,38 @@ fn byte_loop() {unsafe {
     }
 }}
 
-//PS/2 Keyboard
+//PS/2 Keyboard Task
 static mut LEFT_SHIFT:  bool = false;
 static mut RIGHT_SHIFT: bool = false;
 static mut CAPS_LOCK:   bool = false;
 static mut NUM_LOCK:    bool = false;
-static mut INPUT_PIPE: RingBuffer<ps2::InputEvent, 512> = RingBuffer{data: [ps2::InputEvent{device_id: 0xFF, event_type: ps2::InputEventType::Blank, event_id: 0, event_data: 0}; 512], read_head: 0, write_head: 0, state: RingBufferState::Free};
+static mut INPUT_PIPE: RingBuffer<x86_64_ps2::InputEvent, 512> = RingBuffer{data: [x86_64_ps2::InputEvent{device_id: 0xFF, event_type: x86_64_ps2::InputEventType::Blank, event_id: 0, event_data: 0}; 512], read_head: 0, write_head: 0, state: RingBufferState::Free};
 fn ps2_keyboard() {unsafe {
     let printer = &mut *GLOBAL_WRITE_POINTER.unwrap();
     let inputter: &mut InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = &mut *GLOBAL_INPUT_POINTER.unwrap();
     loop {
         write_volatile(&mut INPUT_PIPE.state as *mut RingBufferState, RingBufferState::ReadBlock);
-        let mut buffer = [ps2::InputEvent{device_id: 0xFF, event_type: ps2::InputEventType::Blank, event_id: 0, event_data: 0}; 512];
+        let mut buffer = [x86_64_ps2::InputEvent{device_id: 0xFF, event_type: x86_64_ps2::InputEventType::Blank, event_id: 0, event_data: 0}; 512];
         let input_events = INPUT_PIPE.read(&mut buffer);
         for input_event in input_events {
-            if input_event.event_type == ps2::InputEventType::DigitalKey {
-                match ps2::KeyID::try_from(input_event.event_id) {Ok(key_id) => {
-                    match ps2::PressType::try_from(input_event.event_data) {Ok(press_type) => {
-                        match ps2::us_qwerty(key_id, CAPS_LOCK ^ (LEFT_SHIFT || RIGHT_SHIFT), NUM_LOCK) {
-                            ps2::KeyStr::Key(key_id) => { match (key_id, press_type) {
-                                (ps2::KeyID::NumLock,       ps2::PressType::Press)   => {NUM_LOCK    = !NUM_LOCK;}
-                                (ps2::KeyID::KeyCapsLock,   ps2::PressType::Press)   => {CAPS_LOCK   = !CAPS_LOCK;}
-                                (ps2::KeyID::KeyLeftShift,  ps2::PressType::Press)   => {LEFT_SHIFT  = true;}
-                                (ps2::KeyID::KeyLeftShift,  ps2::PressType::Unpress) => {LEFT_SHIFT  = false;}
-                                (ps2::KeyID::KeyRightShift, ps2::PressType::Press)   => {RIGHT_SHIFT = true;}
-                                (ps2::KeyID::KeyRightShift, ps2::PressType::Unpress) => {RIGHT_SHIFT = false;}
+            if input_event.event_type == x86_64_ps2::InputEventType::DigitalKey {
+                match x86_64_ps2::KeyID::try_from(input_event.event_id) {Ok(key_id) => {
+                    match x86_64_ps2::PressType::try_from(input_event.event_data) {Ok(press_type) => {
+                        match x86_64_ps2::us_qwerty(key_id, CAPS_LOCK ^ (LEFT_SHIFT || RIGHT_SHIFT), NUM_LOCK) {
+                            x86_64_ps2::KeyStr::Key(key_id) => { match (key_id, press_type) {
+                                (x86_64_ps2::KeyID::NumLock,       x86_64_ps2::PressType::Press)   => {NUM_LOCK    = !NUM_LOCK;}
+                                (x86_64_ps2::KeyID::KeyCapsLock,   x86_64_ps2::PressType::Press)   => {CAPS_LOCK   = !CAPS_LOCK;}
+                                (x86_64_ps2::KeyID::KeyLeftShift,  x86_64_ps2::PressType::Press)   => {LEFT_SHIFT  = true;}
+                                (x86_64_ps2::KeyID::KeyLeftShift,  x86_64_ps2::PressType::Unpress) => {LEFT_SHIFT  = false;}
+                                (x86_64_ps2::KeyID::KeyRightShift, x86_64_ps2::PressType::Press)   => {RIGHT_SHIFT = true;}
+                                (x86_64_ps2::KeyID::KeyRightShift, x86_64_ps2::PressType::Unpress) => {RIGHT_SHIFT = false;}
                                 _ => {}
                             }},
-                            ps2::KeyStr::Str(s) => {match press_type {ps2::PressType::Press => {
+                            x86_64_ps2::KeyStr::Str(s) => {match press_type {x86_64_ps2::PressType::Press => {
                                 for codepoint in s.chars() {
                                     inputter.push_render(CharacterTwoTone{codepoint, foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK}, WHITESPACE);
                                 }
-                            } ps2::PressType::Unpress => {}}}
+                            } x86_64_ps2::PressType::Unpress => {}}}
                         }
                     } Err(_) => {writeln!(printer, "Input Event Error: Unknown Press Type");}}
                 } Err(_) => {writeln!(printer, "Input Event Error: Unknown Key ID");}}
@@ -498,18 +497,18 @@ fn ps2_keyboard() {unsafe {
 static mut PS2_SCANCODES: [u8;9] = [0u8;9];
 static mut PS2_INDEX:   usize = 0x00;
 unsafe extern "x86-interrupt" fn irq_01_rust() {
-    while ps2::poll_input() {
-        let scancode = ps2::read_input();
+    while x86_64_ps2::poll_input() {
+        let scancode = x86_64_ps2::read_input();
         PS2_SCANCODES[PS2_INDEX] = scancode;
         PS2_INDEX += 1;
-        match ps2::scancodes_2(&PS2_SCANCODES[0..PS2_INDEX], 0x00) {
+        match x86_64_ps2::scancodes_2(&PS2_SCANCODES[0..PS2_INDEX], 0x00) {
             Ok(ps2_scan) => match ps2_scan {
-                ps2::Ps2Scan::Finish(input_event) => {
+                x86_64_ps2::Ps2Scan::Finish(input_event) => {
                     INPUT_PIPE.write(&[input_event]);
                     write_volatile(&mut INPUT_PIPE.state as *mut RingBufferState, RingBufferState::WriteWait);
                     PS2_INDEX = 0;
                 }
-                ps2::Ps2Scan::Continue => {}
+                x86_64_ps2::Ps2Scan::Continue => {}
             }
             Err(error) => {
                 let printer = &mut *GLOBAL_WRITE_POINTER.unwrap();
@@ -518,7 +517,7 @@ unsafe extern "x86-interrupt" fn irq_01_rust() {
             }
         }
     }
-    pic::pic_end_irq(0x01).unwrap();
+    x86_64_timers::pic_end_irq(0x01).unwrap();
 }
 
 //LAPIC Timer
@@ -572,15 +571,68 @@ unsafe extern "x86-interrupt" fn irq_01_rust() {
         stack_index  = sym TASK_INDEX,
         kernel_stack = sym TASK_STACKS,
         scheduler    = sym scheduler,
-        lapic_eoi    = sym pic::lapic_end_int,
+        lapic_eoi    = sym x86_64_timers::lapic_end_int,
         options(noreturn),
     )
 }
 
 //Empty Function
 extern "x86-interrupt" fn _interrupt_dummy() {unsafe {
-    pic::lapic_end_int()
+    x86_64_timers::lapic_end_int()
 }}
+
+//Generic Interrupt (System Call?)
+#[naked] unsafe extern "x86-interrupt" fn _interrupt_gen<const FP: u64>() {
+    asm!(
+        //Save Program State
+        "PUSH RAX", "PUSH RBP", "PUSH R15", "PUSH R14",
+        "PUSH R13", "PUSH R12", "PUSH R11", "PUSH R10",
+        "PUSH R9",  "PUSH R8",  "PUSH RDI", "PUSH RSI",
+        "PUSH RDX", "PUSH RCX", "PUSH RBX", "PUSH 0",
+        "SUB RSP, 100h",
+        "MOVAPS XMMWORD PTR [RSP + 0xf0], XMM15", "MOVAPS XMMWORD PTR [RSP + 0xe0], XMM14",
+        "MOVAPS XMMWORD PTR [RSP + 0xd0], XMM13", "MOVAPS XMMWORD PTR [RSP + 0xc0], XMM12",
+        "MOVAPS XMMWORD PTR [RSP + 0xb0], XMM11", "MOVAPS XMMWORD PTR [RSP + 0xa0], XMM10",
+        "MOVAPS XMMWORD PTR [RSP + 0x90], XMM9",  "MOVAPS XMMWORD PTR [RSP + 0x80], XMM8",
+        "MOVAPS XMMWORD PTR [RSP + 0x70], XMM7",  "MOVAPS XMMWORD PTR [RSP + 0x60], XMM6",
+        "MOVAPS XMMWORD PTR [RSP + 0x50], XMM5",  "MOVAPS XMMWORD PTR [RSP + 0x40], XMM4",
+        "MOVAPS XMMWORD PTR [RSP + 0x30], XMM3",  "MOVAPS XMMWORD PTR [RSP + 0x20], XMM2",
+        "MOVAPS XMMWORD PTR [RSP + 0x10], XMM1",  "MOVAPS XMMWORD PTR [RSP + 0x00], XMM0",
+        //Save stack pointer
+        "MOV RAX, [{stack_index}+RIP]",
+        "SHL RAX, 3",
+        "LEA RCX, [{stack_array}+RIP]",
+        "MOV [RCX+RAX], RSP",
+        //Swap to kernel stack
+        "MOV RSP, [{kernel_stack}+RIP]",
+        //Call function
+        "CALL {function_call}",
+        //Reload stack
+        "MOV RSP, RAX",
+        //Load program state
+        "MOVAPS XMM0,  XMMWORD PTR [RSP + 0x00]", "MOVAPS XMM1,  XMMWORD PTR [RSP + 0x10]",
+        "MOVAPS XMM2,  XMMWORD PTR [RSP + 0x20]", "MOVAPS XMM3,  XMMWORD PTR [RSP + 0x30]",
+        "MOVAPS XMM4,  XMMWORD PTR [RSP + 0x40]", "MOVAPS XMM5,  XMMWORD PTR [RSP + 0x50]",
+        "MOVAPS XMM6,  XMMWORD PTR [RSP + 0x60]", "MOVAPS XMM7,  XMMWORD PTR [RSP + 0x70]",
+        "MOVAPS XMM8,  XMMWORD PTR [RSP + 0x80]", "MOVAPS XMM9,  XMMWORD PTR [RSP + 0x90]",
+        "MOVAPS XMM10, XMMWORD PTR [RSP + 0xA0]", "MOVAPS XMM11, XMMWORD PTR [RSP + 0xB0]",
+        "MOVAPS XMM12, XMMWORD PTR [RSP + 0xC0]", "MOVAPS XMM13, XMMWORD PTR [RSP + 0xD0]",
+        "MOVAPS XMM14, XMMWORD PTR [RSP + 0xE0]", "MOVAPS XMM15, XMMWORD PTR [RSP + 0xF0]",
+        "ADD RSP, 100h",
+        "POP RBX", "POP RBX", "POP RCX", "POP RDX",
+        "POP RSI", "POP RDI", "POP R8",  "POP R9",
+        "POP R10", "POP R11", "POP R12", "POP R13",
+        "POP R14", "POP R15", "POP RBP", "POP RAX",
+        //Enter code
+        "IRETQ",
+        //Symbols
+        stack_array   = sym TASK_STACKS,
+        stack_index   = sym TASK_INDEX,
+        kernel_stack  = sym TASK_STACKS,
+        function_call = const FP,
+        options(noreturn),
+    )
+}
 
 //Exception Functions (Just panic for now)
 unsafe fn exception_divide_error()       {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x00 (#DE): Divide Error")}
@@ -690,6 +742,7 @@ impl PageAllocator for UsableMemoryPageAllocator {
         Ok(LinearAddress(physical.add(self.identity_offset).0))
     }
 }
+
 
 // PIPING
 #[repr(C)]
