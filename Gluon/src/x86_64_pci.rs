@@ -8,8 +8,6 @@ use crate::*;
 
 
 // PCI DEVICES
-//Ports
-
 //PCI Function Endpoint
 pub struct PciEndpoint {
     bus: u32,
@@ -43,7 +41,7 @@ impl PciEndpoint {
         //Return self
         Ok(Self {bus, device, function})
     }
-    
+
     //Read Header
     pub unsafe fn vendor_id  (&self) -> u32 { self.register(0x00).unwrap() & 0x0000FFFF         }
     pub unsafe fn device_id  (&self) -> u32 {(self.register(0x00).unwrap() & 0xFFFF0000) >> 0x10}

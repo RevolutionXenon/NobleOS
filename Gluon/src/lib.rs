@@ -19,6 +19,7 @@
 #![allow(clippy::type_complexity)]
 #![feature(arbitrary_enum_discriminant)]
 #![feature(asm)]
+#![feature(naked_functions)]
 
 //Imports
 pub mod sysv_executable;
