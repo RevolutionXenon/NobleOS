@@ -7,6 +7,7 @@
 use crate::*;
 use core::convert::{TryFrom, TryInto};
 use core::intrinsics::copy_nonoverlapping;
+use core::ptr::write_volatile;
 
 
 // ELF FILES
@@ -74,6 +75,9 @@ impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
 
     //Load File Into Memory (Very Important to Allocate Memory First)
     pub unsafe fn load(&mut self, location: *mut u8) -> Result<(), &'static str> {
+        for position in 0..self.program_memory_size() as usize {
+            write_volatile(location.add(position), 0x00);
+        }
         let program_iterator = ProgramIterator::new(self.file, &self.header)
         .filter(|result| result.is_ok())
         .map(|result| result.unwrap())
@@ -82,9 +86,9 @@ impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
             const BUFFER_SIZE: usize = 512;
             let mut buffer: [u8; BUFFER_SIZE] = [0u8; BUFFER_SIZE];
             let count = program.file_size as usize/BUFFER_SIZE;
-            for i in 0..count {
-                self.file.read(program.file_offset as usize+i*BUFFER_SIZE, &mut buffer)?;
-                copy_nonoverlapping(buffer.as_ptr(), location.add(program.virtual_address as usize + i*BUFFER_SIZE as usize), BUFFER_SIZE);
+            for file_positon in 0..count {
+                self.file.read(program.file_offset as usize+file_positon*BUFFER_SIZE, &mut buffer)?;
+                copy_nonoverlapping(buffer.as_ptr(), location.add(program.virtual_address as usize + file_positon*BUFFER_SIZE as usize), BUFFER_SIZE);
             }
             let leftover: usize = program.file_size as usize %BUFFER_SIZE;
             if leftover != 0 {

@@ -30,7 +30,7 @@ impl GlobalDescriptorTable {
     
     //Load the new GDT
     //This function is unsafe because doing it wrong will cause a #GP fault either immediately or during future instructions
-    pub unsafe fn write_gdtr(&self, code_selector: u16, segment_selector: u16) {
+    pub unsafe fn write_gdtr(&self, code_selector: SegmentSelector, data_selector: SegmentSelector, stack_selector: SegmentSelector) {
         //Create byte array to load
         let mut gdt_bytes: [u8;10] = [0u8;10];
         //Place limit value into array
@@ -54,12 +54,14 @@ impl GlobalDescriptorTable {
             "PUSH {cs}",         //Push CS value to stack
             "LEA RAX, [RIP+1f]", //Load relative address of 1: into RAX
             "PUSH RAX",          //Push RAX to stack
-            "RETFQ",             //Use return to change CS register
+            "RETFQ",             //Use return to change Code Segment register
             "1:",                //Jump here after return
-            "MOV SS, {ss}",      //Change SS Register
+            "MOV SS, {ss}",      //Change Stack Segment register
+            "MOV DS, {ds}",      //Change Data Segment register
             gdt = in(reg) &gdt_bytes,
-            cs  = in(reg) code_selector,
-            ss  = in(reg) segment_selector,
+            cs  = in(reg) u16::from(code_selector),
+            ds  = in(reg) u16::from(data_selector),
+            ss  = in(reg) u16::from(stack_selector),
             options(nostack)
         );
     }
@@ -218,6 +220,37 @@ numeric_enum! {
 }
 
 
+// SEGMENT SELECTOR
+//Selector
+pub struct SegmentSelector {
+    pub descriptor_table_index :   u16,
+    pub table_indicator:           TableIndicator,
+    pub requested_privilege_level: PrivilegeLevel,
+}
+impl SegmentSelector {
+    pub fn to_bytes(&self) -> Result<[u8;2], &'static str> {
+        if self.descriptor_table_index >= 0x2000 {return Err("Segment Selector: Entry position out of bounds.")}
+        let mut result: [u8;2] = [0u8;2];
+        //Descriptor Table Index
+        let index_bytes: [u8;2] = (self.descriptor_table_index << 3).to_le_bytes();
+        result[0x0] = index_bytes[0x0];
+        result[0x1] = index_bytes[0x1];
+        //Table Indicator
+        result[0x0] |= (self.table_indicator as u8) << 2;
+        //Requested Privilege Level
+        result[0x0] |= self.requested_privilege_level as u8;
+        //Return
+        Ok(result)
+    }
+}
+
+impl From<SegmentSelector> for u16 {
+    fn from(segment_selector: SegmentSelector) -> Self {
+        (segment_selector.descriptor_table_index << 3) | ((segment_selector.table_indicator as u16) << 2) | (segment_selector.requested_privilege_level as u16)
+    }
+}
+
+
 // INTERRUPT DESCRIPTOR TABLE
 //IDT
 #[repr(C)]
@@ -268,14 +301,12 @@ impl InterruptDescriptorTable {
 
 //IDT Entry
 pub struct InterruptDescriptorTableEntry {
-    pub offset:                    u64,
-    pub descriptor_table_index:    u16,
-    pub table_indicator:           TableIndicator,
-    pub requested_privilege_level: PrivilegeLevel,
-    pub segment_present:           bool,
-    pub privilege_level:           PrivilegeLevel,
-    pub interrupt_stack_table:     u8,
-    pub descriptor_type:           DescriptorType,
+    pub offset:                u64,
+    pub segment_selector:      SegmentSelector,
+    pub segment_present:       bool,
+    pub privilege_level:       PrivilegeLevel,
+    pub interrupt_stack_table: u8,
+    pub descriptor_type:       DescriptorType,
 }
 impl InterruptDescriptorTableEntry {
     pub fn to_bytes(&self) -> Result<[u8;16], &'static str> {
@@ -291,14 +322,10 @@ impl InterruptDescriptorTableEntry {
         result[0x9] = offset_bytes[0x5];
         result[0xA] = offset_bytes[0x6];
         result[0xB] = offset_bytes[0x7];
-        //Descriptor Table Index
-        let segment_selector_bytes: [u8;2] = (self.descriptor_table_index << 3).to_le_bytes();
-        result[0x2] = segment_selector_bytes[0x0];
-        result[0x3] = segment_selector_bytes[0x1];
-        //Table Indicator
-        result[0x2] |= (self.table_indicator as u8) << 2;
-        //Requested Privilege Level
-        result[0x2] |= self.requested_privilege_level as u8;
+        //Segment Selector
+        let segment_selector_bytes: [u8;2] = self.segment_selector.to_bytes()?;
+        result[0x2] = segment_selector_bytes[0];
+        result[0x3] = segment_selector_bytes[1];
         //IST
         result[0x4] = self.interrupt_stack_table;
         //Flags

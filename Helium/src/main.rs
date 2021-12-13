@@ -22,6 +22,7 @@
 #![feature(start)]
 
 //Imports
+mod gdt;
 use photon::*;
 use gluon::*;
 use gluon::x86_64_paging::*;
@@ -30,15 +31,32 @@ use gluon::x86_64_segmentation::*;
 use x86_64::registers::control::Cr3;
 use core::convert::TryFrom;
 use core::{fmt::Write, ptr::{write_volatile}, slice::from_raw_parts_mut};
-#[cfg(not(test))]
-use core::panic::PanicInfo;
+#[cfg(not(test))] use core::panic::PanicInfo;
+#[cfg(not(test))] use x86_64::instructions::hlt as halt;
+#[cfg(not(test))] use x86_64::instructions::interrupts::disable as cli;
+
+use crate::gdt::SUPERVISOR_CODE;
+use crate::gdt::SUPERVISOR_DATA;
 
 //Constants
-const HELIUM_VERSION: &str = "vDEV-2021-10-09"; //CURRENT VERSION OF KERNEL
+const HELIUM_VERSION: &str = "vDEV-2021-12-13"; //CURRENT VERSION OF KERNEL
 static WHITESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
 static _BLACKSPACE: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
 static _BLUESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE,  background: COLOR_BGRX_BLACK};
 static REDSPACE:    CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_RED,   background: COLOR_BGRX_BLACK};
+
+
+//MACROS
+//Interrupt that Panics
+macro_rules! interrupt_panic {
+    ($text:expr) => {{
+        unsafe fn interrupt_handler() {
+            asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS);
+            panic!($text);
+        }
+        interrupt_handler as usize as u64
+    }}
+}
 
 
 // MAIN
@@ -73,7 +91,7 @@ pub extern "sysv64" fn _start() -> ! {
         writeln!(printer, "Photon Graphics Library {}", PHOTON_VERSION);
         writeln!(printer, "Gluon Memory Library    {}", GLUON_VERSION);
     }
-    
+
     // PAGE MAP PARSING
     writeln!(printer, "\n=== PAGE MAP ===\n");
     let none_alloc = NoneAllocator{identity_offset: oct4_to_usize(IDENTITY_OCT).unwrap()};
@@ -137,16 +155,6 @@ pub extern "sysv64" fn _start() -> ! {
             writeln!(printer, "Free Memory Deallocation Test:    {:?}", u_alloc.deallocate_page(free_memory_test));
         }
     }
-    
-    // GLOBAL VARIABLES
-    unsafe {
-        PS2_INDEX   = 0;
-        LEFT_SHIFT  = false;
-        RIGHT_SHIFT = false;
-        CAPS_LOCK   = false;
-        NUM_LOCK    = false;
-        TASK_INDEX  = 0;
-    }
 
     // PCI TESTING
     writeln!(printer, "\n=== PERIPHERAL COMPONENT INTERCONNECT BUS ===\n");
@@ -184,36 +192,14 @@ pub extern "sysv64" fn _start() -> ! {
     // GDT SETUP
     writeln!(printer, "\n=== GLOBAL DESCRIPTOR TABLE ===\n");
     {
-        let gdt = GlobalDescriptorTable{address: u_alloc.physical_to_linear(u_alloc.allocate_page().unwrap()).unwrap(), limit: 2};
+        let gdt = GlobalDescriptorTable{address: u_alloc.physical_to_linear(u_alloc.allocate_page().unwrap()).unwrap(), limit: 512};
         writeln!(printer, "GDT Linear Address: 0x{:016X}", gdt.address.0);
-        //CODE ENTRY
-        let gdte1 = GlobalDescriptorTableEntry {
-            limit: 0xFFFFF,
-            base: 0,
-            granularity: Granularity::PageLevel,
-            instruction_mode: InstructionMode::I64,
-            present: true,
-            privilege_level: PrivilegeLevel::Supervisor,
-            segment_type: SegmentType::User,
-            segment_spec: Executable::Code(Conforming::LessPrivilege, Readable::ExecuteRead),
-            accessed: false,
-        };
-        gdt.write_entry(gdte1, 1).unwrap();
-        //DATA ENTRY
-        let gdte2 = GlobalDescriptorTableEntry {
-            limit: 0xFFFFF,
-            base: 0,
-            granularity: Granularity::PageLevel,
-            instruction_mode: InstructionMode::I64,
-            present: true,
-            privilege_level: PrivilegeLevel::Supervisor,
-            segment_type: SegmentType::User,
-            segment_spec: Executable::Data(Direction::Upwards, Writeable::ReadWrite),
-            accessed: false,
-        };
-        gdt.write_entry(gdte2, 2).unwrap();
+        gdt.write_entry(gdt::SUPERVISOR_CODE_ENTRY, gdt::SUPERVISOR_CODE_POSITION).unwrap();
+        gdt.write_entry(gdt::SUPERVISOR_DATA_ENTRY, gdt::SUPERVISOR_DATA_POSITION).unwrap();
+        gdt.write_entry(gdt::USER_CODE_ENTRY, gdt::USER_CODE_POSITION).unwrap();
+        gdt.write_entry(gdt::USER_DATA_ENTRY, gdt::USER_DATA_POSITION).unwrap();
         //Finalize
-        unsafe {gdt.write_gdtr(0x08, 0x10);}
+        unsafe {gdt.write_gdtr(gdt::SUPERVISOR_CODE, gdt::USER_DATA, gdt::SUPERVISOR_DATA);}
     }
 
     // IDT SETUP
@@ -224,40 +210,38 @@ pub extern "sysv64" fn _start() -> ! {
         //Generic Entry
         let mut idte = InterruptDescriptorTableEntry {
             offset: 0,
-            descriptor_table_index: 1,
-            table_indicator: TableIndicator::GDT,
-            requested_privilege_level: PrivilegeLevel::Supervisor,
+            segment_selector: gdt::SUPERVISOR_CODE,
             segment_present: true,
             privilege_level: PrivilegeLevel::Supervisor,
             interrupt_stack_table: 0,
             descriptor_type: DescriptorType::InterruptGate,
         };
         //Write entries
-        idte.offset = exception_divide_error       as unsafe fn() as usize as u64; idt.write_entry(&idte, 0x00);
-        idte.offset = exception_debug              as unsafe fn() as usize as u64; idt.write_entry(&idte, 0x01);
-        idte.offset = exception_breakpoint         as unsafe fn() as usize as u64; idt.write_entry(&idte, 0x03);
-        idte.offset = exception_overflow           as unsafe fn() as usize as u64; idt.write_entry(&idte, 0x04);
-        idte.offset = exception_bound_range        as unsafe fn() as usize as u64; idt.write_entry(&idte, 0x05);
-        idte.offset = exception_invalid_opcode     as unsafe fn() as usize as u64; idt.write_entry(&idte, 0x06);
-        idte.offset = exception_no_fpu             as unsafe fn() as usize as u64; idt.write_entry(&idte, 0x07);
-        idte.offset = exception_double             as unsafe fn() as usize as u64; idt.write_entry(&idte, 0x08);
-        idte.offset = exception_invalid_tss        as unsafe fn() as usize as u64; idt.write_entry(&idte, 0x0A);
-        idte.offset = exception_not_present        as unsafe fn() as usize as u64; idt.write_entry(&idte, 0x0B);
-        idte.offset = exception_stack_segment      as unsafe fn() as usize as u64; idt.write_entry(&idte, 0x0C);
-        idte.offset = exception_general_protection as unsafe fn() as usize as u64; idt.write_entry(&idte, 0x0D);
-        idte.offset = exception_page_fault         as unsafe fn() as usize as u64; idt.write_entry(&idte, 0x0E);
-        idte.offset = exception_fpu_error          as unsafe fn() as usize as u64; idt.write_entry(&idte, 0x10);
-        idte.offset = exception_alignment          as unsafe fn() as usize as u64; idt.write_entry(&idte, 0x11);
-        idte.offset = exception_machine            as unsafe fn() as usize as u64; idt.write_entry(&idte, 0x12);
-        idte.offset = exception_simd               as unsafe fn() as usize as u64; idt.write_entry(&idte, 0x13);
-        idte.offset = exception_virtualization     as unsafe fn() as usize as u64; idt.write_entry(&idte, 0x14);
-        idte.offset = exception_control_protection as unsafe fn() as usize as u64; idt.write_entry(&idte, 0x15);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x00 (#DE): Divide Error");                       idt.write_entry(&idte, 0x00);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x01 (#DB): Debug Exception");                    idt.write_entry(&idte, 0x01);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x03 (#BP): Breakpoint");                         idt.write_entry(&idte, 0x03);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x04 (#OF): Overflow");                           idt.write_entry(&idte, 0x04);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x05 (#BR): Bound Range Exceeded");               idt.write_entry(&idte, 0x05);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x06 (#UD): Invalid Opcode");                     idt.write_entry(&idte, 0x06);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x07 (#NM): No Floating Point Unit");             idt.write_entry(&idte, 0x07);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x08 (#DF): Double Fault");                       idt.write_entry(&idte, 0x08);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x0A (#TS): Invalid Task State Segment");         idt.write_entry(&idte, 0x0A);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x0B (#NP): Segment Not Present");                idt.write_entry(&idte, 0x0B);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x0C (#SS): Stack Segment Fault");                idt.write_entry(&idte, 0x0C);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x0D (#GP): General Protection Error");           idt.write_entry(&idte, 0x0D);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x0E (#PF): Page Fault");                         idt.write_entry(&idte, 0x0E);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x10 (#MF): Floating Point Math Fault");          idt.write_entry(&idte, 0x10);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x11 (#AC): Alignment Check");                    idt.write_entry(&idte, 0x11);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x12 (#MC): Machine Check");                      idt.write_entry(&idte, 0x12);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x13 (#XM): SIMD Floating Point Math Exception"); idt.write_entry(&idte, 0x13);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x14 (#VE): Virtualization Exception");           idt.write_entry(&idte, 0x14);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x15 (#CP): Control Protection Exception");       idt.write_entry(&idte, 0x15);
         //Test
         unsafe {idt.write_idtr();}
         //unsafe {asm!("ud2")} //test undefined opcode
         //unsafe {write_volatile(0x800000 as *mut u8, 0x00)} //test page fault
     }
-    
+
     // PIC SETUP
     writeln!(printer, "\n=== PROGRAMMABLE INTERRUPT CONTROLLER ===\n");
     unsafe {
@@ -265,9 +249,7 @@ pub extern "sysv64" fn _start() -> ! {
         x86_64_timers::pic_enable_irq(0x01).unwrap();
         let idte = InterruptDescriptorTableEntry {
             offset: irq_01_rust as unsafe extern "x86-interrupt" fn() as usize as u64,
-            descriptor_table_index: 1,
-            table_indicator: TableIndicator::GDT,
-            requested_privilege_level: PrivilegeLevel::Supervisor,
+            segment_selector: gdt::SUPERVISOR_CODE,
             segment_present: true,
             privilege_level: PrivilegeLevel::Supervisor,
             interrupt_stack_table: 0,
@@ -346,9 +328,9 @@ pub extern "sysv64" fn _start() -> ! {
         let i1p = read_loop as fn() as usize as u64;
         let i2p = byte_loop as fn() as usize as u64;
         let i3p = ps2_keyboard as fn() as usize as u64;
-        TASK_STACKS[1] = create_task(i1p, 0x08, 0x00000202, s1p, 0x10);
-        TASK_STACKS[2] = create_task(i2p, 0x08, 0x00000202, s2p, 0x10);
-        TASK_STACKS[3] = create_task(i3p, 0x08, 0x00000202, s3p, 0x10);
+        TASK_STACKS[1] = create_task(i1p, gdt::SUPERVISOR_CODE, 0x00000202, s1p, gdt::SUPERVISOR_DATA);
+        TASK_STACKS[2] = create_task(i2p, gdt::SUPERVISOR_CODE, 0x00000202, s2p, gdt::SUPERVISOR_DATA);
+        TASK_STACKS[3] = create_task(i3p, gdt::USER_CODE, 0x00000202, s3p, gdt::USER_DATA);
         writeln!(printer, "Thread 1 (PIPE READ AND PRINT):");
         writeln!(printer, "  Stack Pointer Before Init: 0x{:16X}", s1p);
         writeln!(printer, "  Stack Pointer After Init:  0x{:16X}", TASK_STACKS[1]);
@@ -371,9 +353,7 @@ pub extern "sysv64" fn _start() -> ! {
         x86_64_timers::LAPIC_ADDRESS = (x86_64_timers::lapic_get_base() as usize + oct4_to_usize(IDENTITY_OCT).unwrap()) as *mut u8;
         let mut idte = InterruptDescriptorTableEntry {
             offset: _interrupt_dummy as extern "x86-interrupt" fn() as usize as u64,
-            descriptor_table_index: 1,
-            table_indicator: TableIndicator::GDT,
-            requested_privilege_level: PrivilegeLevel::Supervisor,
+            segment_selector: gdt::SUPERVISOR_CODE,
             segment_present: true,
             privilege_level: PrivilegeLevel::Supervisor,
             interrupt_stack_table: 0,
@@ -405,11 +385,11 @@ static mut TASK_INDEX: usize = 0;
 static mut TASK_STACKS: [u64; 4] = [0;4];
 
 //Task Creation Function
-unsafe fn create_task(instruction_pointer: u64, code_selector: u16, eflags_image: u32, stack_pointer: u64, stack_selector: u16) -> u64 {
-    write_volatile((stack_pointer as *mut u64).sub(1), stack_selector as u64);
+unsafe fn create_task(instruction_pointer: u64, code_selector: SegmentSelector, eflags_image: u32, stack_pointer: u64, stack_selector: SegmentSelector) -> u64 {
+    write_volatile((stack_pointer as *mut u64).sub(1), u16::from(stack_selector) as u64);
     write_volatile((stack_pointer as *mut u64).sub(2), stack_pointer);
     write_volatile((stack_pointer as *mut u64).sub(3), eflags_image as u64);
-    write_volatile((stack_pointer as *mut u64).sub(4), code_selector as u64);
+    write_volatile((stack_pointer as *mut u64).sub(4), u16::from(code_selector) as u64);
     write_volatile((stack_pointer as *mut u64).sub(5), instruction_pointer);
     for i in 6..54 {
         write_volatile((stack_pointer as *mut u64).sub(i), 0);
@@ -634,46 +614,24 @@ extern "x86-interrupt" fn _interrupt_dummy() {unsafe {
     )
 }
 
-//Exception Functions (Just panic for now)
-unsafe fn exception_divide_error()       {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x00 (#DE): Divide Error")}
-unsafe fn exception_debug()              {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x01 (#DB): Debug Exception")}
-unsafe fn exception_breakpoint()         {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x03 (#BP): Breakpoint")}
-unsafe fn exception_overflow()           {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x04 (#OF): Overflow")}
-unsafe fn exception_bound_range()        {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x05 (#BR): Bound Range Exceeded")}
-unsafe fn exception_invalid_opcode()     {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x06 (#UD): Invalid Opcode")}
-unsafe fn exception_no_fpu()             {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x07 (#NM): No Floating Point Unit")}
-unsafe fn exception_double()             {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x08 (#DF): Double Fault")}
-unsafe fn exception_invalid_tss()        {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x0A (#TS): Invalid Task State Segment")}
-unsafe fn exception_not_present()        {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x0B (#NP): Segment Not Present")}
-unsafe fn exception_stack_segment()      {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x0C (#SS): Stack Segment Fault")}
-unsafe fn exception_general_protection() {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x0D (#GP): General Protection Error")}
-unsafe fn exception_page_fault()         {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x0E (#PF): Page Fault")}
-unsafe fn exception_fpu_error()          {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x10 (#MF): Floating Point Math Fault")}
-unsafe fn exception_alignment()          {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x11 (#AC): Alignment Check")}
-unsafe fn exception_machine()            {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x12 (#MC): Machine Check")}
-unsafe fn exception_simd()               {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x13 (#XM): SIMD Floating Point Math Exception")}
-unsafe fn exception_virtualization()     {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x14 (#VE): Virtualization Exception")}
-unsafe fn exception_control_protection() {asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS); panic!("Interrupt Vector 0x15 (#CP): Control Protection Exception")}
-
 
 // PANIC HANDLER
 #[cfg(not(test))]
 #[panic_handler]
 fn panic_handler(panic_info: &PanicInfo) -> ! {
-    use x86_64::instructions::hlt;
-
     unsafe {
-        let printer = &mut *GLOBAL_WRITE_POINTER.unwrap();
-        write!(printer, "\nKernel Halt: ");
-        if let Some(panic_message) = panic_info.message() {
-            writeln!(printer, "{}", panic_message);
+        cli();                                                        //Turn off interrupts
+        let printer = &mut *GLOBAL_WRITE_POINTER.unwrap();            //Locate the global printer
+        write!(printer, "\nKernel Halt: ");                           //Begin writing
+        if let Some(panic_message) = panic_info.message() {           //Check if there's an associated message
+            writeln!(printer, "{}", panic_message);                   //Print the panic message
         }
-        if let Some(panic_location) = panic_info.location() {
-            writeln!(printer, "File:   {}", panic_location.file());
-            writeln!(printer, "Line:   {}", panic_location.line());
-            writeln!(printer, "Column: {}", panic_location.column());
+        if let Some(panic_location) = panic_info.location() {         //Check if there's an associated source location
+            writeln!(printer, "File:   {}", panic_location.file());   //Print the source file
+            writeln!(printer, "Line:   {}", panic_location.line());   //Print the source line
+            writeln!(printer, "Column: {}", panic_location.column()); //Print the source column
         }
-        loop {hlt();};
+        loop {halt();};                                               //Halt the processor
     }
 }
 

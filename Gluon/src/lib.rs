@@ -33,7 +33,7 @@ use core::convert::TryFrom;
 use x86_64::instructions::port::*;
 
 //Constants
-pub const GLUON_VERSION: &str = "vDEV-2021-10-05"; //CURRENT VERSION OF GRAPHICS LIBRARY
+pub const GLUON_VERSION: &str = "vDEV-2021-12-13"; //CURRENT VERSION OF GRAPHICS LIBRARY
 
 
 // MACROS

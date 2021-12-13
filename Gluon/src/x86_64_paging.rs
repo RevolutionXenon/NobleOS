@@ -392,6 +392,45 @@ impl<'s> PageMap<'s> {
         //Return
         Ok(())
     }
+    fn map_pages_group_pml4_4kib(&self, group: &[PhysicalAddress], page_offset: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+        //Check Parameters
+        if  self.map_level                  != PageMapLevel::L4 {return Err("Page Map: Group PML4 4KiB called on page map of wrong level.")}
+        if  page_offset + group.len()       >  PAGE_NUMBER_4    {return Err("Page Map: Group PML4 4KiB called on offset and group size that does not fit within map boundaries.")}
+        //Position variables
+        let first_position:  usize = page_offset / PAGE_NUMBER_2;
+        let first_offset:    usize = page_offset % PAGE_NUMBER_2;
+        let last_position:   usize = (page_offset + group.len() - 1) / PAGE_NUMBER_2;
+        let mut group_index: usize = 0;
+        //Loop
+        for position in first_position..last_position+1 {
+            let pml3e = self.read_entry(position)?;
+            let pml2 = match (pml3e.present, pml3e.entry_type) {
+                (false, _)                        => {
+                    let ph_new = self.page_allocator.allocate_page()?;
+                    self.write_entry(position, PageMapEntry::new(PageMapLevel::L3, PageMapEntryType::Table, ph_new, write, supervisor, execute_disable)?)?;
+                    PageMap::new(ph_new, PageMapLevel::L2, self.page_allocator)?
+                },
+                (true,  PageMapEntryType::Memory) => return Err("Page Map: Group PML3 4KiB called to write over page map which contains 1GiB entries."),
+                (true,  PageMapEntryType::Table)  => PageMap::new(pml3e.physical, PageMapLevel::L2, self.page_allocator)?,
+            };
+            if position == first_position && position == last_position {
+                pml2.map_pages_group_pml2_4kib(group, first_offset, write, supervisor, execute_disable)?;
+            }
+            else if position == first_position {
+                group_index += PAGE_NUMBER_2 - first_offset;
+                pml2.map_pages_group_pml2_4kib(&group[0..group_index], first_offset, write, supervisor, execute_disable)?;
+            }
+            else if position == last_position {
+                pml2.map_pages_group_pml2_4kib(&group[group_index..], 0, write, supervisor, execute_disable)?;
+            }
+            else {
+                pml2.map_pages_group_pml2_4kib(&group[group_index..group_index+PAGE_NUMBER_2], 0, write, supervisor, execute_disable)?;
+                group_index += PAGE_NUMBER_2;
+            }
+        }
+        //Return
+        Ok(())
+    }
 }
 
 //Page Table Entry
