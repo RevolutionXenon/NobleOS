@@ -184,23 +184,23 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         writeln!(printer, "PML3 EFIPH: 0x{:16X}", pml3_efi_physical_memory.linear.0);
         //Page Map Level 3: Kernel
         let pml3_kernel:              PageMap = PageMap::new(allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA), PageMapLevel::L3, &page_allocator).unwrap();
-            pml3_kernel               .map_pages_offset_4kib(PhysicalAddress(kernel_location as usize), 0,                           kernel_size, true, false, false).unwrap();
-            pml3_kernel               .map_pages_offset_4kib(PhysicalAddress(stack_location  as usize), PAGE_SIZE_512G - stack_size, stack_size,  true, false, true ).unwrap();
+            pml3_kernel               .map_pages_offset_4kib(PhysicalAddress(kernel_location as usize), 0,                           kernel_size, true, true, false).unwrap();
+            pml3_kernel               .map_pages_offset_4kib(PhysicalAddress(stack_location  as usize), PAGE_SIZE_512G - stack_size, stack_size,  true, true, true ).unwrap();
         writeln!(printer, "PML3 KERNL: 0x{:16X}", pml3_kernel.linear.0);
-        //Page Map Level 3: Frame Buffer
+        //Page Map Level 3: Frame Buffern
         let pml3_frame_buffer:        PageMap = PageMap::new(allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA), PageMapLevel::L3, &page_allocator).unwrap();
-            pml3_frame_buffer         .map_pages_offset_4kib(PhysicalAddress(graphics_frame_pointer as usize), 0, F1_SCREEN_HEIGHT*F1_SCREEN_WIDTH*4, true, false, true).unwrap();
+            pml3_frame_buffer         .map_pages_offset_4kib(PhysicalAddress(graphics_frame_pointer as usize), 0, F1_SCREEN_HEIGHT*F1_SCREEN_WIDTH*4, true, true, true).unwrap();
         writeln!(printer, "PML3 FRAME: 0x{:16X}", pml3_frame_buffer.linear.0);
         //Page Map Level 3: Offset Identity Map
         let pml3_offset_identity_map: PageMap = PageMap::new(allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA), PageMapLevel::L3, &page_allocator).unwrap();
-            pml3_offset_identity_map  .map_pages_offset_1gib(PhysicalAddress(0), 0, PAGE_SIZE_512G, true, false, true).unwrap();
+            pml3_offset_identity_map  .map_pages_offset_1gib(PhysicalAddress(0), 0, PAGE_SIZE_512G, true, true, true).unwrap();
         writeln!(printer, "PML3 IDENT: 0x{:16X}", pml3_offset_identity_map.linear.0);
         //Write PML4 Entries
-        pml4.write_entry(PHYSICAL_OCT,     PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_efi_physical_memory.physical, true, false, false).unwrap()).unwrap();
-        pml4.write_entry(KERNEL_OCT,       PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_kernel             .physical, true, false, false).unwrap()).unwrap();
-        pml4.write_entry(FRAME_BUFFER_OCT, PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_frame_buffer       .physical, true, false, true ).unwrap()).unwrap();
-        pml4.write_entry(IDENTITY_OCT,     PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_offset_identity_map.physical, true, false, true ).unwrap()).unwrap();
-        pml4.write_entry(PAGE_MAP_OCT,     PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml4                    .physical, true, false, true ).unwrap()).unwrap();
+        pml4.write_entry(PHYSICAL_OCT,     PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_efi_physical_memory.physical, true, true, false).unwrap()).unwrap();
+        pml4.write_entry(KERNEL_OCT,       PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_kernel             .physical, true, true, false).unwrap()).unwrap();
+        pml4.write_entry(FRAME_BUFFER_OCT, PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_frame_buffer       .physical, true, true, true ).unwrap()).unwrap();
+        pml4.write_entry(IDENTITY_OCT,     PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_offset_identity_map.physical, true, true, true ).unwrap()).unwrap();
+        pml4.write_entry(PAGE_MAP_OCT,     PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml4                    .physical, true, true, true ).unwrap()).unwrap();
         // FINISH
     }
 
@@ -327,13 +327,13 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
             let free_memory_size = (descriptor.page_count as usize) * PAGE_SIZE_4KIB;
             if free_memory_types.contains(&descriptor.ty) {
                 //writeln!(printer, "Free Memory Location:     {:16X} ({:8}KiB, {:8}pg)", free_memory_pointer as usize, free_memory_size/KIB, free_memory_size/PAGE_SIZE_4KIB);
-                pml3_free_memory.map_pages_offset_4kib(free_memory_address, size_pages*PAGE_SIZE_4KIB, free_memory_size, true, false, false).unwrap();
+                pml3_free_memory.map_pages_offset_4kib(free_memory_address, size_pages*PAGE_SIZE_4KIB, free_memory_size, true, true, false).unwrap();
                 size_pages += descriptor.page_count as usize;
             }
         }
         writeln!(printer, "Free Memory After Final Boot:       {:10}Pg or {:4}MiB {:4}KiB", size_pages, (size_pages*PAGE_SIZE_4KIB)/MIB, ((size_pages*PAGE_SIZE_4KIB) % MIB)/KIB);
         //Write into pml4
-        let pml4e_free_memory = PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_free_memory.physical, true, false, false).unwrap();
+        let pml4e_free_memory = PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_free_memory.physical, true, true, false).unwrap();
         pml4.write_entry(FREE_MEMORY_OCT, pml4e_free_memory).unwrap();
     }
     //Delay

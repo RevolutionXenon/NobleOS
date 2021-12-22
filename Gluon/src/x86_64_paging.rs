@@ -442,7 +442,7 @@ pub struct PageMapEntry {
     pub physical:        PhysicalAddress,
     pub present:         bool, //ALL: Bit 0, indicates entry exists
     pub write:           bool, //ALL: Bit 1, indicates page may be written to
-    pub supervisor:      bool, //ALL: Bit 2, indicates page can only be accessed in Ring 0
+    pub user:            bool, //ALL: Bit 2, indicates page can only be accessed in Ring 0
     pub write_through:   bool, //ALL: Bit 3, something about how memory access works
     pub cache_disable:   bool, //ALL: Bit 4, something else about how memory access works
     pub accessed:        bool, //ALL: Bit 5, indicates that a page has been accessed
@@ -476,7 +476,7 @@ impl PageMapEntry {
             } as usize),
             present:                                                 data & (1<<0o00) > 0,
             write:                                                   data & (1<<0o01) > 0,
-            supervisor:                                              data & (1<<0o02) > 0,
+            user:                                              data & (1<<0o02) > 0,
             write_through:                                           data & (1<<0o03) > 0,
             cache_disable:                                           data & (1<<0o04) > 0,
             accessed:                                                data & (1<<0o05) > 0,
@@ -513,7 +513,7 @@ impl PageMapEntry {
         };
         if self.present       {result |= 1<<0o00}
         if self.write         {result |= 1<<0o01}
-        if self.supervisor    {result |= 1<<0o02}
+        if self.user    {result |= 1<<0o02}
         if self.write_through {result |= 1<<0o03}
         if self.cache_disable {result |= 1<<0o04}
         if self.accessed      {result |= 1<<0o05}
@@ -547,7 +547,7 @@ impl PageMapEntry {
             physical: address,
             present:         true,
             write,
-            supervisor,
+            user: supervisor,
             write_through:   false,
             cache_disable:   false,
             accessed:        false,

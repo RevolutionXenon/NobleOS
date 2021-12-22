@@ -30,14 +30,10 @@ use gluon::x86_64_pci::*;
 use gluon::x86_64_segmentation::*;
 use x86_64::registers::control::Cr3;
 use core::convert::TryFrom;
-use core::ptr::read_volatile;
 use core::{fmt::Write, ptr::{write_volatile}, slice::from_raw_parts_mut};
 #[cfg(not(test))] use core::panic::PanicInfo;
 #[cfg(not(test))] use x86_64::instructions::hlt as halt;
 #[cfg(not(test))] use x86_64::instructions::interrupts::disable as cli;
-
-use crate::gdt::SUPERVISOR_CODE;
-use crate::gdt::SUPERVISOR_DATA;
 
 //Constants
 const HELIUM_VERSION: &str = "vDEV-2021-12-21"; //CURRENT VERSION OF KERNEL
@@ -47,7 +43,7 @@ static _BLUESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX
 static REDSPACE:    CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_RED,   background: COLOR_BGRX_BLACK};
 
 
-//MACROS
+// MACROS
 //Interrupt that Panics
 macro_rules! interrupt_panic {
     ($text:expr) => {{
@@ -298,12 +294,15 @@ pub extern "sysv64" fn _start() -> ! {
     {
         let mut cr3: u64;
         let mut rip: u64;
+        let mut rsp: u64;
         unsafe {
             asm!("MOV {cr3}, CR3",   cr3 = out(reg) cr3, options(nostack));
             asm!("LEA {rip}, [RIP]", rip = out(reg) rip, options(nostack));
+            asm!("MOV {rsp}, RSP",   rsp = out(reg) rsp, options(nostack));
         }
         writeln!(printer, "CR3:    0x{:16X}", cr3);
         writeln!(printer, "RIP:    0x{:16X}", rip);
+        writeln!(printer, "RSP:    0x{:16X}", rsp);
     }
 
     // CREATE THREADS
@@ -321,9 +320,9 @@ pub extern "sysv64" fn _start() -> ! {
         }
         //Edit page maps
         let pml3 = PageMap::new(pml4.read_entry(KERNEL_OCT).unwrap().physical, PageMapLevel::L3, &u_alloc).unwrap();
-        pml3.map_pages_group_4kib(&group1, 0o001_000_000, true, false, true).unwrap();
-        pml3.map_pages_group_4kib(&group2, 0o001_000_400, true, false, true).unwrap();
-        pml3.map_pages_group_4kib(&group3, 0o001_001_000, true, false, true).unwrap();
+        pml3.map_pages_group_4kib(&group1, 0o001_000_000, true, true, true).unwrap();
+        pml3.map_pages_group_4kib(&group2, 0o001_000_400, true, true, true).unwrap();
+        pml3.map_pages_group_4kib(&group3, 0o001_001_000, true, true, true).unwrap();
         let s1p = oct_to_usize_4(KERNEL_OCT, 1, 0, 0o377, 0).unwrap() as u64;
         let s2p = oct_to_usize_4(KERNEL_OCT, 1, 0, 0o777, 0).unwrap() as u64;
         let s3p = oct_to_usize_4(KERNEL_OCT, 1, 1, 0o377, 0).unwrap() as u64;
