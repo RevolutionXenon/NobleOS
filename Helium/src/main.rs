@@ -30,6 +30,7 @@ use gluon::x86_64_pci::*;
 use gluon::x86_64_segmentation::*;
 use x86_64::registers::control::Cr3;
 use core::convert::TryFrom;
+use core::ptr::read_volatile;
 use core::{fmt::Write, ptr::{write_volatile}, slice::from_raw_parts_mut};
 #[cfg(not(test))] use core::panic::PanicInfo;
 #[cfg(not(test))] use x86_64::instructions::hlt as halt;
@@ -39,7 +40,7 @@ use crate::gdt::SUPERVISOR_CODE;
 use crate::gdt::SUPERVISOR_DATA;
 
 //Constants
-const HELIUM_VERSION: &str = "vDEV-2021-12-13"; //CURRENT VERSION OF KERNEL
+const HELIUM_VERSION: &str = "vDEV-2021-12-21"; //CURRENT VERSION OF KERNEL
 static WHITESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
 static _BLACKSPACE: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
 static _BLUESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE,  background: COLOR_BGRX_BLACK};
@@ -190,9 +191,10 @@ pub extern "sysv64" fn _start() -> ! {
     }}
 
     // GDT SETUP
+    let gdt: GlobalDescriptorTable;
     writeln!(printer, "\n=== GLOBAL DESCRIPTOR TABLE ===\n");
     {
-        let gdt = GlobalDescriptorTable{address: u_alloc.physical_to_linear(u_alloc.allocate_page().unwrap()).unwrap(), limit: 512};
+        gdt = GlobalDescriptorTable{address: u_alloc.physical_to_linear(u_alloc.allocate_page().unwrap()).unwrap(), limit: 512};
         writeln!(printer, "GDT Linear Address: 0x{:016X}", gdt.address.0);
         gdt.write_entry(gdt::SUPERVISOR_CODE_ENTRY, gdt::SUPERVISOR_CODE_POSITION).unwrap();
         gdt.write_entry(gdt::SUPERVISOR_DATA_ENTRY, gdt::SUPERVISOR_DATA_POSITION).unwrap();
@@ -368,6 +370,19 @@ pub extern "sysv64" fn _start() -> ! {
         idt.write_entry(&idte, 0x30);
         x86_64_timers::lapic_timer(0x30, false, x86_64_timers::TimerMode::Periodic);
         x86_64_timers::lapic_divide_config(x86_64_timers::LapicDivide::Divide_128);
+    }
+
+    // TSS SETUP
+    writeln!(printer,"\n=== TASK STATE SEGMENT ===\n");
+    unsafe {
+        gdt::TASK_STATE_SEGMENT_ENTRY.base = &gdt::TASK_STATE_SEGMENT as *const TaskStateSegment as u64;
+        gdt.write_system_entry(gdt::TASK_STATE_SEGMENT_ENTRY, gdt::TASK_STATE_SEGMENT_POSITION).unwrap();
+        asm!(
+            "MOV [{rsp0}], RSP",
+            "LTR {tsss:x}",
+            rsp0 = in(reg) &gdt::TASK_STATE_SEGMENT.rsp0,
+            tsss = in(reg) u16::from(gdt::TASK_STATE_SEGMENT_SELECTOR),
+        )
     }
 
     // FINISH LOADING

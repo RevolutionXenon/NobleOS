@@ -445,7 +445,7 @@ pub struct PageMapEntry {
     pub supervisor:      bool, //ALL: Bit 2, indicates page can only be accessed in Ring 0
     pub write_through:   bool, //ALL: Bit 3, something about how memory access works
     pub cache_disable:   bool, //ALL: Bit 4, something else about how memory access works
-    pub accessed:        bool, //ALL: Bit 5, indicates page has been accessed
+    pub accessed:        bool, //ALL: Bit 5, indicates that a page has been accessed
     pub dirty:           Option<bool>, //MEMORY: Bit 6, indicates page has been written to
     pub attribute_table: Option<bool>, //MEMORY: Bit 7 (L1) or Bit 12 (L2, L3), indicates yet another thing about how memory access works
     pub global:          Option<bool>, //MEMORY: Bit 8,
