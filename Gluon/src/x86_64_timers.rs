@@ -1,3 +1,5 @@
+// GLUON: x86-64 TIMERS
+// Functions and objects related to the handling of the Programmable Interrupt Controller and Advanced Programmable Interrupt Controller
 
 
 // HEADER
@@ -5,6 +7,7 @@
 use crate::*;
 use core::{arch::x86_64::__cpuid, ptr::{read_volatile, write_volatile}};
 use x86_64::registers::model_specific::Msr;
+
 
 // PROGRAMMABLE INTERRUPT CONTROLLER
 //Remap PIC to Different Interrupt Vectors

@@ -52,7 +52,7 @@ use uefi::table::runtime::ResetType;
 use x86_64::registers::control::*;
 
 //Constants
-const HYDROGEN_VERSION: &str = "vDEV-2021-12-13"; //CURRENT VERSION OF BOOTLOADER
+const HYDROGEN_VERSION: &str = "vDEV-2021-12-23"; //CURRENT VERSION OF BOOTLOADER
 
 
 // MAIN

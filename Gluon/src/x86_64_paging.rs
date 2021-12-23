@@ -1,4 +1,4 @@
-// GLUON: MEMORY
+// GLUON: x86-64 PAGING
 // Structs, enums, and traits related to the contents and handling of x86-64 page tables
 
 
@@ -73,15 +73,15 @@ impl<'s> PageMap<'s> {
     }
 
     //Map pages from a physical offset and within-map offset
-    pub fn  map_pages_offset_4kib(&self, physical_offset: PhysicalAddress, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+    pub fn  map_pages_offset_4kib(&self, physical_offset: PhysicalAddress, map_offset: usize, size: usize, write: bool, user: bool, execute_disable: bool) -> Result<(), &'static str> {
         match self.map_level {
-            PageMapLevel::L1 => {self.map_pages_offset_pml1_4kib(physical_offset, map_offset, size, write, supervisor, execute_disable)}
-            PageMapLevel::L2 => {self.map_pages_offset_pml2_4kib(physical_offset, map_offset, size, write, supervisor, execute_disable)}
-            PageMapLevel::L3 => {self.map_pages_offset_pml3_4kib(physical_offset, map_offset, size, write, supervisor, execute_disable)}
+            PageMapLevel::L1 => {self.map_pages_offset_pml1_4kib(physical_offset, map_offset, size, write, user, execute_disable)}
+            PageMapLevel::L2 => {self.map_pages_offset_pml2_4kib(physical_offset, map_offset, size, write, user, execute_disable)}
+            PageMapLevel::L3 => {self.map_pages_offset_pml3_4kib(physical_offset, map_offset, size, write, user, execute_disable)}
             _ => Err("Page Map: Map pages offset 4KiB not implemented for this map level.")
         }
     }
-    fn map_pages_offset_pml1_4kib(&self, physical_offset: PhysicalAddress, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+    fn map_pages_offset_pml1_4kib(&self, physical_offset: PhysicalAddress, map_offset: usize, size: usize, write: bool, user: bool, execute_disable: bool) -> Result<(), &'static str> {
         //Check Parameters
         if self.map_level                       != PageMapLevel::L1 {return Err("Page Map: Offset PML1 4KiB called on page map of wrong level.")}
         if physical_offset.0   % PAGE_SIZE_4KIB != 0                {return Err("Page Map: Offset PML1 4KiB called on unaligned physical address.")}
@@ -92,12 +92,12 @@ impl<'s> PageMap<'s> {
         let position: usize = map_offset / PAGE_SIZE_4KIB;
         //Loop
         for i in 0..pages {
-            self.write_entry(i+position, PageMapEntry::new(PageMapLevel::L1, PageMapEntryType::Memory, physical_offset.add(i*PAGE_SIZE_4KIB), write, supervisor, execute_disable)?)?;
+            self.write_entry(i+position, PageMapEntry::new(PageMapLevel::L1, PageMapEntryType::Memory, physical_offset.add(i*PAGE_SIZE_4KIB), write, user, execute_disable)?)?;
         }
         //Return
         Ok(())
     }
-    fn map_pages_offset_pml2_4kib(&self, physical_offset: PhysicalAddress, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+    fn map_pages_offset_pml2_4kib(&self, physical_offset: PhysicalAddress, map_offset: usize, size: usize, write: bool, user: bool, execute_disable: bool) -> Result<(), &'static str> {
         //Check Parameters
         if self.map_level                       != PageMapLevel::L2 {return Err("Page Map: Offset PML2 4KiB called on page map of wrong level.")}
         if physical_offset.0   % PAGE_SIZE_4KIB != 0                {return Err("Page Map: Offset PML2 4KiB called on unaligned physical address.")}
@@ -118,13 +118,13 @@ impl<'s> PageMap<'s> {
                         entry
                     }
                     else {
-                        let new_entry = PageMapEntry::new(PageMapLevel::L2, PageMapEntryType::Table, self.page_allocator.allocate_page()?, write, supervisor, execute_disable)?;
+                        let new_entry = PageMapEntry::new(PageMapLevel::L2, PageMapEntryType::Table, self.page_allocator.allocate_page()?, write, user, execute_disable)?;
                         self.write_entry(position, new_entry)?;
                         new_entry
                     }
                 },
                 Err(_) => {
-                    let new_entry = PageMapEntry::new(PageMapLevel::L2, PageMapEntryType::Table, self.page_allocator.allocate_page()?, write, supervisor, execute_disable)?;
+                    let new_entry = PageMapEntry::new(PageMapLevel::L2, PageMapEntryType::Table, self.page_allocator.allocate_page()?, write, user, execute_disable)?;
                     self.write_entry(position, new_entry)?;
                     new_entry
                 },
@@ -132,22 +132,22 @@ impl<'s> PageMap<'s> {
             let pml1 = PageMap::new(entry.physical, PageMapLevel::L1, self.page_allocator)?;
             //Map within PML1
             if position == start_position && position == end_position-1 {
-                pml1.map_pages_offset_pml1_4kib(physical_offset, start_size, size, write, supervisor, execute_disable)?;
+                pml1.map_pages_offset_pml1_4kib(physical_offset, start_size, size, write, user, execute_disable)?;
             }
             else if position == start_position {
-                pml1.map_pages_offset_pml1_4kib(physical_offset, start_size, PAGE_SIZE_2MIB-start_size, write, supervisor, execute_disable)?;
+                pml1.map_pages_offset_pml1_4kib(physical_offset, start_size, PAGE_SIZE_2MIB-start_size, write, user, execute_disable)?;
             }
             else if position == end_position-1 {
-                pml1.map_pages_offset_pml1_4kib(physical_offset.add((position-start_position)*PAGE_SIZE_2MIB - start_size), 0, end_size, write, supervisor, execute_disable)?;
+                pml1.map_pages_offset_pml1_4kib(physical_offset.add((position-start_position)*PAGE_SIZE_2MIB - start_size), 0, end_size, write, user, execute_disable)?;
             }
             else {
-                pml1.map_pages_offset_pml1_4kib(physical_offset.add((position-start_position)*PAGE_SIZE_2MIB - start_size), 0, PAGE_SIZE_2MIB, write, supervisor, execute_disable)?;
+                pml1.map_pages_offset_pml1_4kib(physical_offset.add((position-start_position)*PAGE_SIZE_2MIB - start_size), 0, PAGE_SIZE_2MIB, write, user, execute_disable)?;
             }
         }
         //Return
         Ok(())
     }
-    fn map_pages_offset_pml3_4kib(&self, physical_offset: PhysicalAddress, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+    fn map_pages_offset_pml3_4kib(&self, physical_offset: PhysicalAddress, map_offset: usize, size: usize, write: bool, user: bool, execute_disable: bool) -> Result<(), &'static str> {
         //Check Parameters
         if self.map_level                       != PageMapLevel::L3 {return Err("Page Map: Offset PML3 4KiB called on page map of wrong level.")}
         if physical_offset.0   % PAGE_SIZE_4KIB != 0                {return Err("Page Map: Offset PML3 4KiB called on unaligned physical address.")}
@@ -168,13 +168,13 @@ impl<'s> PageMap<'s> {
                         entry
                     }
                     else {
-                        let new_entry = PageMapEntry::new(PageMapLevel::L3, PageMapEntryType::Table, self.page_allocator.allocate_page()?, write, supervisor, execute_disable)?;
+                        let new_entry = PageMapEntry::new(PageMapLevel::L3, PageMapEntryType::Table, self.page_allocator.allocate_page()?, write, user, execute_disable)?;
                         self.write_entry(position, new_entry)?;
                         new_entry
                     }
                 },
                 Err(_) => {
-                    let new_entry = PageMapEntry::new(PageMapLevel::L3, PageMapEntryType::Table, self.page_allocator.allocate_page()?, write, supervisor, execute_disable)?;
+                    let new_entry = PageMapEntry::new(PageMapLevel::L3, PageMapEntryType::Table, self.page_allocator.allocate_page()?, write, user, execute_disable)?;
                     self.write_entry(position, new_entry)?;
                     new_entry
                 },
@@ -182,30 +182,30 @@ impl<'s> PageMap<'s> {
             let pml2 = PageMap::new(entry.physical, PageMapLevel::L2, self.page_allocator)?;
             //Map within PML2
             if position == start_position && position == end_position-1 {
-                pml2.map_pages_offset_pml2_4kib(physical_offset, start_size, size, write, supervisor, execute_disable)?;
+                pml2.map_pages_offset_pml2_4kib(physical_offset, start_size, size, write, user, execute_disable)?;
             }
             else if position == start_position {
-                pml2.map_pages_offset_pml2_4kib(physical_offset, start_size, PAGE_SIZE_1GIB - start_size, write, supervisor, execute_disable)?;
+                pml2.map_pages_offset_pml2_4kib(physical_offset, start_size, PAGE_SIZE_1GIB - start_size, write, user, execute_disable)?;
             }
             else if position == end_position-1 {
-                pml2.map_pages_offset_pml2_4kib(physical_offset.add((position-start_position)*PAGE_SIZE_1GIB - start_size), 0, end_size, write, supervisor, execute_disable)?;
+                pml2.map_pages_offset_pml2_4kib(physical_offset.add((position-start_position)*PAGE_SIZE_1GIB - start_size), 0, end_size, write, user, execute_disable)?;
             }
             else {
-                pml2.map_pages_offset_pml2_4kib(physical_offset.add((position-start_position)*PAGE_SIZE_1GIB - start_size), 0, PAGE_SIZE_1GIB, write, supervisor, execute_disable)?;
+                pml2.map_pages_offset_pml2_4kib(physical_offset.add((position-start_position)*PAGE_SIZE_1GIB - start_size), 0, PAGE_SIZE_1GIB, write, user, execute_disable)?;
             }
         }
         //Return
         Ok(())
     }
     
-    pub fn  map_pages_offset_2mib(&self, physical_offset: PhysicalAddress, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+    pub fn  map_pages_offset_2mib(&self, physical_offset: PhysicalAddress, map_offset: usize, size: usize, write: bool, user: bool, execute_disable: bool) -> Result<(), &'static str> {
         match self.map_level {
-            PageMapLevel::L2 => {self.map_pages_offset_pml2_2mib(physical_offset, map_offset, size, write, supervisor, execute_disable)}
-            PageMapLevel::L3 => {self.map_pages_offset_pml3_2mib(physical_offset, map_offset, size, write, supervisor, execute_disable)}
+            PageMapLevel::L2 => {self.map_pages_offset_pml2_2mib(physical_offset, map_offset, size, write, user, execute_disable)}
+            PageMapLevel::L3 => {self.map_pages_offset_pml3_2mib(physical_offset, map_offset, size, write, user, execute_disable)}
             _ => Err("Page Map: Map pages offset 2MiB not implemented for this map level.")
         }
     }
-    fn map_pages_offset_pml2_2mib(&self, physical_offset: PhysicalAddress, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+    fn map_pages_offset_pml2_2mib(&self, physical_offset: PhysicalAddress, map_offset: usize, size: usize, write: bool, user: bool, execute_disable: bool) -> Result<(), &'static str> {
         if self.map_level                       != PageMapLevel::L2 {return Err("Page Map: Offset PML2 2MiB called on page map of wrong level.")}
         if physical_offset.0   % PAGE_SIZE_2MIB != 0                {return Err("Page Map: Offset PML2 2MiB called on unaligned physical address.")}
         if map_offset as usize % PAGE_SIZE_2MIB != 0                {return Err("Page Map: Offset PML2 2MiB called on unaligned map offset.")}
@@ -215,12 +215,12 @@ impl<'s> PageMap<'s> {
         let position: usize = map_offset / PAGE_SIZE_2MIB;
         //Loop
         for i in 0..pages {
-            self.write_entry(i+position, PageMapEntry::new(PageMapLevel::L2, PageMapEntryType::Memory, physical_offset.add(i*PAGE_SIZE_2MIB), write, supervisor, execute_disable)?)?;
+            self.write_entry(i+position, PageMapEntry::new(PageMapLevel::L2, PageMapEntryType::Memory, physical_offset.add(i*PAGE_SIZE_2MIB), write, user, execute_disable)?)?;
         }
         //Return
         Ok(())
     }
-    fn map_pages_offset_pml3_2mib(&self, physical_offset: PhysicalAddress, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+    fn map_pages_offset_pml3_2mib(&self, physical_offset: PhysicalAddress, map_offset: usize, size: usize, write: bool, user: bool, execute_disable: bool) -> Result<(), &'static str> {
         if self.map_level                       != PageMapLevel::L3 {return Err("Page Map: Offset PML3 2MiB called on page map of wrong level.")}
         if physical_offset.0   % PAGE_SIZE_2MIB != 0                {return Err("Page Map: Offset PML3 2MiB called on unaligned physical address.")}
         if map_offset as usize % PAGE_SIZE_2MIB != 0                {return Err("Page Map: Offset PML3 2MiB called on unaligned map offset.")}
@@ -240,13 +240,13 @@ impl<'s> PageMap<'s> {
                         entry
                     }
                     else {
-                        let new_entry = PageMapEntry::new(PageMapLevel::L3, PageMapEntryType::Table, self.page_allocator.allocate_page()?, write, supervisor, execute_disable)?;
+                        let new_entry = PageMapEntry::new(PageMapLevel::L3, PageMapEntryType::Table, self.page_allocator.allocate_page()?, write, user, execute_disable)?;
                         self.write_entry(position, new_entry)?;
                         new_entry
                     }
                 },
                 Err(_) => {
-                    let new_entry = PageMapEntry::new(PageMapLevel::L3, PageMapEntryType::Table, self.page_allocator.allocate_page()?, write, supervisor, execute_disable)?;
+                    let new_entry = PageMapEntry::new(PageMapLevel::L3, PageMapEntryType::Table, self.page_allocator.allocate_page()?, write, user, execute_disable)?;
                     self.write_entry(position, new_entry)?;
                     new_entry
                 },
@@ -254,29 +254,29 @@ impl<'s> PageMap<'s> {
             let pml2 = PageMap::new(entry.physical, PageMapLevel::L2, self.page_allocator)?;
             //Map within PML2
             if position == start_position && position == end_position-1 {
-                pml2.map_pages_offset_pml2_2mib(physical_offset, start_size, size, write, supervisor, execute_disable)?;
+                pml2.map_pages_offset_pml2_2mib(physical_offset, start_size, size, write, user, execute_disable)?;
             }
             else if position == start_position {
-                pml2.map_pages_offset_pml2_2mib(physical_offset, start_size, PAGE_SIZE_1GIB - start_size, write, supervisor, execute_disable)?;
+                pml2.map_pages_offset_pml2_2mib(physical_offset, start_size, PAGE_SIZE_1GIB - start_size, write, user, execute_disable)?;
             }
             else if position == end_position-1 {
-                pml2.map_pages_offset_pml2_2mib(physical_offset.add((position-start_position)*PAGE_SIZE_1GIB - start_size), 0, end_size, write, supervisor, execute_disable)?;
+                pml2.map_pages_offset_pml2_2mib(physical_offset.add((position-start_position)*PAGE_SIZE_1GIB - start_size), 0, end_size, write, user, execute_disable)?;
             }
             else {
-                pml2.map_pages_offset_pml2_2mib(physical_offset.add((position-start_position)*PAGE_SIZE_1GIB - start_size), 0, PAGE_SIZE_1GIB, write, supervisor, execute_disable)?;
+                pml2.map_pages_offset_pml2_2mib(physical_offset.add((position-start_position)*PAGE_SIZE_1GIB - start_size), 0, PAGE_SIZE_1GIB, write, user, execute_disable)?;
             }
         }
         //Return
         Err("Unfinished")
     }
 
-    pub fn  map_pages_offset_1gib(&self, physical_offset: PhysicalAddress, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+    pub fn  map_pages_offset_1gib(&self, physical_offset: PhysicalAddress, map_offset: usize, size: usize, write: bool, user: bool, execute_disable: bool) -> Result<(), &'static str> {
         match self.map_level {
-            PageMapLevel::L3 => {self.map_pages_offset_pml3_1gib(physical_offset, map_offset, size, write, supervisor, execute_disable)}
+            PageMapLevel::L3 => {self.map_pages_offset_pml3_1gib(physical_offset, map_offset, size, write, user, execute_disable)}
             _ => Err("Page Map: Map pages offset 2MiB not implemented for this map level.")
         }
     }
-    fn map_pages_offset_pml3_1gib(&self, physical_offset: PhysicalAddress, map_offset: usize, size: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+    fn map_pages_offset_pml3_1gib(&self, physical_offset: PhysicalAddress, map_offset: usize, size: usize, write: bool, user: bool, execute_disable: bool) -> Result<(), &'static str> {
         if self.map_level                       != PageMapLevel::L3 {return Err("Page Map: Offset PML3 1GiB called on page map of wrong level.")}
         if physical_offset.0   % PAGE_SIZE_1GIB != 0                {return Err("Page Map: Offset PML3 1GiB called on unaligned physical address.")}
         if map_offset as usize % PAGE_SIZE_1GIB != 0                {return Err("Page Map: Offset PML3 1GiB called on unaligned map offset.")}
@@ -286,22 +286,22 @@ impl<'s> PageMap<'s> {
         let position: usize = map_offset / PAGE_SIZE_1GIB;
         //Loop
         for i in 0..pages {
-            self.write_entry(i+position, PageMapEntry::new(PageMapLevel::L3, PageMapEntryType::Memory, physical_offset.add(i*PAGE_SIZE_1GIB), write, supervisor, execute_disable)?)?;
+            self.write_entry(i+position, PageMapEntry::new(PageMapLevel::L3, PageMapEntryType::Memory, physical_offset.add(i*PAGE_SIZE_1GIB), write, user, execute_disable)?)?;
         }
         //Return
         Ok(())
     }
 
     //Map pages from a list of physical pages and within-map offset
-    pub fn  map_pages_group_4kib(&self, group: &[PhysicalAddress], page_offset: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+    pub fn  map_pages_group_4kib(&self, group: &[PhysicalAddress], page_offset: usize, write: bool, user: bool, execute_disable: bool) -> Result<(), &'static str> {
         match self.map_level {
-            PageMapLevel::L1 => {self.map_pages_group_pml1_4kib(group, page_offset, write, supervisor, execute_disable)}
-            PageMapLevel::L2 => {self.map_pages_group_pml2_4kib(group, page_offset, write, supervisor, execute_disable)}
-            PageMapLevel::L3 => {self.map_pages_group_pml3_4kib(group, page_offset, write, supervisor, execute_disable)}
+            PageMapLevel::L1 => {self.map_pages_group_pml1_4kib(group, page_offset, write, user, execute_disable)}
+            PageMapLevel::L2 => {self.map_pages_group_pml2_4kib(group, page_offset, write, user, execute_disable)}
+            PageMapLevel::L3 => {self.map_pages_group_pml3_4kib(group, page_offset, write, user, execute_disable)}
             _ => Err("Page Map: Map pages group 4KiB not implemented for this map level.")
         }
     }
-    fn map_pages_group_pml1_4kib(&self, group: &[PhysicalAddress], page_offset: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+    fn map_pages_group_pml1_4kib(&self, group: &[PhysicalAddress], page_offset: usize, write: bool, user: bool, execute_disable: bool) -> Result<(), &'static str> {
         //Parameters
         if  self.map_level                   != PageMapLevel::L1 {return Err("Page Map: Group PML1 4KiB called on page map of wrong level.")}
         if  page_offset + group.len()        >  PAGE_NUMBER_1    {return Err("Page Map: Group PML1 4KiB called on offset and group size that does not fit within map boundaries.")}
@@ -309,12 +309,12 @@ impl<'s> PageMap<'s> {
         for (i, page) in group.iter().enumerate() {
             let address = page.0;
             if address % PAGE_SIZE_4KIB != 0 {return Err("Page Map: Group PML1 4KiB called with unaligned addresses in group.")}
-            self.write_entry(page_offset + i, PageMapEntry::new(PageMapLevel::L1, PageMapEntryType::Memory, group[i], write, supervisor, execute_disable)?)?;
+            self.write_entry(page_offset + i, PageMapEntry::new(PageMapLevel::L1, PageMapEntryType::Memory, group[i], write, user, execute_disable)?)?;
         }
         //Return
         Ok(())
     }
-    fn map_pages_group_pml2_4kib(&self, group: &[PhysicalAddress], page_offset: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+    fn map_pages_group_pml2_4kib(&self, group: &[PhysicalAddress], page_offset: usize, write: bool, user: bool, execute_disable: bool) -> Result<(), &'static str> {
         //Check Parameters
         if  self.map_level            != PageMapLevel::L2 {return Err("Page Map: Group PML2 4KiB called on page map of wrong level.")}
         if  page_offset + group.len() >  PAGE_NUMBER_2    {return Err("Page Map: Group PML2 4KiB called on offset and group size that does not fit within map boundaries.")}
@@ -329,31 +329,31 @@ impl<'s> PageMap<'s> {
             let pml1 = match (pml2e.present, pml2e.entry_type) {
                 (false, _)                        => {
                     let ph_new = self.page_allocator.allocate_page()?;
-                    self.write_entry(position, PageMapEntry::new(PageMapLevel::L2, PageMapEntryType::Table, ph_new, write, supervisor, execute_disable)?)?;
+                    self.write_entry(position, PageMapEntry::new(PageMapLevel::L2, PageMapEntryType::Table, ph_new, write, user, execute_disable)?)?;
                     PageMap::new(ph_new, PageMapLevel::L1, self.page_allocator)?
                 },
                 (true,  PageMapEntryType::Memory) => return Err("Page Map: Group PML2 4KiB called to write over page map which contains 2MiB entries."),
                 (true,  PageMapEntryType::Table)  => PageMap::new(pml2e.physical, PageMapLevel::L1, self.page_allocator)?,
             };
             if position == first_position && position == last_position {
-                pml1.map_pages_group_pml1_4kib(group, first_offset, write, supervisor, execute_disable)?;
+                pml1.map_pages_group_pml1_4kib(group, first_offset, write, user, execute_disable)?;
             }
             else if position == first_position {
                 group_index += PAGE_NUMBER_1 - first_offset;
-                pml1.map_pages_group_pml1_4kib(&group[0..group_index], first_offset, write, supervisor, execute_disable)?;
+                pml1.map_pages_group_pml1_4kib(&group[0..group_index], first_offset, write, user, execute_disable)?;
             }
             else if position == last_position {
-                pml1.map_pages_group_pml1_4kib(&group[group_index..], 0, write, supervisor, execute_disable)?;
+                pml1.map_pages_group_pml1_4kib(&group[group_index..], 0, write, user, execute_disable)?;
             }
             else {
-                pml1.map_pages_group_pml1_4kib(&group[group_index..group_index+PAGE_NUMBER_1], 0, write, supervisor, execute_disable)?;
+                pml1.map_pages_group_pml1_4kib(&group[group_index..group_index+PAGE_NUMBER_1], 0, write, user, execute_disable)?;
                 group_index += PAGE_NUMBER_1;
             }
         }
         //Return
         Ok(())
     }
-    fn map_pages_group_pml3_4kib(&self, group: &[PhysicalAddress], page_offset: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
+    fn map_pages_group_pml3_4kib(&self, group: &[PhysicalAddress], page_offset: usize, write: bool, user: bool, execute_disable: bool) -> Result<(), &'static str> {
         //Check Parameters
         if  self.map_level                  != PageMapLevel::L3 {return Err("Page Map: Group PML3 4KiB called on page map of wrong level.")}
         if  page_offset + group.len()       >  PAGE_NUMBER_3    {return Err("Page Map: Group PML2 4KiB called on offset and group size that does not fit within map boundaries.")}
@@ -368,63 +368,24 @@ impl<'s> PageMap<'s> {
             let pml2 = match (pml3e.present, pml3e.entry_type) {
                 (false, _)                        => {
                     let ph_new = self.page_allocator.allocate_page()?;
-                    self.write_entry(position, PageMapEntry::new(PageMapLevel::L3, PageMapEntryType::Table, ph_new, write, supervisor, execute_disable)?)?;
+                    self.write_entry(position, PageMapEntry::new(PageMapLevel::L3, PageMapEntryType::Table, ph_new, write, user, execute_disable)?)?;
                     PageMap::new(ph_new, PageMapLevel::L2, self.page_allocator)?
                 },
                 (true,  PageMapEntryType::Memory) => return Err("Page Map: Group PML3 4KiB called to write over page map which contains 1GiB entries."),
                 (true,  PageMapEntryType::Table)  => PageMap::new(pml3e.physical, PageMapLevel::L2, self.page_allocator)?,
             };
             if position == first_position && position == last_position {
-                pml2.map_pages_group_pml2_4kib(group, first_offset, write, supervisor, execute_disable)?;
+                pml2.map_pages_group_pml2_4kib(group, first_offset, write, user, execute_disable)?;
             }
             else if position == first_position {
                 group_index += PAGE_NUMBER_2 - first_offset;
-                pml2.map_pages_group_pml2_4kib(&group[0..group_index], first_offset, write, supervisor, execute_disable)?;
+                pml2.map_pages_group_pml2_4kib(&group[0..group_index], first_offset, write, user, execute_disable)?;
             }
             else if position == last_position {
-                pml2.map_pages_group_pml2_4kib(&group[group_index..], 0, write, supervisor, execute_disable)?;
+                pml2.map_pages_group_pml2_4kib(&group[group_index..], 0, write, user, execute_disable)?;
             }
             else {
-                pml2.map_pages_group_pml2_4kib(&group[group_index..group_index+PAGE_NUMBER_2], 0, write, supervisor, execute_disable)?;
-                group_index += PAGE_NUMBER_2;
-            }
-        }
-        //Return
-        Ok(())
-    }
-    fn map_pages_group_pml4_4kib(&self, group: &[PhysicalAddress], page_offset: usize, write: bool, supervisor: bool, execute_disable: bool) -> Result<(), &'static str> {
-        //Check Parameters
-        if  self.map_level                  != PageMapLevel::L4 {return Err("Page Map: Group PML4 4KiB called on page map of wrong level.")}
-        if  page_offset + group.len()       >  PAGE_NUMBER_4    {return Err("Page Map: Group PML4 4KiB called on offset and group size that does not fit within map boundaries.")}
-        //Position variables
-        let first_position:  usize = page_offset / PAGE_NUMBER_2;
-        let first_offset:    usize = page_offset % PAGE_NUMBER_2;
-        let last_position:   usize = (page_offset + group.len() - 1) / PAGE_NUMBER_2;
-        let mut group_index: usize = 0;
-        //Loop
-        for position in first_position..last_position+1 {
-            let pml3e = self.read_entry(position)?;
-            let pml2 = match (pml3e.present, pml3e.entry_type) {
-                (false, _)                        => {
-                    let ph_new = self.page_allocator.allocate_page()?;
-                    self.write_entry(position, PageMapEntry::new(PageMapLevel::L3, PageMapEntryType::Table, ph_new, write, supervisor, execute_disable)?)?;
-                    PageMap::new(ph_new, PageMapLevel::L2, self.page_allocator)?
-                },
-                (true,  PageMapEntryType::Memory) => return Err("Page Map: Group PML3 4KiB called to write over page map which contains 1GiB entries."),
-                (true,  PageMapEntryType::Table)  => PageMap::new(pml3e.physical, PageMapLevel::L2, self.page_allocator)?,
-            };
-            if position == first_position && position == last_position {
-                pml2.map_pages_group_pml2_4kib(group, first_offset, write, supervisor, execute_disable)?;
-            }
-            else if position == first_position {
-                group_index += PAGE_NUMBER_2 - first_offset;
-                pml2.map_pages_group_pml2_4kib(&group[0..group_index], first_offset, write, supervisor, execute_disable)?;
-            }
-            else if position == last_position {
-                pml2.map_pages_group_pml2_4kib(&group[group_index..], 0, write, supervisor, execute_disable)?;
-            }
-            else {
-                pml2.map_pages_group_pml2_4kib(&group[group_index..group_index+PAGE_NUMBER_2], 0, write, supervisor, execute_disable)?;
+                pml2.map_pages_group_pml2_4kib(&group[group_index..group_index+PAGE_NUMBER_2], 0, write, user, execute_disable)?;
                 group_index += PAGE_NUMBER_2;
             }
         }
@@ -530,7 +491,7 @@ impl PageMapEntry {
     }
 
     //New
-    pub fn new(entry_level: PageMapLevel, entry_type: PageMapEntryType, address: PhysicalAddress, write: bool, supervisor: bool, execute_disable: bool) -> Result<Self, &'static str> {
+    pub fn new(entry_level: PageMapLevel, entry_type: PageMapEntryType, address: PhysicalAddress, write: bool, user: bool, execute_disable: bool) -> Result<Self, &'static str> {
         match (entry_level, entry_type) {
             (PageMapLevel::L5, PageMapEntryType::Table)  => {if address.0 as usize % PAGE_SIZE_4KIB != 0 {return Err("Page Table Entry: Address is not aligned to a 4KiB boundary.")}},
             (PageMapLevel::L4, PageMapEntryType::Table)  => {if address.0 as usize % PAGE_SIZE_4KIB != 0 {return Err("Page Table Entry: Address is not aligned to a 4KiB boundary.")}},
@@ -547,7 +508,7 @@ impl PageMapEntry {
             physical: address,
             present:         true,
             write,
-            user: supervisor,
+            user,
             write_through:   false,
             cache_disable:   false,
             accessed:        false,

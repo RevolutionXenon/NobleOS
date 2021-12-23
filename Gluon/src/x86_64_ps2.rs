@@ -1,4 +1,4 @@
-// GLUON: PS/2
+// GLUON: x86-64 PS/2
 // Structs and objects related to the handling of the PS/2 controller and devices
 
 

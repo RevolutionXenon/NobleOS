@@ -1,5 +1,5 @@
-// GLUON: IDT
-// Structs and enums related to the contents and handling of x86-64 GDT and IDT structures
+// GLUON: x86-64 SEGMENTATION
+// Structs and enums related to the contents and handling of x86-64 GDT, IDT, and other segmentation structures
 
 // HEADER
 //Flags

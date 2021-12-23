@@ -28,15 +28,15 @@ use gluon::*;
 use gluon::x86_64_paging::*;
 use gluon::x86_64_pci::*;
 use gluon::x86_64_segmentation::*;
-use x86_64::registers::control::Cr3;
 use core::convert::TryFrom;
-use core::{fmt::Write, ptr::{write_volatile}, slice::from_raw_parts_mut};
-#[cfg(not(test))] use core::panic::PanicInfo;
-#[cfg(not(test))] use x86_64::instructions::hlt as halt;
-#[cfg(not(test))] use x86_64::instructions::interrupts::disable as cli;
+use core::{fmt::Write, panic::PanicInfo, ptr::{addr_of, write_volatile}, slice::from_raw_parts_mut};
+use x86_64::instructions::hlt as halt;
+use x86_64::instructions::interrupts::disable as cli;
+use x86_64::instructions::interrupts::enable as sti;
+use x86_64::registers::control::Cr3;
 
 //Constants
-const HELIUM_VERSION: &str = "vDEV-2021-12-21"; //CURRENT VERSION OF KERNEL
+const HELIUM_VERSION: &str = "vDEV-2021-12-23"; //CURRENT VERSION OF KERNEL
 static WHITESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
 static _BLACKSPACE: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
 static _BLUESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE,  background: COLOR_BGRX_BLACK};
@@ -95,11 +95,10 @@ pub extern "sysv64" fn _start() -> ! {
     let u_alloc: UsableMemoryPageAllocator;
     let pml4: PageMap;
     {
-        //Create "allocator" for address translation
         //Go to PML4
         let pml4_physical = PhysicalAddress(Cr3::read().0.start_address().as_u64() as usize);
         pml4 = PageMap::new(pml4_physical, PageMapLevel::L4, &none_alloc).unwrap();
-        //Print info
+        //Diagnostics
         writeln!(printer, "Physical Memory Area Present: {}", pml4.read_entry(PHYSICAL_OCT    ).unwrap().present);
         writeln!(printer, "Kernel Area Present:          {}", pml4.read_entry(KERNEL_OCT      ).unwrap().present);
         writeln!(printer, "Programs Area Present:        {}", pml4.read_entry(PROGRAMS_OCT    ).unwrap().present);
@@ -108,23 +107,24 @@ pub extern "sysv64" fn _start() -> ! {
         writeln!(printer, "Offset Identity Area Present: {}", pml4.read_entry(IDENTITY_OCT    ).unwrap().present);
         writeln!(printer, "Page Map Area Present:        {}", pml4.read_entry(PAGE_MAP_OCT    ).unwrap().present);
         //Remove physical memory area
-        {
-            let mut identity_not_present = pml4.read_entry(PHYSICAL_OCT).unwrap();
-            identity_not_present.present = false;
-            pml4.write_entry(PHYSICAL_OCT, identity_not_present).unwrap();
-        }
+        let mut identity_not_present = pml4.read_entry(PHYSICAL_OCT).unwrap();
+        identity_not_present.present = false;
+        pml4.write_entry(PHYSICAL_OCT, identity_not_present).unwrap();
         //Determine amount of free memory
         let mut free_page_count: usize = 0;
         {
             let pml3_free = PageMap::new(pml4.read_entry(FREE_MEMORY_OCT).unwrap().physical, PageMapLevel::L3, &none_alloc).unwrap();
+            //Iterate over entries in the PML3
             for i in 0..PAGE_NUMBER_1 {
                 let pml3_free_entry = pml3_free.read_entry(i).unwrap();
                 if pml3_free_entry.present {
                     let pml2 = PageMap::new(pml3_free_entry.physical, PageMapLevel::L2, &none_alloc).unwrap();
+                    //Iterate over entries in the PML2
                     for j in 0..PAGE_NUMBER_1 {
                         let pml2_entry = pml2.read_entry(j).unwrap();
                         if pml2_entry.present {
                             let pml1 = PageMap::new(pml2_entry.physical, PageMapLevel::L1, &none_alloc).unwrap();
+                            //Iterate over entries in the PML1
                             for k in 0..PAGE_NUMBER_1 {
                                 let pml1e = pml1.read_entry(k).unwrap();
                                 if pml1e.present {
@@ -156,26 +156,36 @@ pub extern "sysv64" fn _start() -> ! {
     // PCI TESTING
     writeln!(printer, "\n=== PERIPHERAL COMPONENT INTERCONNECT BUS ===\n");
     let mut pci_uhci_option = None;
-    unsafe {for pci_bus in 0..256 {
-        for pci_device in 0..32 {
-            for pci_function in 0..8 {
-                let pci_endpoint = match PciEndpoint::new(pci_bus, pci_device, pci_function) {Ok(pci) => pci, Err(_) => break};
-                write!(printer, "PCI DEVICE:");
-                write!(printer, "  Bus: {:02X}, Device: {:02X}, Function: {:01X}", pci_bus, pci_device, pci_function);
-                writeln!(printer, "  |  Vendor ID: {:04X}, Device ID: {:04X}, Status: {:04X}", pci_endpoint.vendor_id(), pci_endpoint.device_id(), pci_endpoint.status());
-                //writeln!(printer, "  Revision ID:   {:02X}, Prog IF:       {:02X}, Subclass:      {:02X}, Class Code:    {:02X}", pci.revision_id(), pci.prog_if(), pci.subclass(), pci.class_code());
-                //writeln!(printer, "  Cache LSZ:     {:02X}, Latency Tmr:   {:02X}, Header Type:   {:02X}, BIST:          {:02X}", pci.chache_lz(), pci.latency(), pci.header_type(), pci.bist());
-                if let Ok(o) = PciUhci::new(pci_endpoint) {pci_uhci_option = Some(o)};
+    unsafe {
+        //Iterate over pci busses
+        for pci_bus in 0..256 {
+            //Iterate over pci devices
+            for pci_device in 0..32 {
+                //Iterate over device functions
+                for pci_function in 0..8 {
+                    //Look at the current endpoint and skip if it doesn't exist
+                    let pci_endpoint = match PciEndpoint::new(pci_bus, pci_device, pci_function) {Ok(pci) => pci, Err(_) => break};
+                    //print diagnostics
+                    write!(printer, "PCI DEVICE:");
+                    write!(printer, "  Bus: {:02X}, Device: {:02X}, Function: {:01X}", pci_bus, pci_device, pci_function);
+                    writeln!(printer, "  |  Vendor ID: {:04X}, Device ID: {:04X}, Status: {:04X}", pci_endpoint.vendor_id(), pci_endpoint.device_id(), pci_endpoint.status());
+                    //writeln!(printer, "  Revision ID:   {:02X}, Prog IF:       {:02X}, Subclass:      {:02X}, Class Code:    {:02X}", pci.revision_id(), pci.prog_if(), pci.subclass(), pci.class_code());
+                    //writeln!(printer, "  Cache LSZ:     {:02X}, Latency Tmr:   {:02X}, Header Type:   {:02X}, BIST:          {:02X}", pci.chache_lz(), pci.latency(), pci.header_type(), pci.bist());
+                    //If a UHCI endpoint is found, keep track of it
+                    if let Ok(o) = PciUhci::new(pci_endpoint) {pci_uhci_option = Some(o)};
+                }
             }
         }
-    }}
+    }
 
     // USB TESTING
     unsafe {if let Some(mut pci_uhci) = pci_uhci_option {
-        writeln!(printer, "\n=== UHCI USB === \n");
+        writeln!(printer, "\n=== UHCI USB ===\n");
+        //PCI diagnostic
         for i in 0..0x0F {
             writeln!(printer, "PCI Register {:02X}: {:08X}", i, pci_uhci.pci.register(i).unwrap());
         }
+        //USB diagnostic
         writeln!(printer, "USB Command:             {:04X}", pci_uhci.command.read());
         writeln!(printer, "USB Status:              {:04X}", pci_uhci.status.read());
         writeln!(printer, "USB Interrupt Enable:    {:04X}", pci_uhci.interrupt.read());
@@ -189,21 +199,34 @@ pub extern "sysv64" fn _start() -> ! {
     // GDT SETUP
     let gdt: GlobalDescriptorTable;
     writeln!(printer, "\n=== GLOBAL DESCRIPTOR TABLE ===\n");
-    {
+    unsafe {
+        //Allocate space for GDT
         gdt = GlobalDescriptorTable{address: u_alloc.physical_to_linear(u_alloc.allocate_page().unwrap()).unwrap(), limit: 512};
         writeln!(printer, "GDT Linear Address: 0x{:016X}", gdt.address.0);
+        //Substitute symbol in TSS entry for actual TSS
+        gdt::TASK_STATE_SEGMENT_ENTRY.base = &TASK_STATE_SEGMENT as *const TaskStateSegment as u64;
+        //Write TSS entry into GDT
+        gdt.write_system_entry(gdt::TASK_STATE_SEGMENT_ENTRY, gdt::TASK_STATE_SEGMENT_POSITION).unwrap();
+        //Write GDT code and data entries
         gdt.write_entry(gdt::SUPERVISOR_CODE_ENTRY, gdt::SUPERVISOR_CODE_POSITION).unwrap();
         gdt.write_entry(gdt::SUPERVISOR_DATA_ENTRY, gdt::SUPERVISOR_DATA_POSITION).unwrap();
         gdt.write_entry(gdt::USER_CODE_ENTRY, gdt::USER_CODE_POSITION).unwrap();
         gdt.write_entry(gdt::USER_DATA_ENTRY, gdt::USER_DATA_POSITION).unwrap();
-        //Finalize
-        unsafe {gdt.write_gdtr(gdt::SUPERVISOR_CODE, gdt::USER_DATA, gdt::SUPERVISOR_DATA);}
+        //Load GDTR
+        gdt.write_gdtr(gdt::SUPERVISOR_CODE, gdt::USER_DATA, gdt::SUPERVISOR_DATA);
+        //Load Task Register
+        asm!(
+            "LTR {tsss:x}",
+            tsss = in(reg) u16::from(gdt::TASK_STATE_SEGMENT_SELECTOR),
+        );
     }
 
     // IDT SETUP
     writeln!(printer, "\n=== INTERRUPT DESCRIPTOR TABLE ===\n");
-    let idt = InterruptDescriptorTable {address: u_alloc.physical_to_linear(u_alloc.allocate_page().unwrap()).unwrap(), limit: 255};
+    let idt: InterruptDescriptorTable;
     {
+        //Allocate space for IDT
+        idt = InterruptDescriptorTable {address: u_alloc.physical_to_linear(u_alloc.allocate_page().unwrap()).unwrap(), limit: 255};
         writeln!(printer, "IDT Linear Address: 0x{:016X}", idt.address.0);
         //Generic Entry
         let mut idte = InterruptDescriptorTableEntry {
@@ -214,7 +237,7 @@ pub extern "sysv64" fn _start() -> ! {
             interrupt_stack_table: 0,
             descriptor_type: DescriptorType::InterruptGate,
         };
-        //Write entries
+        //Write entries for CPU exceptions
         idte.offset = interrupt_panic!("Interrupt Vector 0x00 (#DE): Divide Error");                       idt.write_entry(&idte, 0x00);
         idte.offset = interrupt_panic!("Interrupt Vector 0x01 (#DB): Debug Exception");                    idt.write_entry(&idte, 0x01);
         idte.offset = interrupt_panic!("Interrupt Vector 0x03 (#BP): Breakpoint");                         idt.write_entry(&idte, 0x03);
@@ -234,18 +257,19 @@ pub extern "sysv64" fn _start() -> ! {
         idte.offset = interrupt_panic!("Interrupt Vector 0x13 (#XM): SIMD Floating Point Math Exception"); idt.write_entry(&idte, 0x13);
         idte.offset = interrupt_panic!("Interrupt Vector 0x14 (#VE): Virtualization Exception");           idt.write_entry(&idte, 0x14);
         idte.offset = interrupt_panic!("Interrupt Vector 0x15 (#CP): Control Protection Exception");       idt.write_entry(&idte, 0x15);
-        //Test
+        //Write IDTR
         unsafe {idt.write_idtr();}
-        //unsafe {asm!("ud2")} //test undefined opcode
-        //unsafe {write_volatile(0x800000 as *mut u8, 0x00)} //test page fault
     }
 
     // PIC SETUP
     writeln!(printer, "\n=== PROGRAMMABLE INTERRUPT CONTROLLER ===\n");
     unsafe {
+        //Remap PIC
         x86_64_timers::pic_remap(0x20, 0x28).unwrap();
+        //Enable IRQ 1
         x86_64_timers::pic_enable_irq(0x01).unwrap();
-        let idte = InterruptDescriptorTableEntry {
+        //IDT entry for IRQ 1
+        let idte: InterruptDescriptorTableEntry = InterruptDescriptorTableEntry {
             offset: irq_01_rust as unsafe extern "x86-interrupt" fn() as usize as u64,
             segment_selector: gdt::SUPERVISOR_CODE,
             segment_present: true,
@@ -253,32 +277,38 @@ pub extern "sysv64" fn _start() -> ! {
             interrupt_stack_table: 0,
             descriptor_type: DescriptorType::InterruptGate,
         };
+        //Write IDT entry
         idt.write_entry(&idte, 0x21);
-        asm!("STI");
-        //Test
+        //Test ability to read PIC inputs
         writeln!(printer, "{:08b} {:08b}", PORT_PIC1_DATA.read(), PORT_PIC2_DATA.read());
     }
 
-    // PS/2 KEYBOARD
+    // PS/2 Bus
     writeln!(printer, "\n=== PERSONAL SYSTEM/2 BUS ===\n");
     unsafe {
-        let ps2_port1_present: bool;
-        let ps2_port2_present: bool;
+        //Disable PS/2 ports
         x86_64_ps2::disable_port1();
         x86_64_ps2::disable_port2();
+        //Set PS/2 flags
         let a1 = x86_64_ps2::read_memory(0x0000).unwrap();
-        x86_64_ps2::write_memory(0, a1 & 0b1011_1100).unwrap();
+        x86_64_ps2::write_memory(0x0000, a1 & 0b1011_1100).unwrap();
+        //Test PS/2 controller
+        let ps2_port1_present: bool;
+        let ps2_port2_present: bool;
         if x86_64_ps2::test_controller() {
             writeln!(printer, "PS/2 Controller test succeeded.");
+            //Test PS/2 controller ports
             ps2_port1_present = x86_64_ps2::test_port_1();
             ps2_port2_present = x86_64_ps2::test_port_2();
             if ps2_port1_present || ps2_port2_present {
                 writeln!(printer, "PS/2 Port tests succeeded:");
+                //Enable Port 1
                 if ps2_port1_present {
                     writeln!(printer, "  PS/2 Port 1 Present.");
                     x86_64_ps2::enable_port1();
                     x86_64_ps2::enable_int_port1();
                 }
+                //Enable Port 2
                 if ps2_port2_present {
                     writeln!(printer, "  PS/2 Port 2 Present.");
                     //ps2::enable_port2();
@@ -287,22 +317,6 @@ pub extern "sysv64" fn _start() -> ! {
             else {writeln!(printer, "PS/2 Port tests failed.");}
         }
         else {writeln!(printer, "PS/2 Controller test failed.");}
-    }
-
-    // REGISTER TESTING
-    writeln!(printer, "\n=== REGISTER TEST ===\n");
-    {
-        let mut cr3: u64;
-        let mut rip: u64;
-        let mut rsp: u64;
-        unsafe {
-            asm!("MOV {cr3}, CR3",   cr3 = out(reg) cr3, options(nostack));
-            asm!("LEA {rip}, [RIP]", rip = out(reg) rip, options(nostack));
-            asm!("MOV {rsp}, RSP",   rsp = out(reg) rsp, options(nostack));
-        }
-        writeln!(printer, "CR3:    0x{:16X}", cr3);
-        writeln!(printer, "RIP:    0x{:16X}", rip);
-        writeln!(printer, "RSP:    0x{:16X}", rsp);
     }
 
     // CREATE THREADS
@@ -323,15 +337,19 @@ pub extern "sysv64" fn _start() -> ! {
         pml3.map_pages_group_4kib(&group1, 0o001_000_000, true, true, true).unwrap();
         pml3.map_pages_group_4kib(&group2, 0o001_000_400, true, true, true).unwrap();
         pml3.map_pages_group_4kib(&group3, 0o001_001_000, true, true, true).unwrap();
+        //Stack pointers
         let s1p = oct_to_usize_4(KERNEL_OCT, 1, 0, 0o377, 0).unwrap() as u64;
         let s2p = oct_to_usize_4(KERNEL_OCT, 1, 0, 0o777, 0).unwrap() as u64;
         let s3p = oct_to_usize_4(KERNEL_OCT, 1, 1, 0o377, 0).unwrap() as u64;
+        //Instruction pointers
         let i1p = read_loop as fn() as usize as u64;
         let i2p = byte_loop as fn() as usize as u64;
         let i3p = ps2_keyboard as fn() as usize as u64;
+        //Create tasks
         create_task(1, &u_alloc, i1p, gdt::SUPERVISOR_CODE, 0x00000202, s1p, gdt::SUPERVISOR_DATA);
         create_task(2, &u_alloc, i2p, gdt::USER_CODE, 0x00000202, s2p, gdt::USER_DATA);
         create_task(3, &u_alloc, i3p, gdt::USER_CODE, 0x00000202, s3p, gdt::USER_DATA);
+        //Diagnostic
         writeln!(printer, "Thread 1 (PIPE READ AND PRINT):");
         writeln!(printer, "  Stack Pointer Before Init: 0x{:16X}", s1p);
         writeln!(printer, "  Stack Pointer After Init:  0x{:16X}", TASK_STACKS[1]);
@@ -382,23 +400,21 @@ pub extern "sysv64" fn _start() -> ! {
         x86_64_timers::lapic_enable();
     }
 
-    // TSS SETUP
-    writeln!(printer,"\n=== TASK STATE SEGMENT ===\n");
-    unsafe {
-        gdt::TASK_STATE_SEGMENT_ENTRY.base = &gdt::TASK_STATE_SEGMENT as *const TaskStateSegment as u64;
-        gdt.write_system_entry(gdt::TASK_STATE_SEGMENT_ENTRY, gdt::TASK_STATE_SEGMENT_POSITION).unwrap();
-        asm!(
-            "MOV [{rsp0}], RSP",
-            "LTR {tsss:x}",
-            rsp0 = in(reg) &gdt::TASK_STATE_SEGMENT.rsp0,
-            tsss = in(reg) u16::from(gdt::TASK_STATE_SEGMENT_SELECTOR),
-        )
-    }
-
     // FINISH LOADING
     writeln!(printer, "\n=== STARTUP COMPLETE ===\n");
-    unsafe {x86_64_timers::lapic_initial_count(100_000);}
-    loop {unsafe {asm!("HLT")}}
+    unsafe {
+        //Enable interrupts
+        sti();
+        //Start timer interrupts
+        x86_64_timers::lapic_initial_count(100_000);
+        //Update kernel stack pointer
+        asm!(
+            "MOV [{rsp0}], RSP",
+            rsp0 = in(reg) addr_of!(TASK_STATE_SEGMENT.rsp0),
+        );
+        //Halt kernel initialization
+        loop{halt();}
+    }
 }
 
 
@@ -445,7 +461,7 @@ unsafe extern "sysv64" fn scheduler() -> u64 {
     else if TIMER_PIPE.state == RingBufferState::WriteWait || TIMER_PIPE.state == RingBufferState::ReadBlock  {TASK_INDEX = 1; TASK_STACKS[1]}
     else if TIMER_PIPE.state == RingBufferState::ReadWait  || TIMER_PIPE.state == RingBufferState::WriteBlock {TASK_INDEX = 2; TASK_STACKS[2]}
     else                                                                                                      {TASK_INDEX = 0; TASK_STACKS[0]};
-    gdt::TASK_STATE_SEGMENT.rsp0 = (oct4_to_usize(STACKS_OCT).unwrap() + (TASK_INDEX * 16 * KIB)) as u64;
+    TASK_STATE_SEGMENT.rsp0 = (oct4_to_usize(STACKS_OCT).unwrap() + (TASK_INDEX * 16 * KIB)) as u64;
     result
 }
 
@@ -784,3 +800,23 @@ pub enum RingBufferState {
     ReadBlock = 0x03,
     ReadWait = 0x04,
 }
+
+
+// TASK STATE SEGMENT
+pub static mut TASK_STATE_SEGMENT: TaskStateSegment = TaskStateSegment {
+    _0:    0,
+    rsp0:  0,
+    rsp1:  0,
+    rsp2:  0,
+    _1:    0,
+    ist1:  0,
+    ist2:  0,
+    ist3:  0,
+    ist4:  0,
+    ist5:  0,
+    ist6:  0,
+    ist7:  0,
+    _2:    0,
+    _3:    0,
+    iomba: 0,
+};
