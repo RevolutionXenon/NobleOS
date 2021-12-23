@@ -1,3 +1,5 @@
+/.idea
+/.vscode
 /target
 /qemu-log.txt
 /qemu-monitor.txt
