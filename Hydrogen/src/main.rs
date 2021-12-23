@@ -187,7 +187,10 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
             pml3_kernel               .map_pages_offset_4kib(PhysicalAddress(kernel_location as usize), 0,                           kernel_size, true, true, false).unwrap();
             pml3_kernel               .map_pages_offset_4kib(PhysicalAddress(stack_location  as usize), PAGE_SIZE_512G - stack_size, stack_size,  true, true, true ).unwrap();
         writeln!(printer, "PML3 KERNL: 0x{:16X}", pml3_kernel.linear.0);
-        //Page Map Level 3: Frame Buffern
+        //Page Map Level 3: Kernel Stacks
+        let pml3_kernel_stacks:       PageMap = PageMap::new(allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA), PageMapLevel::L3, &page_allocator).unwrap();
+        writeln!(printer, "PML3 KSTAK: 0x{:16X}", pml3_kernel_stacks.linear.0);
+        //Page Map Level 3: Frame Buffer
         let pml3_frame_buffer:        PageMap = PageMap::new(allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA), PageMapLevel::L3, &page_allocator).unwrap();
             pml3_frame_buffer         .map_pages_offset_4kib(PhysicalAddress(graphics_frame_pointer as usize), 0, F1_SCREEN_HEIGHT*F1_SCREEN_WIDTH*4, true, true, true).unwrap();
         writeln!(printer, "PML3 FRAME: 0x{:16X}", pml3_frame_buffer.linear.0);
@@ -198,6 +201,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         //Write PML4 Entries
         pml4.write_entry(PHYSICAL_OCT,     PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_efi_physical_memory.physical, true, true, false).unwrap()).unwrap();
         pml4.write_entry(KERNEL_OCT,       PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_kernel             .physical, true, true, false).unwrap()).unwrap();
+        pml4.write_entry(STACKS_OCT,       PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_kernel_stacks      .physical, true, false,false).unwrap()).unwrap();
         pml4.write_entry(FRAME_BUFFER_OCT, PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_frame_buffer       .physical, true, true, true ).unwrap()).unwrap();
         pml4.write_entry(IDENTITY_OCT,     PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_offset_identity_map.physical, true, true, true ).unwrap()).unwrap();
         pml4.write_entry(PAGE_MAP_OCT,     PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml4                    .physical, true, true, true ).unwrap()).unwrap();

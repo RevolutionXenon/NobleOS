@@ -329,9 +329,9 @@ pub extern "sysv64" fn _start() -> ! {
         let i1p = read_loop as fn() as usize as u64;
         let i2p = byte_loop as fn() as usize as u64;
         let i3p = ps2_keyboard as fn() as usize as u64;
-        TASK_STACKS[1] = create_task(i1p, gdt::SUPERVISOR_CODE, 0x00000202, s1p, gdt::SUPERVISOR_DATA);
-        TASK_STACKS[2] = create_task(i2p, gdt::SUPERVISOR_CODE, 0x00000202, s2p, gdt::SUPERVISOR_DATA);
-        TASK_STACKS[3] = create_task(i3p, gdt::USER_CODE, 0x00000202, s3p, gdt::USER_DATA);
+        create_task(1, &u_alloc, i1p, gdt::SUPERVISOR_CODE, 0x00000202, s1p, gdt::SUPERVISOR_DATA);
+        create_task(2, &u_alloc, i2p, gdt::USER_CODE, 0x00000202, s2p, gdt::USER_DATA);
+        create_task(3, &u_alloc, i3p, gdt::USER_CODE, 0x00000202, s3p, gdt::USER_DATA);
         writeln!(printer, "Thread 1 (PIPE READ AND PRINT):");
         writeln!(printer, "  Stack Pointer Before Init: 0x{:16X}", s1p);
         writeln!(printer, "  Stack Pointer After Init:  0x{:16X}", TASK_STACKS[1]);
@@ -349,9 +349,12 @@ pub extern "sysv64" fn _start() -> ! {
     // APIC SETUP
     writeln!(printer, "\n=== ADVANCED PROGRAMMABLE INTERRUPT CONTROLLER ===\n");
     unsafe {
+        //Diagnostic
         writeln!(printer, "APIC Present: {}", x86_64_timers::apic_check());
         writeln!(printer, "APIC Base: 0x{:16X}", x86_64_timers::lapic_get_base());
+        //Shift Base
         x86_64_timers::LAPIC_ADDRESS = (x86_64_timers::lapic_get_base() as usize + oct4_to_usize(IDENTITY_OCT).unwrap()) as *mut u8;
+        //Interrupt struct
         let mut idte = InterruptDescriptorTableEntry {
             offset: _interrupt_dummy as extern "x86-interrupt" fn() as usize as u64,
             segment_selector: gdt::SUPERVISOR_CODE,
@@ -360,15 +363,23 @@ pub extern "sysv64" fn _start() -> ! {
             interrupt_stack_table: 0,
             descriptor_type: DescriptorType::InterruptGate,
         };
-        idt.write_entry(&idte, 0xFF);
-        x86_64_timers::lapic_enable();
+        //Spurious interrupt
         x86_64_timers::lapic_spurious(0xFF);
+        idt.write_entry(&idte, 0xFF);
+        //Diagnostic
         writeln!(printer, "APIC ID:   0x{:1X}", x86_64_timers::lapic_read_register(0x20).unwrap() >> 24);
         writeln!(printer, "APIC 0xF0: 0x{:08X}", x86_64_timers::lapic_read_register(0xF0).unwrap());
+        //Timer interrupt
         idte.offset = interrupt_timer as unsafe extern "x86-interrupt" fn() as usize as u64;
         idt.write_entry(&idte, 0x30);
+        //User accessible yield interrupt
+        idte.privilege_level = PrivilegeLevel::User;
+        idt.write_entry(&idte, 0x80);
+        //Set Timer Mode
         x86_64_timers::lapic_timer(0x30, false, x86_64_timers::TimerMode::Periodic);
         x86_64_timers::lapic_divide_config(x86_64_timers::LapicDivide::Divide_128);
+        //Enable LAPIC
+        x86_64_timers::lapic_enable();
     }
 
     // TSS SETUP
@@ -399,24 +410,43 @@ static mut TASK_INDEX: usize = 0;
 static mut TASK_STACKS: [u64; 4] = [0;4];
 
 //Task Creation Function
-unsafe fn create_task(instruction_pointer: u64, code_selector: SegmentSelector, eflags_image: u32, stack_pointer: u64, stack_selector: SegmentSelector) -> u64 {
-    write_volatile((stack_pointer as *mut u64).sub(1), u16::from(stack_selector) as u64);
-    write_volatile((stack_pointer as *mut u64).sub(2), stack_pointer);
-    write_volatile((stack_pointer as *mut u64).sub(3), eflags_image as u64);
-    write_volatile((stack_pointer as *mut u64).sub(4), u16::from(code_selector) as u64);
-    write_volatile((stack_pointer as *mut u64).sub(5), instruction_pointer);
+unsafe fn create_task(thread_index: usize, allocator: &dyn PageAllocator, instruction_pointer: u64, code_selector: SegmentSelector, eflags_image: u32, stack_pointer: u64, stack_selector: SegmentSelector) {
+    let rsp = create_kernel_stack(thread_index, allocator);
+    write_volatile(rsp.sub(1), u16::from(stack_selector) as u64);
+    write_volatile(rsp.sub(2), stack_pointer);
+    write_volatile(rsp.sub(3), eflags_image as u64);
+    write_volatile(rsp.sub(4), u16::from(code_selector) as u64);
+    write_volatile(rsp.sub(5), instruction_pointer);
     for i in 6..54 {
         write_volatile((stack_pointer as *mut u64).sub(i), 0);
     }
-    stack_pointer - 424
+    TASK_STACKS[thread_index] = rsp as u64 - 424;
+}
+
+unsafe fn create_kernel_stack(thread_index: usize, allocator: &dyn PageAllocator) -> *mut u64 {
+    //Page map
+    let pml4_physical = PhysicalAddress(Cr3::read().0.start_address().as_u64() as usize);
+    let pml4 = PageMap::new(pml4_physical, PageMapLevel::L4, allocator).unwrap();
+    let pml3 = PageMap::new(pml4.read_entry(STACKS_OCT).unwrap().physical, PageMapLevel::L3, allocator).unwrap();
+    //Allocate stack
+    let mut group = [PhysicalAddress(0);3];
+    for address in &mut group {
+        *address = allocator.allocate_page().unwrap();
+    }
+    pml3.map_pages_group_4kib(&group, ((thread_index - 1) * 4) + 1, true, true, true).unwrap();
+    //Initialize stack
+    oct4_to_pointer(STACKS_OCT).unwrap().add(thread_index * 16 * KIB) as *mut u64
 }
 
 //Scheduler
 unsafe extern "sysv64" fn scheduler() -> u64 {
+    let result = 
     if      INPUT_PIPE.state == RingBufferState::WriteWait || INPUT_PIPE.state == RingBufferState::ReadBlock  {TASK_INDEX = 3; TASK_STACKS[3]}
     else if TIMER_PIPE.state == RingBufferState::WriteWait || TIMER_PIPE.state == RingBufferState::ReadBlock  {TASK_INDEX = 1; TASK_STACKS[1]}
     else if TIMER_PIPE.state == RingBufferState::ReadWait  || TIMER_PIPE.state == RingBufferState::WriteBlock {TASK_INDEX = 2; TASK_STACKS[2]}
-    else                                                                                                      {TASK_INDEX = 0; TASK_STACKS[0]}
+    else                                                                                                      {TASK_INDEX = 0; TASK_STACKS[0]};
+    gdt::TASK_STATE_SEGMENT.rsp0 = (oct4_to_usize(STACKS_OCT).unwrap() + (TASK_INDEX * 16 * KIB)) as u64;
+    result
 }
 
 //Pipe Testing Task
@@ -429,17 +459,17 @@ fn read_loop() {unsafe {
         write!(printer, "{}", core::str::from_utf8(TIMER_PIPE.read(&mut [0xFF; 4096])).unwrap());
         //writeln!(printer, "{:?}", TIMER_PIPE.read(&mut [0xFF; 4096])).unwrap();
         write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::ReadWait);
-        asm!("INT 30h");
+        asm!("INT 80h");
     }
 }}
 fn byte_loop() {unsafe {
     loop {
         write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::WriteBlock);
         TIMER_VAL = TIMER_VAL.wrapping_add(1);
-        TIMER_PIPE.write("Hello World! ".as_bytes());
+        TIMER_PIPE.write("HELLO FROM USERSPACE! ".as_bytes());
         //TIMER_PIPE.write(&[ps2::read_status()]);
         write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::WriteWait);
-        asm!("INT 30h");
+        asm!("INT 80h");
     }
 }}
 
@@ -481,7 +511,7 @@ fn ps2_keyboard() {unsafe {
             }
         }
         write_volatile(&mut INPUT_PIPE.state as *mut RingBufferState, RingBufferState::Free);
-        asm!("INT 30h");
+        asm!("INT 80h");
     }
 }}
 
@@ -537,7 +567,7 @@ unsafe extern "x86-interrupt" fn irq_01_rust() {
         "LEA RCX, [{stack_array}+RIP]",
         "MOV [RCX+RAX], RSP",
         //Swap to kernel stack
-        "MOV RSP, [{kernel_stack}+RIP]",
+        //"MOV RSP, [{kernel_stack}+RIP]",
         //End interrupt
         "CALL {lapic_eoi}",
         //Call scheduler
@@ -563,7 +593,7 @@ unsafe extern "x86-interrupt" fn irq_01_rust() {
         //Symbols
         stack_array  = sym TASK_STACKS,
         stack_index  = sym TASK_INDEX,
-        kernel_stack = sym TASK_STACKS,
+        //kernel_stack = sym TASK_STACKS,
         scheduler    = sym scheduler,
         lapic_eoi    = sym x86_64_timers::lapic_end_int,
         options(noreturn),
