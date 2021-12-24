@@ -1,12 +1,12 @@
 // HELIUM
 // Helium is the Noble Kernel:
-// (PLANNED) Program loading
-// (PLANNED) Thread management
 // Code execution
-// CPU time sharing
 // Interrupt handling
+// CPU time sharing
 // (PLANNED) System call handling
-// (PLANNED) Pipe management
+// (PLANNED) Thread management
+// (PLANNED) Program loading
+// (PLANNED) Inter-process communication handling
 
 
 // HEADER

@@ -1,10 +1,10 @@
 # Noble Operating System
 
-![logo](./.materials/logo.png)
+<img src="./.materials/logo-01.png" alt="Noble Logo (Version 1)" width="300"/>
 
-**Noble is a microkernel and IPC based operating system which runs on the Helium kernel.**
+**Noble is a lightweight microkernel and IPC based operating system built with Rust which is not a clone of any existing operating system.**
 
-**Noble is a work in progress in its early stages.**
+**Noble is currently a work in progress in its earliest stages.**
 
 # Components
 
@@ -14,20 +14,20 @@ A UEFI stub which handles:
 
 * Memory and control register diagnostics
 * Virtual memory initialization
-* Kernel booting
-* Kernel space binary loading (PLANNED)
+* Kernel entry
+* (PLANNED) Kernel space binary loading
 
 ## Helium Kernel
 
-An ELF Binary which handles:
+An ELF binary which handles:
 
-* Thread management
 * Code execution
-* CPU time sharing
 * Interrupt handling
-* System call handling
-* Program loading (PLANNED)
-* Pipe and shared memory management (PLANNED)
+* CPU time sharing
+* (PLANNED) System call handling
+* (PLANNED) Thread management
+* (PLANNED) Program loading
+* (PLANNED) Inter-process communication handling
 
 ## Photon Graphics Library
 
@@ -40,10 +40,12 @@ A Rust Library which handles:
 A Rust Library which handles:
 
 * The Noble address space layout
-* The contents of ELF files
 * x86-64:
-    * The GDT and IDT structures
-    * The structure of page tables
+    * Long mode page tables
+    * Segmentation data structures
+    * The syscall instruction
     * The PCI bus
-    * The Programmable Interrupt Controller and Advanced Programmable Interrupt Controller
     * The PS/2 controller and devices
+    * The Programmable Interrupt Controller and Advanced Programmable Interrupt Controller
+* System V:
+    * System V object files (ELF files)
