@@ -17,6 +17,8 @@
 #![allow(clippy::if_same_then_else)]
 #![feature(abi_x86_interrupt)]
 #![feature(asm)]
+#![feature(asm_sym)]
+#![feature(asm_const)]
 #![feature(naked_functions)]
 #![feature(panic_info_message)]
 #![feature(start)]
@@ -676,7 +678,6 @@ extern "x86-interrupt" fn _interrupt_dummy() {unsafe {
 
 
 // PANIC HANDLER
-#[cfg(not(test))]
 #[panic_handler]
 fn panic_handler(panic_info: &PanicInfo) -> ! {
     unsafe {

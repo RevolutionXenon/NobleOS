@@ -10,8 +10,7 @@
 #![no_std]
 #![allow(incomplete_features)]
 #![allow(clippy::missing_safety_doc)]
-#![feature(const_evaluatable_checked)]
-#![feature(const_generics)]
+#![feature(generic_const_exprs)]
 
 //Modules
 pub mod font_16_16;

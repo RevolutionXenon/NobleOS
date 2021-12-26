@@ -22,6 +22,7 @@
 #![allow(clippy::type_complexity)]
 #![feature(arbitrary_enum_discriminant)]
 #![feature(asm)]
+#![feature(asm_sym)]
 #![feature(naked_functions)]
 
 //Imports

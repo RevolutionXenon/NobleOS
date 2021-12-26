@@ -14,6 +14,7 @@
 #![allow(clippy::single_char_pattern)]
 #![feature(abi_efiapi)]
 #![feature(asm)]
+#![feature(asm_sym)]
 #![feature(bench_black_box)]
 #![feature(box_syntax)]
 
@@ -21,16 +22,17 @@
 extern crate rlibc;
 extern crate alloc;
 
+
 //Imports
 use photon::*;
 use gluon::*;
 use gluon::sysv_executable::*;
 use gluon::x86_64_paging::*;
+use gluon::x86_64_segmentation::*;
 use core::cell::Cell;
 use core::cell::RefCell;
 use core::convert::TryInto;
 use core::fmt::Write;
-#[cfg(not(test))]
 use core::panic::PanicInfo;
 use core::ptr;
 use core::ptr::write_volatile;
@@ -47,26 +49,43 @@ use uefi::proto::media::file::FileAttribute;
 use uefi::proto::media::file::FileMode;
 use uefi::proto::media::file::RegularFile;
 use uefi::proto::media::fs::SimpleFileSystem;
-use uefi::table::boot::MemoryType;
-use uefi::table::runtime::ResetType;
+use uefi::table::boot::*;
+use uefi::table::runtime::*;
 use x86_64::registers::control::*;
 
 //Constants
 const HYDROGEN_VERSION: &str = "vDEV-2021-12-23"; //CURRENT VERSION OF BOOTLOADER
 
 
+// MACROS
+//Interrupt that Panics
+macro_rules! interrupt_panic {
+    ($text:expr) => {{
+        unsafe fn interrupt_handler() {
+            panic!($text);
+        }
+        interrupt_handler as usize as u64
+    }}
+}
+
+
 // MAIN
-//Main Entry Point After UEFI Boot
+//Entry Point After UEFI Boot
 #[entry]
-fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
+fn efi_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status {
+    boot_main(handle, system_table_boot)
+}
+
+//Main Function
+fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status {
     // UEFI INITILIZATION
-    //Utilities Initialization (Alloc)
-    uefi_services::init(&system_table_boot).expect_success("UEFI Initialization: failed at utilities initialization.");
-    let boot_services = system_table_boot.boot_services();
     //Console Reset
-    system_table_boot.stdout().reset(false).expect_success("Console reset failed.");
+    system_table_boot.stdout().reset(false).expect("Console reset failed.");
+    //Utilities Initialization (Alloc)
+    uefi_services::init(&mut system_table_boot).expect("UEFI Initialization: failed at utilities initialization.");
+    let boot_services = system_table_boot.boot_services();
     //Watchdog Timer Shutoff
-    boot_services.set_watchdog_timer(0, 0x10000, Some(&mut {&mut [0x0058u16, 0x0000u16]}[..])).expect_success("UEFI Initialization: Watchdog Timer shutoff failed.");
+    boot_services.set_watchdog_timer(0, 0x10000, Some(&mut {&mut [0x0058u16, 0x0000u16]}[..])).expect("UEFI Initialization: Watchdog Timer shutoff failed.");
     //Graphics Output Initialization
     let graphics_output_protocol = unsafe{&mut *match boot_services.locate_protocol::<GraphicsOutput>() {
         Ok(completion) => completion, 
@@ -208,8 +227,72 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
         // FINISH
     }
 
+    // IDT SETUP
+    writeln!(printer, "\n=== INTERRUPT DESCRIPTOR TABLE ===\n");
+    let idt: InterruptDescriptorTable;
+    unsafe {
+        //Locate GDT and IDT
+        let idtr = [0u8;10];
+        let gdtr = [0u8;10];
+        asm!("SIDT [{}]", in(reg) &idtr);
+        asm!("SGDT [{}]", in(reg) &gdtr);
+        let idt_address = u64::from_le_bytes(idtr[2..10].try_into().unwrap());
+        let gdt_address = u64::from_le_bytes(gdtr[2..10].try_into().unwrap());
+        //Find long mode entry in gdt
+        let gdt_pointer = gdt_address as *mut u64;
+        let mut code_index: u16 = 0;
+        for i in 0..255 {
+            if {
+                let test = *(gdt_pointer.add(i));
+                let b1 = test&(1<<53) != 0;
+                let b2 = test&(3<<45) == 0;
+                //let b2 = true;
+                b1 & b2
+            } {
+                code_index = i as u16;
+                writeln!(printer, "CODE ENTRY FOUND AT POSITION {}", i);
+                break;
+            }
+        }
+        //Setup idt
+        idt = InterruptDescriptorTable {address: LinearAddress(idt_address as usize), limit: 255};
+        writeln!(printer, "IDT Linear Address: 0x{:016X}", idt.address.0);
+        //Generic Entry
+        let mut idte = InterruptDescriptorTableEntry {
+            offset: 0,
+            segment_selector: SegmentSelector {descriptor_table_index: code_index, table_indicator: TableIndicator::GDT, requested_privilege_level: PrivilegeLevel::Supervisor },
+            segment_present: true,
+            privilege_level: PrivilegeLevel::Supervisor,
+            interrupt_stack_table: 0,
+            descriptor_type: DescriptorType::InterruptGate,
+        };
+        //Write entries for CPU exceptions
+        idte.offset = interrupt_panic!("Interrupt Vector 0x00 (#DE): Divide Error");                       idt.write_entry(&idte, 0x00);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x01 (#DB): Debug Exception");                    idt.write_entry(&idte, 0x01);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x03 (#BP): Breakpoint");                         idt.write_entry(&idte, 0x03);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x04 (#OF): Overflow");                           idt.write_entry(&idte, 0x04);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x05 (#BR): Bound Range Exceeded");               idt.write_entry(&idte, 0x05);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x06 (#UD): Invalid Opcode");                     idt.write_entry(&idte, 0x06);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x07 (#NM): No Floating Point Unit");             idt.write_entry(&idte, 0x07);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x08 (#DF): Double Fault");                       idt.write_entry(&idte, 0x08);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x0A (#TS): Invalid Task State Segment");         idt.write_entry(&idte, 0x0A);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x0B (#NP): Segment Not Present");                idt.write_entry(&idte, 0x0B);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x0C (#SS): Stack Segment Fault");                idt.write_entry(&idte, 0x0C);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x0D (#GP): General Protection Error");           idt.write_entry(&idte, 0x0D);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x0E (#PF): Page Fault");                         idt.write_entry(&idte, 0x0E);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x10 (#MF): Floating Point Math Fault");          idt.write_entry(&idte, 0x10);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x11 (#AC): Alignment Check");                    idt.write_entry(&idte, 0x11);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x12 (#MC): Machine Check");                      idt.write_entry(&idte, 0x12);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x13 (#XM): SIMD Floating Point Math Exception"); idt.write_entry(&idte, 0x13);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x14 (#VE): Virtualization Exception");           idt.write_entry(&idte, 0x14);
+        idte.offset = interrupt_panic!("Interrupt Vector 0x15 (#CP): Control Protection Exception");       idt.write_entry(&idte, 0x15);
+        //Write IDTR
+        //idt.write_idtr();
+    }
+
     // COMMAND LINE
     writeln!(printer, "\n=== COMMAND LINE READY ===");
+    command_processor(&mut printer, &system_table_boot, "crread -all");
     //Enter Read-Evaluate-Print Loop
     let mut leave: bool = true;
     let mut countdown = 5_000_000;
@@ -345,7 +428,7 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
     //boot_services.stall(5_000_000);
     //Exit Boot Services
     let mut memory_map_buffer = [0; 10000];
-    let (_table_runtime, _esi) = system_table_boot.exit_boot_services(_handle, &mut memory_map_buffer).expect_success("Boot services exit failed");
+    let (_table_runtime, _esi) = system_table_boot.exit_boot_services(handle, &mut memory_map_buffer).expect_success("Boot services exit failed");
     exit_boot_services();
     writeln!(printer, "Boot Services exited.");
     //Enter Kernel
@@ -368,7 +451,6 @@ fn efi_main(_handle: Handle, system_table_boot: SystemTable<Boot>) -> Status {
 static mut PANIC_WRITE_POINTER: Option<*mut dyn Write> = None;
 
 //Panic Handler
-#[cfg(not(test))]
 #[panic_handler]
 fn panic_handler(panic_info: &PanicInfo) -> ! {
     unsafe {
