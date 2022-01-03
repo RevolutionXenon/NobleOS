@@ -14,11 +14,12 @@
 
 //Modules
 pub mod font_16_16;
+pub mod formats;
 
-use core::fmt::Error;
 //Imports
-use core::fmt::Write;
+use core::fmt::Error;
 use core::fmt::Arguments;
+use core::fmt::Write;
 use core::ptr::write_volatile;
 use core::str;
 use crate::font_16_16::retrieve_font_bitmap;
@@ -566,21 +567,3 @@ pub const COLOR_BGRX_TEAL:    ColorBGRX = ColorBGRX::new(0x00, 0xFF, 0xFF); //TE
 pub const COLOR_BGRX_MAGENTA: ColorBGRX = ColorBGRX::new(0xFF, 0x00, 0xFF); //MAGENTA
 pub const COLOR_BGRX_YELLOW:  ColorBGRX = ColorBGRX::new(0xFF, 0xFF, 0x00); //YELLOW
 pub const COLOR_BGRX_WHITE:   ColorBGRX = ColorBGRX::new(0xFF, 0xFF, 0xFF); //WHITE
-
-
-// SPECIFIC RESOLUTIONS
-//Format 1
-//Width: 1920 Pixels, Height: 1080 Pixels, Pixel Format: Blue, Green, Red, Reserved
-pub const F1_SCREEN_HEIGHT: usize = 1080; //PIXEL HEIGHT OF SCREEN
-pub const F1_SCREEN_WIDTH:  usize = 1920; //PIXEL WIDTH OF SCREEN
-pub const F1_FRAME_HEIGHT:  usize = 67;   //TEXT MODE HEIGHT OF CHARACTER FRAME
-pub const F1_FRAME_WIDTH:   usize = 120;  //TEXT MODE WIDTH OF CHARACTER FRAME
-pub const F1_PRINT_LINES:   usize = 250;  //TEXT MODE HEIGHT OF PRINT RESULT WINDOW IN MEMORY
-pub const F1_PRINT_HEIGHT:  usize = 62;   //TEXT MODE HEIGHT OF PRINT RESULT WINDOW ON SCREEN
-pub const F1_PRINT_WIDTH:   usize = 118;  //TEXT MODE WIDTH OF PRINT RESULT WINDOW
-pub const F1_PRINT_Y:       usize = 2;    //TEXT MODE VERTICAL POSITION OF PRINT RESULT WINDOW
-pub const F1_PRINT_X:       usize = 1;    //TEXT MODE HORIZONTAL POSITION OF PRINT RESULT WINDOW
-pub const F1_INPUT_LENGTH:  usize = 118;  //TEXT MODE HEIGHT OF INPUT WINDOW IN MEMORY
-pub const F1_INPUT_WIDTH:   usize = 118;  //TEXT MODE WIDTH OF INPUT WINDOW
-pub const F1_INPUT_Y:       usize = 65;   //TEXT MODE VERTICAL POSITION OF INPUT WINDOW
-pub const F1_INPUT_X:       usize = 1;    //TEXT MODE HORIZONTAL POSITION OF INPUT WINDOW

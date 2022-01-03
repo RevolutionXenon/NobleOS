@@ -13,6 +13,7 @@
 #![allow(unused_must_use)]
 #![allow(clippy::single_char_pattern)]
 #![feature(abi_efiapi)]
+#![feature(abi_x86_interrupt)]
 #![feature(asm)]
 #![feature(asm_sym)]
 #![feature(bench_black_box)]
@@ -25,6 +26,7 @@ extern crate alloc;
 
 //Imports
 use photon::*;
+use photon::formats::f2::*;
 use gluon::*;
 use gluon::sysv_executable::*;
 use gluon::x86_64_paging::*;
@@ -35,39 +37,42 @@ use core::convert::TryInto;
 use core::fmt::Write;
 use core::panic::PanicInfo;
 use core::ptr;
+use core::ptr::read_volatile;
 use core::ptr::write_volatile;
 use core::str::Split;
-use uefi::alloc::exit_boot_services;
 use uefi::prelude::*;
-use uefi::proto::console::gop::GraphicsOutput;
-use uefi::proto::console::gop::Mode;
-use uefi::proto::console::text::Input;
-use uefi::proto::console::text::Key;
-use uefi::proto::console::text::ScanCode;
-use uefi::proto::media::file::File;
-use uefi::proto::media::file::FileAttribute;
-use uefi::proto::media::file::FileMode;
-use uefi::proto::media::file::RegularFile;
-use uefi::proto::media::fs::SimpleFileSystem;
+use uefi::proto::console::gop::*;
+use uefi::proto::console::text::*;
+use uefi::proto::media::file::*;
+use uefi::proto::media::fs::*;
 use uefi::table::boot::*;
 use uefi::table::runtime::*;
 use x86_64::registers::control::*;
+use x86_64::structures::idt::InterruptStackFrame;
 
 //Constants
-const HYDROGEN_VERSION: &str = "vDEV-2021-12-23"; //CURRENT VERSION OF BOOTLOADER
+const HYDROGEN_VERSION: &str = "vDEV-2021-12-27"; //CURRENT VERSION OF BOOTLOADER
 
 
 // MACROS
 //Interrupt that Panics
-macro_rules! interrupt_panic {
+macro_rules! interrupt_panic_noe {
     ($text:expr) => {{
-        unsafe fn interrupt_handler() {
-            panic!($text);
+        unsafe extern "x86-interrupt" fn interrupt_handler(stack_frame: InterruptStackFrame) {
+            panic!($text, stack_frame);
         }
         interrupt_handler as usize as u64
     }}
 }
 
+macro_rules! interrupt_panic_err {
+    ($text:expr) => {{
+        unsafe extern "x86-interrupt" fn interrupt_handler(stack_frame: InterruptStackFrame, error_code: u64) {
+            panic!($text, stack_frame, error_code);
+        }
+        interrupt_handler as usize as u64
+    }}
+}
 
 // MAIN
 //Entry Point After UEFI Boot
@@ -96,15 +101,16 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
     let whitespace: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
     let _blackspace: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
     let bluespace: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE, background: COLOR_BGRX_BLACK};
-    let pixel_renderer: PixelRendererHWD<ColorBGRX> = PixelRendererHWD {pointer: graphics_frame_pointer as *mut ColorBGRX, height: F1_SCREEN_HEIGHT, width: F1_SCREEN_WIDTH};
-    let character_renderer: CharacterTwoToneRenderer16x16<ColorBGRX> = CharacterTwoToneRenderer16x16::<ColorBGRX> {renderer: &pixel_renderer, height: F1_FRAME_HEIGHT, width: F1_FRAME_WIDTH, y: 0, x: 0};
-    let mut frame: FrameWindow::<F1_FRAME_HEIGHT, F1_FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = FrameWindow::<F1_FRAME_HEIGHT, F1_FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, whitespace, 0, 0);
-    let mut printer: PrintWindow::<F1_PRINT_LINES, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = PrintWindow::<F1_PRINT_LINES, F1_PRINT_HEIGHT, F1_PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, whitespace, whitespace, F1_PRINT_Y, F1_PRINT_X);
-    let mut inputter: InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>  = InputWindow::<F1_INPUT_LENGTH, F1_INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, whitespace, F1_INPUT_Y, F1_INPUT_X);
+    let pixel_renderer: PixelRendererHWD<ColorBGRX> = PixelRendererHWD {pointer: graphics_frame_pointer as *mut ColorBGRX, height: SCREEN_HEIGHT, width: SCREEN_WIDTH};
+    let character_renderer: CharacterTwoToneRenderer16x16<ColorBGRX> = CharacterTwoToneRenderer16x16::<ColorBGRX> {renderer: &pixel_renderer, height: FRAME_HEIGHT, width: FRAME_WIDTH, y: 0, x: 0};
+    let mut frame: FrameWindow::<FRAME_HEIGHT, FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = FrameWindow::<FRAME_HEIGHT, FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, whitespace, 0, 0);
+    let mut printer: PrintWindow::<PRINT_LINES, PRINT_HEIGHT, PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = PrintWindow::<PRINT_LINES, PRINT_HEIGHT, PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, whitespace, whitespace, PRINT_Y, PRINT_X);
+    let mut inputter: InputWindow::<INPUT_LENGTH, INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>  = InputWindow::<INPUT_LENGTH, INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, whitespace, INPUT_Y, INPUT_X);
+    //Panic printer
     unsafe {PANIC_WRITE_POINTER = Some(&mut printer as &mut dyn Write as *mut dyn Write)};
     //Graphics Output Protocol: Set Graphics Mode
     uefi_set_graphics_mode(graphics_output_protocol);
-    let _st = graphics_output_protocol.current_mode_info().stride();
+    writeln!(printer, "PIXEL STRIDE {:?}", graphics_output_protocol.current_mode_info().stride());
     let _pf = graphics_output_protocol.current_mode_info().pixel_format();
     let _s = graphics_output_protocol.frame_buffer().size();
     //Simple File System Initialization
@@ -120,14 +126,14 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
 
     // GRAPHICS SETUP
     //User Interface initialization
-    frame.horizontal_line(F1_PRINT_Y-1,     0,            F1_FRAME_WIDTH-1,  bluespace);
-    frame.horizontal_line(F1_INPUT_Y-1,     0,            F1_FRAME_WIDTH-1,  bluespace);
-    frame.horizontal_line(F1_INPUT_Y+1,     0,            F1_FRAME_WIDTH-1,  bluespace);
-    frame.vertical_line(  0,                F1_PRINT_Y-1, F1_INPUT_Y+1,      bluespace);
-    frame.vertical_line(  F1_FRAME_WIDTH-1, F1_PRINT_Y-1, F1_INPUT_Y+1,      bluespace);
-    frame.horizontal_string("NOBLE OS",            0, 0,                                            bluespace);
-    frame.horizontal_string("HYDROGEN BOOTLOADER", 0, F1_FRAME_WIDTH - 20 - HYDROGEN_VERSION.len(), bluespace);
-    frame.horizontal_string(HYDROGEN_VERSION,      0, F1_FRAME_WIDTH -      HYDROGEN_VERSION.len(), bluespace);
+    frame.horizontal_line(PRINT_Y-1,     0,         FRAME_WIDTH-1,  bluespace);
+    frame.horizontal_line(INPUT_Y-1,     0,         FRAME_WIDTH-1,  bluespace);
+    frame.horizontal_line(INPUT_Y+1,     0,         FRAME_WIDTH-1,  bluespace);
+    frame.vertical_line(  0,             PRINT_Y-1, INPUT_Y+1,      bluespace);
+    frame.vertical_line(  FRAME_WIDTH-1, PRINT_Y-1, INPUT_Y+1,      bluespace);
+    frame.horizontal_string("NOBLE OS",            0, 0,                                         bluespace);
+    frame.horizontal_string("HYDROGEN BOOTLOADER", 0, FRAME_WIDTH - 20 - HYDROGEN_VERSION.len(), bluespace);
+    frame.horizontal_string(HYDROGEN_VERSION,      0, FRAME_WIDTH -      HYDROGEN_VERSION.len(), bluespace);
     frame.render();
     writeln!(printer, "\n=== WELCOME TO NOBLE OS ===\n");
     writeln!(printer, "Hydrogen Bootloader     {}", HYDROGEN_VERSION);
@@ -190,6 +196,10 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
     let pml4: PageMap;
     let page_allocator = UefiPageAllocator{boot_services};
     unsafe {
+        // NX BIT
+        let mut val = Efer::read().bits();
+        val |= 0x800;
+        Efer::write_raw(val);
         // NEW PAGE MAP SYSTEM
         writeln!(printer, "\n=== NEW PAGE MAP SYSTEM ===\n");
         //Page Map Level 4: OS Boot
@@ -211,7 +221,7 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
         writeln!(printer, "PML3 KSTAK: 0x{:16X}", pml3_kernel_stacks.linear.0);
         //Page Map Level 3: Frame Buffer
         let pml3_frame_buffer:        PageMap = PageMap::new(allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA), PageMapLevel::L3, &page_allocator).unwrap();
-            pml3_frame_buffer         .map_pages_offset_4kib(PhysicalAddress(graphics_frame_pointer as usize), 0, F1_SCREEN_HEIGHT*F1_SCREEN_WIDTH*4, true, true, true).unwrap();
+            pml3_frame_buffer         .map_pages_offset_4kib(PhysicalAddress(graphics_frame_pointer as usize), 0, SCREEN_HEIGHT*SCREEN_WIDTH*4, true, true, true).unwrap();
         writeln!(printer, "PML3 FRAME: 0x{:16X}", pml3_frame_buffer.linear.0);
         //Page Map Level 3: Offset Identity Map
         let pml3_offset_identity_map: PageMap = PageMap::new(allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA), PageMapLevel::L3, &page_allocator).unwrap();
@@ -228,16 +238,22 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
     }
 
     // IDT SETUP
-    writeln!(printer, "\n=== INTERRUPT DESCRIPTOR TABLE ===\n");
+    writeln!(printer, "\n=== SYSTEM TABLES ===\n");
     let idt: InterruptDescriptorTable;
     unsafe {
         //Locate GDT and IDT
         let idtr = [0u8;10];
         let gdtr = [0u8;10];
+        let mut tr: u16;
         asm!("SIDT [{}]", in(reg) &idtr);
         asm!("SGDT [{}]", in(reg) &gdtr);
+        asm!("STR {}", out(reg) tr);
         let idt_address = u64::from_le_bytes(idtr[2..10].try_into().unwrap());
         let gdt_address = u64::from_le_bytes(gdtr[2..10].try_into().unwrap());
+        //Diagnostic
+        writeln!(printer, "GDT Linear Address: 0x{:016X}", gdt_address);
+        writeln!(printer, "IDT Linear Address: 0x{:016X}", idt_address);
+        writeln!(printer, "Task Register: 0x{:04X}", tr);
         //Find long mode entry in gdt
         let gdt_pointer = gdt_address as *mut u64;
         let mut code_index: u16 = 0;
@@ -256,7 +272,6 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
         }
         //Setup idt
         idt = InterruptDescriptorTable {address: LinearAddress(idt_address as usize), limit: 255};
-        writeln!(printer, "IDT Linear Address: 0x{:016X}", idt.address.0);
         //Generic Entry
         let mut idte = InterruptDescriptorTableEntry {
             offset: 0,
@@ -267,32 +282,90 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
             descriptor_type: DescriptorType::InterruptGate,
         };
         //Write entries for CPU exceptions
-        idte.offset = interrupt_panic!("Interrupt Vector 0x00 (#DE): Divide Error");                       idt.write_entry(&idte, 0x00);
-        idte.offset = interrupt_panic!("Interrupt Vector 0x01 (#DB): Debug Exception");                    idt.write_entry(&idte, 0x01);
-        idte.offset = interrupt_panic!("Interrupt Vector 0x03 (#BP): Breakpoint");                         idt.write_entry(&idte, 0x03);
-        idte.offset = interrupt_panic!("Interrupt Vector 0x04 (#OF): Overflow");                           idt.write_entry(&idte, 0x04);
-        idte.offset = interrupt_panic!("Interrupt Vector 0x05 (#BR): Bound Range Exceeded");               idt.write_entry(&idte, 0x05);
-        idte.offset = interrupt_panic!("Interrupt Vector 0x06 (#UD): Invalid Opcode");                     idt.write_entry(&idte, 0x06);
-        idte.offset = interrupt_panic!("Interrupt Vector 0x07 (#NM): No Floating Point Unit");             idt.write_entry(&idte, 0x07);
-        idte.offset = interrupt_panic!("Interrupt Vector 0x08 (#DF): Double Fault");                       idt.write_entry(&idte, 0x08);
-        idte.offset = interrupt_panic!("Interrupt Vector 0x0A (#TS): Invalid Task State Segment");         idt.write_entry(&idte, 0x0A);
-        idte.offset = interrupt_panic!("Interrupt Vector 0x0B (#NP): Segment Not Present");                idt.write_entry(&idte, 0x0B);
-        idte.offset = interrupt_panic!("Interrupt Vector 0x0C (#SS): Stack Segment Fault");                idt.write_entry(&idte, 0x0C);
-        idte.offset = interrupt_panic!("Interrupt Vector 0x0D (#GP): General Protection Error");           idt.write_entry(&idte, 0x0D);
-        idte.offset = interrupt_panic!("Interrupt Vector 0x0E (#PF): Page Fault");                         idt.write_entry(&idte, 0x0E);
-        idte.offset = interrupt_panic!("Interrupt Vector 0x10 (#MF): Floating Point Math Fault");          idt.write_entry(&idte, 0x10);
-        idte.offset = interrupt_panic!("Interrupt Vector 0x11 (#AC): Alignment Check");                    idt.write_entry(&idte, 0x11);
-        idte.offset = interrupt_panic!("Interrupt Vector 0x12 (#MC): Machine Check");                      idt.write_entry(&idte, 0x12);
-        idte.offset = interrupt_panic!("Interrupt Vector 0x13 (#XM): SIMD Floating Point Math Exception"); idt.write_entry(&idte, 0x13);
-        idte.offset = interrupt_panic!("Interrupt Vector 0x14 (#VE): Virtualization Exception");           idt.write_entry(&idte, 0x14);
-        idte.offset = interrupt_panic!("Interrupt Vector 0x15 (#CP): Control Protection Exception");       idt.write_entry(&idte, 0x15);
+        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x00 (#DE): Divide Error                      \n{:?}\n");                       idt.write_entry(&idte, 0x00);
+        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x01 (#DB): Debug Exception                   \n{:?}\n");                    idt.write_entry(&idte, 0x01);
+        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x03 (#BP): Breakpoint                        \n{:?}\n");                         idt.write_entry(&idte, 0x03);
+        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x04 (#OF): Overflow                          \n{:?}\n");                           idt.write_entry(&idte, 0x04);
+        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x05 (#BR): Bound Range Exceeded              \n{:?}\n");               idt.write_entry(&idte, 0x05);
+        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x06 (#UD): Invalid Opcode                    \n{:?}\n");                     idt.write_entry(&idte, 0x06);
+        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x07 (#NM): No Floating Point Unit            \n{:?}\n");             idt.write_entry(&idte, 0x07);
+        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x08 (#DF): Double Fault                      \n{:?}\n");                       idt.write_entry(&idte, 0x08);
+        idte.offset = interrupt_panic_err!("\nInterrupt Vector 0x0A (#TS): Invalid Task State Segment        \n{:?}\nError Code 0x{:016X}\n");         idt.write_entry(&idte, 0x0A);
+        idte.offset = interrupt_panic_err!("\nInterrupt Vector 0x0B (#NP): Segment Not Present               \n{:?}\nError Code 0x{:016X}\n");                idt.write_entry(&idte, 0x0B);
+        idte.offset = interrupt_panic_err!("\nInterrupt Vector 0x0C (#SS): Stack Segment Fault               \n{:?}\nError Code 0x{:016X}\n");                idt.write_entry(&idte, 0x0C);
+        idte.offset = interrupt_panic_err!("\nInterrupt Vector 0x0D (#GP): General Protection Error          \n{:?}\nError Code 0x{:016X}\n");           idt.write_entry(&idte, 0x0D);
+        idte.offset = interrupt_panic_err!("\nInterrupt Vector 0x0E (#PF): Page Fault                        \n{:?}\nError Code 0x{:016X}\n");                         idt.write_entry(&idte, 0x0E);
+        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x10 (#MF): Floating Point Math Fault         \n{:?}\n");          idt.write_entry(&idte, 0x10);
+        idte.offset = interrupt_panic_err!("\nInterrupt Vector 0x11 (#AC): Alignment Check                   \n{:?}\nError Code 0x{:016X}\n");                    idt.write_entry(&idte, 0x11);
+        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x12 (#MC): Machine Check                     \n{:?}\n");                      idt.write_entry(&idte, 0x12);
+        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x13 (#XM): SIMD Floating Point Math Exception\n{:?}\n"); idt.write_entry(&idte, 0x13);
+        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x14 (#VE): Virtualization Exception          \n{:?}\n");           idt.write_entry(&idte, 0x14);
+        idte.offset = interrupt_panic_err!("\nInterrupt Vector 0x15 (#CP): Control Protection Exception      \n{:?}\nError Code 0x{:016X}\n");       idt.write_entry(&idte, 0x15);
         //Write IDTR
         //idt.write_idtr();
     }
 
+    // PREBOOT SEQUENCE
+    writeln!(printer, "\n=== PREBOOT ===\n");
+    
+    let entry_point_virtual = oct4_to_pointer(KERNEL_OCT).unwrap() as u64 + kernel.header.entry_point;
+    let stack_point_virtual = oct4_to_pointer(KERNEL_OCT).unwrap() as u64 + PAGE_SIZE_512G as u64 - 1024;
+    let pml4_point_physical = pml4.physical.0;
+    writeln!(printer, "Entry Point Virtual:  {:16X}", entry_point_virtual);
+    writeln!(printer, "Stack Point Virtual:  {:16X}", stack_point_virtual);
+    writeln!(printer, "PML4  Point Physical: {:16X}", pml4_point_physical);
+    //Push free memory to new page map
+    {
+        //Check amount of free memory
+        let free_memory_types = &[MemoryType::CONVENTIONAL, MemoryType::BOOT_SERVICES_CODE, MemoryType::BOOT_SERVICES_DATA];
+        let free_page_count: usize = uefi_free_memory_page_count(boot_services, free_memory_types).unwrap();
+        writeln!(printer, "Free Memory Before Final Boot:      {:10}Pg or {:4}MiB {:4}KiB", free_page_count, (free_page_count*PAGE_SIZE_4KIB)/MIB, ((free_page_count*PAGE_SIZE_4KIB) % MIB)/KIB);
+        //Check memory required to map free memory
+        let required_pages_l1: usize = (free_page_count + PAGE_NUMBER_1 - 1) / PAGE_NUMBER_1;
+        let required_pages_l2: usize = (free_page_count + PAGE_NUMBER_2 - 1) / PAGE_NUMBER_2;
+        let required_pages_l3: usize = (free_page_count + PAGE_NUMBER_3 - 1) / PAGE_NUMBER_3;
+        let required_page_count: usize = required_pages_l1 + required_pages_l2 + required_pages_l3;
+        writeln!(printer, "Required Memory to Map Free Memory: {:10}Pg or {:4}MiB {:4}KiB", required_page_count, (required_page_count*PAGE_SIZE_4KIB)/MIB, ((required_page_count*PAGE_SIZE_4KIB) % MIB)/KIB);
+        //Allocate and zero memory required
+        let zone_location = unsafe {allocate_memory(boot_services, MemoryType::LOADER_DATA, required_page_count * PAGE_SIZE_4KIB, PAGE_SIZE_4KIB)};
+        unsafe {
+            for i in 0..required_page_count*PAGE_SIZE_4KIB {
+                write_volatile(zone_location.add(i), 0x00);
+            }
+        }
+        let zone_page_allocator = ZonePageAllocator::new(zone_location, required_page_count).unwrap();
+        //Build page map
+        let pml3_free_memory = PageMap::new(zone_page_allocator.allocate_page().unwrap(), PageMapLevel::L3, &zone_page_allocator).unwrap();
+        let mut buffer = [0u8; 0x4000];
+        let (_k, description_iterator) = match boot_services.memory_map(&mut buffer) {
+            Ok(value) => value.unwrap(),
+            Err(error) => {panic!("{}", uefi_error_readout(error.status()))}
+        };
+        //Iterate over memory map
+        let mut size_pages = 0;
+        for descriptor in description_iterator {
+            let free_memory_address = PhysicalAddress(descriptor.phys_start as usize);
+            let free_memory_size = (descriptor.page_count as usize) * PAGE_SIZE_4KIB;
+            if free_memory_types.contains(&descriptor.ty) {
+                //writeln!(printer, "Free Memory Location:     {:16X} ({:8}KiB, {:8}pg)", free_memory_pointer as usize, free_memory_size/KIB, free_memory_size/PAGE_SIZE_4KIB);
+                pml3_free_memory.map_pages_offset_4kib(free_memory_address, size_pages*PAGE_SIZE_4KIB, free_memory_size, true, true, false).unwrap();
+                size_pages += descriptor.page_count as usize;
+            }
+        }
+        writeln!(printer, "Free Memory After Final Boot:       {:10}Pg or {:4}MiB {:4}KiB", size_pages, (size_pages*PAGE_SIZE_4KIB)/MIB, ((size_pages*PAGE_SIZE_4KIB) % MIB)/KIB);
+        //Write into pml4
+        let pml4e_free_memory = PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_free_memory.physical, true, true, false).unwrap();
+        pml4.write_entry(FREE_MEMORY_OCT, pml4e_free_memory).unwrap();
+    }
+    //Change CR3
+    writeln!(printer, "Changing Memory Map.");
+    unsafe {asm!(
+        "MOV CR3, {pml4_pointer}",
+        pml4_pointer = in(reg) pml4_point_physical,
+    )}
+
     // COMMAND LINE
     writeln!(printer, "\n=== COMMAND LINE READY ===");
-    command_processor(&mut printer, &system_table_boot, "crread -all");
     //Enter Read-Evaluate-Print Loop
     let mut leave: bool = true;
     let mut countdown = 5_000_000;
@@ -312,7 +385,7 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
                             //Return to bottom of screen
                             printer.end_down();
                             //Execute command and reset input stack
-                            let mut buffer = [0u8; F1_INPUT_LENGTH*4];
+                            let mut buffer = [0u8; INPUT_LENGTH*4];
                             match inputter.to_str(&mut buffer) {
                                 Ok(command) => {
                                     let return_code = command_processor(&mut printer, &system_table_boot, command);
@@ -370,75 +443,23 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
             },
         }
     }
+    writeln!(printer, "Bootloader Command Line Exited.");
 
     // BOOT SEQUENCE
-    writeln!(printer, "\n=== BOOTING ===\n");
-    writeln!(printer, "Bootloader Command Line Exited.");
-    let entry_point_virtual = oct4_to_pointer(KERNEL_OCT).unwrap() as u64 + kernel.header.entry_point;
-    let stack_point_virtual = oct4_to_pointer(KERNEL_OCT).unwrap() as u64 + PAGE_SIZE_512G as u64;
-    let pml4_point_physical = pml4.physical.0;
-    writeln!(printer, "Entry Point Virtual:  {:16X}", entry_point_virtual);
-    writeln!(printer, "Stack Point Virtual:  {:16X}", stack_point_virtual);
-    writeln!(printer, "PML4  Point Physical: {:16X}", pml4_point_physical);
-    //Push free memory to new page map
-    {
-        //Check amount of free memory
-        let free_memory_types = &[MemoryType::CONVENTIONAL, MemoryType::BOOT_SERVICES_CODE, MemoryType::BOOT_SERVICES_DATA];
-        let free_page_count: usize = uefi_free_memory_page_count(boot_services, free_memory_types).unwrap();
-        writeln!(printer, "Free Memory Before Final Boot:      {:10}Pg or {:4}MiB {:4}KiB", free_page_count, (free_page_count*PAGE_SIZE_4KIB)/MIB, ((free_page_count*PAGE_SIZE_4KIB) % MIB)/KIB);
-        //Check memory required to map free memory
-        let required_pages_l1: usize = (free_page_count + PAGE_NUMBER_1 - 1) / PAGE_NUMBER_1;
-        let required_pages_l2: usize = (free_page_count + PAGE_NUMBER_2 - 1) / PAGE_NUMBER_2;
-        let required_pages_l3: usize = (free_page_count + PAGE_NUMBER_3 - 1) / PAGE_NUMBER_3;
-        let required_page_count: usize = required_pages_l1 + required_pages_l2 + required_pages_l3;
-        writeln!(printer, "Required Memory to Map Free Memory: {:10}Pg or {:4}MiB {:4}KiB", required_page_count, (required_page_count*PAGE_SIZE_4KIB)/MIB, ((required_page_count*PAGE_SIZE_4KIB) % MIB)/KIB);
-        //Allocate and zero memory required
-        let zone_location = unsafe {allocate_memory(boot_services, MemoryType::LOADER_DATA, required_page_count * PAGE_SIZE_4KIB, PAGE_SIZE_4KIB)};
-        unsafe {
-            for i in 0..required_page_count*PAGE_SIZE_4KIB {
-                write_volatile(zone_location.add(i), 0x00);
-            }
-        }
-        let zone_page_allocator = ZonePageAllocator::new(zone_location, required_page_count).unwrap();
-        //Build page map
-        let pml3_free_memory = PageMap::new(zone_page_allocator.allocate_page().unwrap(), PageMapLevel::L3, &zone_page_allocator).unwrap();
-        let mut buffer = [0u8; 0x4000];
-        let (_k, description_iterator) = match boot_services.memory_map(&mut buffer) {
-            Ok(value) => value.unwrap(),
-            Err(error) => {panic!("{}", uefi_error_readout(error.status()))}
-        };
-        //Iterate over memory map
-        let mut size_pages = 0;
-        for descriptor in description_iterator {
-            let free_memory_address = PhysicalAddress(descriptor.phys_start as usize);
-            let free_memory_size = (descriptor.page_count as usize) * PAGE_SIZE_4KIB;
-            if free_memory_types.contains(&descriptor.ty) {
-                //writeln!(printer, "Free Memory Location:     {:16X} ({:8}KiB, {:8}pg)", free_memory_pointer as usize, free_memory_size/KIB, free_memory_size/PAGE_SIZE_4KIB);
-                pml3_free_memory.map_pages_offset_4kib(free_memory_address, size_pages*PAGE_SIZE_4KIB, free_memory_size, true, true, false).unwrap();
-                size_pages += descriptor.page_count as usize;
-            }
-        }
-        writeln!(printer, "Free Memory After Final Boot:       {:10}Pg or {:4}MiB {:4}KiB", size_pages, (size_pages*PAGE_SIZE_4KIB)/MIB, ((size_pages*PAGE_SIZE_4KIB) % MIB)/KIB);
-        //Write into pml4
-        let pml4e_free_memory = PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_free_memory.physical, true, true, false).unwrap();
-        pml4.write_entry(FREE_MEMORY_OCT, pml4e_free_memory).unwrap();
-    }
-    //Delay
-    //writeln!(printer, "Holding for 5 seconds.");
-    //boot_services.stall(5_000_000);
     //Exit Boot Services
     let mut memory_map_buffer = [0; 10000];
-    let (_table_runtime, _esi) = system_table_boot.exit_boot_services(handle, &mut memory_map_buffer).expect_success("Boot services exit failed");
-    exit_boot_services();
+    let (system_table_runtime, _esi) = system_table_boot.exit_boot_services(handle, &mut memory_map_buffer).expect_success("Boot services exit failed");
+    uefi::alloc::exit_boot_services();
     writeln!(printer, "Boot Services exited.");
     //Enter Kernel
-    unsafe {
-        asm!("MOV R14, {stack}",   stack   = in(reg) stack_point_virtual, options(nostack));
-        asm!("MOV R15, {entry}",   entry   = in(reg) entry_point_virtual, options(nostack));
-        asm!("MOV CR3, {pagemap}", pagemap = in(reg) pml4_point_physical, options(nostack));
-        asm!("MOV RSP, R14",                                              options(nostack));
-        asm!("JMP R15",                                                   options(nostack));
-    }
+    writeln!(printer, "Entering kernel.");
+    unsafe {asm!(
+        "MOV RSP, {stack_pointer}",
+        "CALL {entry_pointer}",
+        stack_pointer = in(reg) stack_point_virtual,
+        entry_pointer = in(reg) entry_point_virtual,
+        options(nostack),
+    )}
     //Halt Computer
     writeln!(printer, "Halt reached.");
     unsafe {asm!("HLT");}
@@ -456,11 +477,13 @@ fn panic_handler(panic_info: &PanicInfo) -> ! {
     unsafe {
         let printer = &mut *PANIC_WRITE_POINTER.unwrap();
         writeln!(printer, "{}", panic_info);
+        command_crread(printer, &mut all.split(" "));
         asm!("HLT");
         loop {}
     }
 }
 
+static mut all: &'static str = "-all";
 
 // UEFI FUNCTIONS
 //Read a UEFI error status as a string
@@ -516,7 +539,7 @@ fn uefi_set_graphics_mode(gop: &mut GraphicsOutput) {
     let mode:Mode = gop.modes()
     .map(|mode| mode.expect("Graphics Output Protocol query of available modes failed.")).find(|mode| {
         let info = mode.info();
-        info.resolution() == (F1_SCREEN_WIDTH, F1_SCREEN_HEIGHT)
+        info.resolution() == (SCREEN_WIDTH, SCREEN_HEIGHT)
     }).unwrap();
     gop.set_mode(&mode).expect_success("Graphics Output Protocol set mode failed.");
 }
@@ -808,7 +831,11 @@ fn command_crread(printer: &mut dyn Write, args: &mut Split<&str>) {
     if !(cr0||cr2||cr3||cr4||efer||gdtr) {writeln!(printer, "{}", HELP_CRREAD); return;}
     //Control Register Display
     if cr0  {writeln!(printer, "Control Register 0:\n  Flags:   0x{:016X}", Cr0::read().bits());}
-    if cr2  {writeln!(printer, "Control Register 2:\n  Address: 0x{:016X}", Cr2::read().as_u64());}
+    if cr2  {
+        let addr: u64;
+        unsafe {asm!("MOV {}, CR2", out(reg) addr,)}
+        writeln!(printer, "Control Register 2:\n  Address: 0x{:016X}", addr);
+    }
     if cr3  {writeln!(printer, "Control Register 3:\n  Flags:   0b{:016X}\n  Address: 0x{:016X}", Cr3::read().1.bits(), Cr3::read().0.start_address());}
     if cr4  {writeln!(printer, "Control Register 4:\n  Flags:   0x{:016X}", Cr4::read().bits());}
     if efer {writeln!(printer, "Extended Feature Enable Register:\n  Flags:   0x{:016X}", Efer::read().bits());}

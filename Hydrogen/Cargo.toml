@@ -16,4 +16,4 @@ uefi = "0.13.0"
 uefi-services = {version = "0.10.0", features = ["no_panic_handler"]}
 rlibc = "1.0.0"
 log = "0.4.14"
-x86_64 = "0.14.4"
+x86_64 = "0.14.7"
