@@ -69,8 +69,9 @@ macro_rules! interrupt_panic_err {
         unsafe extern "x86-interrupt" fn interrupt_handler(stack_frame: InterruptStackFrame, error_code: u64) {
             let printer = &mut *PANIC_WRITE_POINTER.unwrap();
             for i in 0..10 {
-                let a = read_volatile((stack_frame.stack_pointer.as_ptr() as *const u64).add(i));
-                writeln!(printer, "{:016X}", a);
+                let p: *const u64 = stack_frame.stack_pointer.as_ptr();
+                let a = read_volatile((p as *mut u64).add(i));
+                writeln!(printer, "{:p}: {:016X}", p, a);
             }
             panic!($text, stack_frame, error_code);
         }
