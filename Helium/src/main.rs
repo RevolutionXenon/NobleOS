@@ -32,7 +32,7 @@ use gluon::x86_64_paging::*;
 use gluon::x86_64_pci::*;
 use gluon::x86_64_segmentation::*;
 use core::convert::TryFrom;
-use core::{fmt::Write, panic::PanicInfo, ptr::{addr_of, write_volatile, read_volatile}, slice::from_raw_parts_mut};
+use core::{fmt::Write, panic::PanicInfo, ptr::{addr_of, write_volatile, read_volatile}};
 use x86_64::instructions::hlt as halt;
 use x86_64::instructions::interrupts::disable as cli;
 use x86_64::instructions::interrupts::enable as sti;
@@ -40,7 +40,7 @@ use x86_64::registers::control::Cr3;
 use x86_64::structures::idt::InterruptStackFrame;
 
 //Constants
-const HELIUM_VERSION: &str = "vDEV-2021-12-23"; //CURRENT VERSION OF KERNEL
+const HELIUM_VERSION: &str = "vDEV-2022-01-12"; //CURRENT VERSION OF KERNEL
 static WHITESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
 static _BLACKSPACE: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
 static _BLUESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE,  background: COLOR_BGRX_BLACK};
@@ -49,55 +49,72 @@ static REDSPACE:    CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX
 
 // MACROS
 //Interrupt that Panics
-macro_rules! interrupt_panic {
+macro_rules!interrupt_panic_noe {
     ($text:expr) => {{
-        unsafe fn interrupt_handler_panic() {
-            asm!("MOV RSP, [{}+RIP]", sym TASK_STACKS);
-            panic!($text);
-        }
-        interrupt_handler_panic as usize as u64
+        #[naked] unsafe extern "x86-interrupt" fn handler_entry(stack_frame: InterruptStackFrame) {asm!(
+            $text,
+            "POP R11",
+            "POP R12",
+            "POP R13",
+            "POP R14",
+            "POP R15",
+            "MOV RSP, [RIP+{kernel_stack}]",
+            "PUSH R15",
+            "PUSH R14",
+            "PUSH R13",
+            "PUSH R12",
+            "PUSH R11",
+            "LEA RAX, [RIP+{rust}]",
+            "CALL RAX",
+            kernel_stack = sym TASK_STACKS,
+            rust = sym panic_interrupt,
+            options(noreturn),
+        )}
+        handler_entry as unsafe extern "x86-interrupt" fn(InterruptStackFrame) as usize as u64
     }}
 }
 
-macro_rules! interrupt_panic_noe {
-    ($text:expr) => {{
-        unsafe extern "x86-interrupt" fn interrupt_handler_noerr(stack_frame: InterruptStackFrame) {
-            panic!($text, stack_frame);
-        }
-        interrupt_handler_noerr as usize as u64
-    }}
-}
-
-macro_rules! interrupt_panic_err {
+macro_rules!interrupt_panic_err {
     ($text:expr) => {{
         #[naked] unsafe extern "x86-interrupt" fn handler_entry(stack_frame: InterruptStackFrame, error_code: u64) {asm!(
             $text,
-            "MOV RSI, RSP",
-            "ADD RSI, 08h",
-            "MOV RDX, [RSP]",
-            "MOV RSP, [{kernel_stack}]",
-            "CALL {rust}",
+            "POP R10",
+            "POP R11",
+            "POP R12",
+            "POP R13",
+            "POP R14",
+            "POP R15",
+            "MOV RSP, [RIP+{kernel_stack}]",
+            "PUSH R15",
+            "PUSH R14",
+            "PUSH R13",
+            "PUSH R12",
+            "PUSH R11",
+            "PUSH R10",
+            "LEA RAX, [RIP+{rust}]",
+            "CALL RAX",
             kernel_stack = sym TASK_STACKS,
             rust = sym panic_interrupt,
+            options(noreturn),
         )}
         handler_entry as unsafe extern "x86-interrupt" fn(InterruptStackFrame, u64) as usize as u64
     }}
 }
 
-pub unsafe extern "sysv64" fn panic_interrupt(interrupt_vector: u64, stack_frame: &InterruptStackFrame, error_code: u64) {
-    panic!("\nINTERRUPT VECTOR {:02X}\n{:?}\nERROR CODE: {:016X}\n", interrupt_vector, stack_frame, error_code)
+pub unsafe extern "x86-interrupt" fn panic_interrupt(stack_frame: InterruptStackFrame, error_code: u64) {
+    let interrupt_vector: u64;
+    asm!("MOV {}, RDI", out(reg) interrupt_vector);
+    panic!("\nINTERRUPT VECTOR 0x{:02X}\n{:?}\nERROR CODE: {:016X}\n", interrupt_vector, stack_frame, error_code)
 }
 
 
 // MAIN
-//Main Entry Point After Hydrogen Boot
 fn frame_color(a: u8, b: u8, c: u8, d: u8) {
     unsafe{
-        let pt = oct4_to_pointer(FRAME_BUFFER_OCT).unwrap();
         for i in 0..SCREEN_HEIGHT {
             for j in 0..SCREEN_WIDTH {
                 for k in 0..3 {
-                    write_volatile(pt.add(i*SCREEN_WIDTH*4 + j*4 + k), match k {
+                    write_volatile(FRAME_BUFFER_P.add(i*SCREEN_WIDTH*4 + j*4 + k), match k {
                         0 => a,
                         1 => b,
                         2 => c,
@@ -109,6 +126,7 @@ fn frame_color(a: u8, b: u8, c: u8, d: u8) {
     }
 }
 
+//Main Entry Point After Hydrogen Boot
 #[no_mangle]
 pub extern "sysv64" fn _start() -> ! {
     // GRAPHICS SETUP
@@ -125,26 +143,25 @@ pub extern "sysv64" fn _start() -> ! {
         unsafe {GLOBAL_WRITE_POINTER = Some(&mut printer as &mut dyn Write as *mut dyn Write)};
         unsafe {GLOBAL_INPUT_POINTER = Some(&mut inputter as *mut InputWindow<INPUT_LENGTH, INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>)};
         //User Interface initialization
-        //frame.horizontal_line(PRINT_Y-1, 0, FRAME_WIDTH-1, REDSPACE);
-        //frame.horizontal_line(INPUT_Y-1, 0, FRAME_WIDTH-1, REDSPACE);
-        //frame.horizontal_line(INPUT_Y+1, 0, FRAME_WIDTH-1, REDSPACE);
-        //frame.vertical_line(0, PRINT_Y-1, INPUT_Y+1, REDSPACE);
-        //frame.vertical_line(FRAME_WIDTH-1, PRINT_Y-1, INPUT_Y+1, REDSPACE);
-        //frame.horizontal_string("NOBLE OS", 0, 0, REDSPACE);
-        //frame.horizontal_string("HELIUM KERNEL", 0, FRAME_WIDTH - 14 - HELIUM_VERSION.len(), REDSPACE);
-        //frame.horizontal_string(HELIUM_VERSION, 0, FRAME_WIDTH - HELIUM_VERSION.len(), REDSPACE);
-        //frame.render();
+        frame.horizontal_line(PRINT_Y-1, 0, FRAME_WIDTH-1, REDSPACE);
+        frame.horizontal_line(INPUT_Y-1, 0, FRAME_WIDTH-1, REDSPACE);
+        frame.horizontal_line(INPUT_Y+1, 0, FRAME_WIDTH-1, REDSPACE);
+        frame.vertical_line(0, PRINT_Y-1, INPUT_Y+1, REDSPACE);
+        frame.vertical_line(FRAME_WIDTH-1, PRINT_Y-1, INPUT_Y+1, REDSPACE);
+        frame.horizontal_string("NOBLE OS", 0, 0, REDSPACE);
+        frame.horizontal_string("HELIUM KERNEL", 0, FRAME_WIDTH - 14 - HELIUM_VERSION.len(), REDSPACE);
+        frame.horizontal_string(HELIUM_VERSION, 0, FRAME_WIDTH - HELIUM_VERSION.len(), REDSPACE);
+        frame.render();
         writeln!(printer, "Welcome to Noble OS");
         writeln!(printer, "Helium Kernel           {}", HELIUM_VERSION);
         writeln!(printer, "Photon Graphics Library {}", PHOTON_VERSION);
         writeln!(printer, "Gluon Memory Library    {}", GLUON_VERSION);
-        frame_color(0, 0, 0, 0);
     }
 
     // PAGE MAP PARSING
     writeln!(printer, "\n=== PAGE MAP ===\n");
     let none_alloc = NoneAllocator{identity_offset: oct4_to_usize(IDENTITY_OCT).unwrap()};
-    let u_alloc: UsableMemoryPageAllocator;
+    let u_alloc: StackPageAllocator;
     let pml4: PageMap;
     {
         //Go to PML4
@@ -163,46 +180,19 @@ pub extern "sysv64" fn _start() -> ! {
         identity_not_present.present = false;
         pml4.write_entry(PHYSICAL_OCT, identity_not_present).unwrap();
         //Determine amount of free memory
-        let mut free_page_count: usize = 0;
-        {
-            let pml3_free = PageMap::new(pml4.read_entry(FREE_MEMORY_OCT).unwrap().physical, PageMapLevel::L3, &none_alloc).unwrap();
-            //Iterate over entries in the PML3
-            for i in 0..PAGE_NUMBER_1 {
-                let pml3_free_entry = pml3_free.read_entry(i).unwrap();
-                if pml3_free_entry.present {
-                    let pml2 = PageMap::new(pml3_free_entry.physical, PageMapLevel::L2, &none_alloc).unwrap();
-                    //Iterate over entries in the PML2
-                    for j in 0..PAGE_NUMBER_1 {
-                        let pml2_entry = pml2.read_entry(j).unwrap();
-                        if pml2_entry.present {
-                            let pml1 = PageMap::new(pml2_entry.physical, PageMapLevel::L1, &none_alloc).unwrap();
-                            //Iterate over entries in the PML1
-                            for k in 0..PAGE_NUMBER_1 {
-                                let pml1e = pml1.read_entry(k).unwrap();
-                                if pml1e.present {
-                                    //Write bools for memory table
-                                    unsafe {write_volatile((oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut UsableMemoryEntry).add(free_page_count), UsableMemoryEntry {address: pml1e.physical, present: true})}
-                                    free_page_count += 1;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let free_page_count: usize = unsafe {read_volatile(oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *const u64)} as usize;
         writeln!(printer, "Free memory found: {}Pg or {}MiB {}KiB", free_page_count, (free_page_count*PAGE_SIZE_4KIB)/MIB, ((free_page_count*PAGE_SIZE_4KIB) % MIB)/KIB);
-        //"Allocate" memory space for table
-        let usable_table = unsafe {from_raw_parts_mut(oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut UsableMemoryEntry, free_page_count)};
-        for entry in usable_table.iter_mut().take((free_page_count+PAGE_SIZE_4KIB-1)/PAGE_SIZE_4KIB) {
-            *entry = UsableMemoryEntry{address: entry.address, present: false}
-        }
-        //Create free memory area allocator
-        u_alloc = UsableMemoryPageAllocator{table: oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut UsableMemoryEntry, len: usable_table.len(), identity_offset: oct4_to_usize(IDENTITY_OCT).unwrap()};
-        {
-            let free_memory_test = u_alloc.allocate_page().unwrap();
-            writeln!(printer, "Free Memory Area Allocation Test: {:?}", free_memory_test);
-            writeln!(printer, "Free Memory Deallocation Test:    {:?}", u_alloc.deallocate_page(free_memory_test));
-        }
+        u_alloc = StackPageAllocator {
+            position: oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut usize,
+            base_offset: unsafe {(oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut u64).add(1)},
+            identity_offset: oct4_to_usize(IDENTITY_OCT).unwrap(),
+        };
+        //Test
+        let test1 = u_alloc.allocate_page().unwrap();
+        writeln!(printer, "{:016X}", test1.0);
+        u_alloc.deallocate_page(test1);
+        let test2 = u_alloc.allocate_page().unwrap();
+        writeln!(printer, "{:016X}", test2.0);
     }
 
     // PCI TESTING
@@ -290,18 +280,18 @@ pub extern "sysv64" fn _start() -> ! {
             descriptor_type: DescriptorType::InterruptGate,
         };
         //Write entries for CPU exceptions
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x00 (#DE): Divide Error                      \n{:?}\n");                       idt.write_entry(&idte, 0x00);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x01 (#DB): Debug Exception                   \n{:?}\n");                       idt.write_entry(&idte, 0x01);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x03 (#BP): Breakpoint                        \n{:?}\n");                       idt.write_entry(&idte, 0x03);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x04 (#OF): Overflow                          \n{:?}\n");                       idt.write_entry(&idte, 0x04);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x05 (#BR): Bound Range Exceeded              \n{:?}\n");                       idt.write_entry(&idte, 0x05);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x06 (#UD): Invalid Opcode                    \n{:?}\n");                       idt.write_entry(&idte, 0x06);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x07 (#NM): No Floating Point Unit            \n{:?}\n");                       idt.write_entry(&idte, 0x07);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x08 (#DF): Double Fault                      \n{:?}\n");                       idt.write_entry(&idte, 0x08);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x10 (#MF): Floating Point Math Fault         \n{:?}\n");                       idt.write_entry(&idte, 0x10);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x12 (#MC): Machine Check                     \n{:?}\n");                       idt.write_entry(&idte, 0x12);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x13 (#XM): SIMD Floating Point Math Exception\n{:?}\n");                       idt.write_entry(&idte, 0x13);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x14 (#VE): Virtualization Exception          \n{:?}\n");                       idt.write_entry(&idte, 0x14);
+        idte.offset = interrupt_panic_noe!("MOV RDI, 00h"); idt.write_entry(&idte, 0x00);
+        idte.offset = interrupt_panic_noe!("MOV RDI, 01h"); idt.write_entry(&idte, 0x01);
+        idte.offset = interrupt_panic_noe!("MOV RDI, 03h"); idt.write_entry(&idte, 0x03);
+        idte.offset = interrupt_panic_noe!("MOV RDI, 04h"); idt.write_entry(&idte, 0x04);
+        idte.offset = interrupt_panic_noe!("MOV RDI, 05h"); idt.write_entry(&idte, 0x05);
+        idte.offset = interrupt_panic_noe!("MOV RDI, 06h"); idt.write_entry(&idte, 0x06);
+        idte.offset = interrupt_panic_noe!("MOV RDI, 07h"); idt.write_entry(&idte, 0x07);
+        idte.offset = interrupt_panic_noe!("MOV RDI, 08h"); idt.write_entry(&idte, 0x08);
+        idte.offset = interrupt_panic_noe!("MOV RDI, 10h"); idt.write_entry(&idte, 0x10);
+        idte.offset = interrupt_panic_noe!("MOV RDI, 12h"); idt.write_entry(&idte, 0x12);
+        idte.offset = interrupt_panic_noe!("MOV RDI, 13h"); idt.write_entry(&idte, 0x13);
+        idte.offset = interrupt_panic_noe!("MOV RDI, 14h"); idt.write_entry(&idte, 0x14);
         idte.offset = interrupt_panic_err!("MOV RDI, 0Ah"); idt.write_entry(&idte, 0x0A);
         idte.offset = interrupt_panic_err!("MOV RDI, 0Bh"); idt.write_entry(&idte, 0x0B);
         idte.offset = interrupt_panic_err!("MOV RDI, 0Ch"); idt.write_entry(&idte, 0x0C);
@@ -459,6 +449,7 @@ pub extern "sysv64" fn _start() -> ! {
 
     // FINISH LOADING
     writeln!(printer, "\n=== STARTUP COMPLETE ===\n");
+    
     unsafe {
         //Enable interrupts
         sti();
@@ -466,10 +457,14 @@ pub extern "sysv64" fn _start() -> ! {
         x86_64_timers::lapic_initial_count(100_000);
         //Update kernel stack pointer
         asm!(
-            "MOV [{rsp0}], RSP",
+            "MOV {rsp0}, RSP",
+            "MOV [RIP+{kernel_stack}], RSP",
             rsp0 = in(reg) addr_of!(TASK_STATE_SEGMENT.rsp0),
+            kernel_stack = sym TASK_STACKS,
         );
+        //read_volatile(0xFF00000000000000 as *mut u8);
         //Halt kernel initialization
+        //asm!("INT 80h");
         loop{halt();}
     }
 }
@@ -528,22 +523,22 @@ static mut TIMER_PIPE: RingBuffer<u8, 4096> = RingBuffer{data: [0xFF; 4096], rea
 fn read_loop() {unsafe {
     let printer = &mut *GLOBAL_WRITE_POINTER.unwrap();
     loop {
-        //write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::ReadBlock);
-        //write!(printer, "{}", core::str::from_utf8(TIMER_PIPE.read(&mut [0xFF; 4096])).unwrap());
-        //writeln!(printer, "{:?}", TIMER_PIPE.read(&mut [0xFF; 4096])).unwrap();
-        frame_color(255, 0, 0, 0);
-        //write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::ReadWait);
+        write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::ReadBlock);
+        write!(printer, "{}", core::str::from_utf8(TIMER_PIPE.read(&mut [0xFF; 4096])).unwrap());
+        writeln!(printer, "{:?}", TIMER_PIPE.read(&mut [0xFF; 4096])).unwrap();
+        //frame_color(255, 0, 0, 0);
+        write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::ReadWait);
         asm!("INT 80h");
     }
 }}
 fn byte_loop() {unsafe {
     loop {
-        //write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::WriteBlock);
-        //TIMER_VAL = TIMER_VAL.wrapping_add(1);
-        //TIMER_PIPE.write("HELLO FROM USERSPACE! ".as_bytes());
-        //TIMER_PIPE.write(&[ps2::read_status()]);
-        frame_color(128, 0, 0, 0);
-        //write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::WriteWait);
+        write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::WriteBlock);
+        TIMER_VAL = TIMER_VAL.wrapping_add(1);
+        TIMER_PIPE.write("HELLO FROM USERSPACE! ".as_bytes());
+        TIMER_PIPE.write(&[x86_64_ps2::read_status()]);
+        //frame_color(128, 0, 0, 0);
+        write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::WriteWait);
         asm!("INT 80h");
     }
 }}
@@ -577,8 +572,8 @@ fn ps2_keyboard() {unsafe {
                             }},
                             x86_64_ps2::KeyStr::Str(s) => {match press_type {x86_64_ps2::PressType::Press => {
                                 for codepoint in s.chars() {
-                                    //inputter.push_render(CharacterTwoTone{codepoint, foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK}, WHITESPACE);
-                                    frame_color(0, 255, 0, 0);
+                                    inputter.push_render(CharacterTwoTone{codepoint, foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK}, WHITESPACE);
+                                    //frame_color(0, 255, 0, 0);
                                 }
                             } x86_64_ps2::PressType::Unpress => {}}}
                         }
@@ -587,7 +582,7 @@ fn ps2_keyboard() {unsafe {
             }
         }
         write_volatile(&mut INPUT_PIPE.state as *mut RingBufferState, RingBufferState::Free);
-        read_volatile(0xFF00000000000000 as *mut u8);
+        //read_volatile(0xFF00000000000000 as *mut u8);
         asm!("INT 80h");
     }
 }}
@@ -741,10 +736,11 @@ extern "x86-interrupt" fn _interrupt_dummy() {unsafe {
 extern "sysv64" fn panic_handler(panic_info: &PanicInfo) -> ! {
     unsafe {
         cli();                                                        //Turn off interrupts
-        frame_color(0, 0, 255, 0);
-        let mut pixel_renderer = PixelRendererHWD {pointer: oct4_to_pointer(FRAME_BUFFER_OCT).unwrap() as *mut ColorBGRX, height: SCREEN_HEIGHT, width: SCREEN_WIDTH};
-        let mut character_renderer = CharacterTwoToneRenderer16x16::<ColorBGRX> {renderer: &pixel_renderer, height: FRAME_HEIGHT, width: FRAME_WIDTH, y: 0, x: 0};
-        let mut printer = PrintWindow::<FRAME_HEIGHT, FRAME_HEIGHT, FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, WHITESPACE, WHITESPACE, 0, 0);
+        //frame_color(0, 0, 255, 0);
+        //let mut pixel_renderer = PixelRendererHWD {pointer: oct4_to_pointer(FRAME_BUFFER_OCT).unwrap() as *mut ColorBGRX, height: SCREEN_HEIGHT, width: SCREEN_WIDTH};
+        //let mut character_renderer = CharacterTwoToneRenderer16x16::<ColorBGRX> {renderer: &pixel_renderer, height: FRAME_HEIGHT, width: FRAME_WIDTH, y: 0, x: 0};
+        //let mut printer = PrintWindow::<FRAME_HEIGHT, FRAME_HEIGHT, FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, WHITESPACE, WHITESPACE, 0, 0);
+        let printer: &mut dyn Write = &mut *GLOBAL_WRITE_POINTER.unwrap();
         write!(printer, "\nKernel Halt: ");                           //Begin writing
         if let Some(panic_message) = panic_info.message() {           //Check if there's an associated message
             writeln!(printer, "{}", panic_message);                   //Print the panic message
@@ -782,48 +778,35 @@ impl PageAllocator for NoneAllocator {
     }
 }
 
-struct UsableMemoryPageAllocator {
-    pub table: *mut UsableMemoryEntry,
-    pub len: usize,
-    pub identity_offset: usize,
+struct StackPageAllocator {
+    pub position:    *mut usize,
+    pub base_offset: *mut u64,
+    pub identity_offset:  usize,
 }
-impl PageAllocator for UsableMemoryPageAllocator {
-    fn allocate_page     (&self)                            -> Result<PhysicalAddress, &'static str> {
-        for i in 0..self.len {
-            let entry = unsafe {&mut *(self.table.add(i))};
-            if entry.present {
-                entry.present = false;
-                let linear = self.physical_to_linear(entry.address)?.0 as *mut u8;
-                for i in 0..PAGE_SIZE_4KIB {
-                    unsafe {write_volatile(linear.add(i), 0x00);}
-                }
-                return Ok(entry.address)
-            }
+impl PageAllocator for StackPageAllocator {
+    fn allocate_page     (&self)                            -> Result<PhysicalAddress, &'static str> { unsafe {
+        match read_volatile(self.position) {
+            0 => Err("Stack Page Allocator: Out of memory."),
+            position => Ok(PhysicalAddress({
+                write_volatile(self.position, position-1);
+                let address = read_volatile(self.base_offset.add(position-1)) as usize;
+                let clear_pointer = (address + self.identity_offset) as *mut u8;
+                for i in 0..PAGE_SIZE_4KIB {write_volatile(clear_pointer.add(i), 0);}
+                address
+            }))
         }
-        Err("Usable Memory Page Allocator: Out of memory.")
-    }
+    }}
 
-    fn deallocate_page   (&self, physical: PhysicalAddress) -> Result<(),              &'static str> {
-        for i in 0..self.len {
-            let entry = unsafe {&mut *(self.table.add(i))};
-            if entry.address.0 == physical.0 {
-                if !entry.present {
-                    entry.present = true;
-                    return Ok(())
-                }
-                else {
-                    return Err("Usable Memory Page Allocator: Address to deallocate not allocated.")
-                }
-            }
-        }
-        Err("Usable Memory Page Allocator: Address to deallocate not found.")
-    }
+    fn deallocate_page   (&self, physical: PhysicalAddress) -> Result<(),              &'static str> {unsafe {
+        write_volatile(self.base_offset.add(*self.position), physical.0 as u64);
+        *self.position += 1;
+        Ok(())
+    }}
 
     fn physical_to_linear(&self, physical: PhysicalAddress) -> Result<LinearAddress,   &'static str> {
         Ok(LinearAddress(physical.add(self.identity_offset).0))
     }
 }
-
 
 // PIPING
 #[repr(C)]
