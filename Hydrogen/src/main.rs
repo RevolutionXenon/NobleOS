@@ -50,7 +50,7 @@ use x86_64::registers::control::*;
 use x86_64::structures::idt::InterruptStackFrame;
 
 //Constants
-const HYDROGEN_VERSION: &str = "vDEV-2022-01-12"; //CURRENT VERSION OF BOOTLOADER
+const HYDROGEN_VERSION: &str = "vDEV-2022-01-14"; //CURRENT VERSION OF BOOTLOADER
 
 
 // MACROS
@@ -242,7 +242,7 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
         pml4.write_entry(FRAME_BUFFER_OCT, PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_frame_buffer       .physical, true, true, true ).unwrap()).unwrap();
         pml4.write_entry(FREE_MEMORY_OCT,  PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_free_memory        .physical, true, true, true ).unwrap()).unwrap();
         pml4.write_entry(IDENTITY_OCT,     PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_offset_identity_map.physical, true, true, true ).unwrap()).unwrap();
-        pml4.write_entry(PAGE_MAP_OCT,     PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml4                    .physical, true, true, true ).unwrap()).unwrap();
+        //pml4.write_entry(PAGE_MAP_OCT,     PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml4                    .physical, true, true, true ).unwrap()).unwrap();
         // FINISH
     }
 

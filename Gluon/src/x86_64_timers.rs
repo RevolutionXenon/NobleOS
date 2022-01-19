@@ -11,16 +11,16 @@ use x86_64::registers::model_specific::Msr;
 
 // PROGRAMMABLE INTERRUPT CONTROLLER
 //Remap PIC to Different Interrupt Vectors
-pub unsafe fn pic_remap(offset_1: u8, offset_2: u8) -> Result<(), &'static str> {
-    if offset_1 % 8 != 0 || offset_2 % 8 != 0 {return Err("PIC: Remap offsets unaligned.")}
+pub unsafe fn pic_remap(pic_1_offset: u8, pic_2_offset: u8) -> Result<(), &'static str> {
+    if pic_1_offset % 8 != 0 || pic_2_offset % 8 != 0 {return Err("PIC: Remap offsets unaligned.")}
     //Save Masks
     let mask_1 = PORT_PIC1_DATA.read();
     let mask_2 = PORT_PIC2_DATA.read();
     //Start Initialization Sequence
     PORT_PIC1_COMMAND.write(0x11);  io_wait(); //ICW1: Start in cascade mode
-    PORT_PIC2_COMMAND.write(0x11);  io_wait(); //ICW2: Start in cascade mode
-    PORT_PIC1_DATA.write(offset_1); io_wait(); //ICW2: Write PIC1 offset
-    PORT_PIC2_DATA.write(offset_2); io_wait(); //ICW2: Write PIC2 offset
+    PORT_PIC2_COMMAND.write(0x11);  io_wait(); //ICW1: Start in cascade mode
+    PORT_PIC1_DATA.write(pic_1_offset); io_wait(); //ICW2: Write PIC1 offset
+    PORT_PIC2_DATA.write(pic_2_offset); io_wait(); //ICW2: Write PIC2 offset
     PORT_PIC1_DATA.write(0x04);     io_wait(); //ICW3: Write PIC1 PIC2 position (IRQ-2)
     PORT_PIC2_DATA.write(0x02);     io_wait(); //ICW3: Write PIC2 cascade identity
     PORT_PIC1_DATA.write(0x01);     io_wait(); //ICW4: Write PIC1 mode (8086 mode)
@@ -31,6 +31,12 @@ pub unsafe fn pic_remap(offset_1: u8, offset_2: u8) -> Result<(), &'static str> 
     //Return
     Ok(())
 }
+
+//Set IRQ Mask
+pub unsafe fn pic_set_mask(pic_1_mask: u8, pic_2_mask: u8) {
+    PORT_PIC1_DATA.write(pic_1_mask);
+    PORT_PIC2_DATA.write(pic_2_mask);
+} 
 
 //Enable or Disable an IRQ
 pub unsafe fn pic_disable_irq(irq: u8) -> Result<(), &'static str> {

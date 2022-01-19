@@ -213,6 +213,7 @@ impl From<SegmentSelector> for u16 {
 // TASK STATE SEGMENT
 #[repr(C)]
 #[repr(packed)]
+#[derive(Clone, Copy, Debug)]
 pub struct TaskStateSegment {
     pub _0:    u32,
     pub rsp0:  u64,
