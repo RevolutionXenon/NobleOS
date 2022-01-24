@@ -1,6 +1,5 @@
 /.batch
 /.idea
+/.output
 /.vscode
 /target
-/qemu-log.txt
-/qemu-monitor.txt

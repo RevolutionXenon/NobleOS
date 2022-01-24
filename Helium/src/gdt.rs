@@ -70,6 +70,8 @@ pub const SUPERVISOR_DATA: SegmentSelector = SegmentSelector {
     requested_privilege_level: PrivilegeLevel::Supervisor,
 };
 
+pub const SUPERVISOR_DATA_U16: u16 = (SUPERVISOR_DATA_POSITION<<3) | 0x0;
+
 
 // RING 1 CODE ENTRY
 pub const _RING1_CODE_POSITION: u16 = 0x05;

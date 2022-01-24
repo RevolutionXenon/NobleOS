@@ -53,6 +53,8 @@ macro_rules!interrupt_panic_noe {
     ($text:expr, $b:expr, $g:expr, $r:expr) => {{
         unsafe extern "x86-interrupt" fn handler(stack_frame: InterruptStackFrame) {
             frame_color($b, $g, $r, 0);
+            asm!("MOV SS, {:x}", in(reg) u16::from(gdt::SUPERVISOR_DATA));
+            asm!("MOV DS, {:x}", in(reg) u16::from(gdt::SUPERVISOR_DATA));
             //let printer: &mut dyn Write = &mut *GLOBAL_WRITE_POINTER.unwrap();
             //writeln!(printer, "\n{}\n{:?}\n", $text, stack_frame);
             //loop{halt()}
@@ -66,6 +68,8 @@ macro_rules!interrupt_panic_err {
     ($text:expr, $b:expr, $g:expr, $r:expr) => {{
         unsafe extern "x86-interrupt" fn handler(stack_frame: InterruptStackFrame, error_code: u64) {
             frame_color($b, $g, $r, 0);
+            asm!("MOV SS, {:x}", in(reg) u16::from(gdt::SUPERVISOR_DATA));
+            asm!("MOV DS, {:x}", in(reg) u16::from(gdt::SUPERVISOR_DATA));
             //let printer: &mut dyn Write = &mut *GLOBAL_WRITE_POINTER.unwrap();
             //writeln!(printer, "\n{}\n{:?}\nERROR CODE: {:016X}\n", $text, stack_frame, error_code);
             //loop{halt()}
@@ -91,7 +95,7 @@ fn frame_color(a: u8, b: u8, c: u8, d: u8) {
                 }
             }
         }
-        for _ in 0..1_000_000_000 {
+        for _ in 0..100_000_000 {
             asm!("NOP");
         }
     }
@@ -227,7 +231,7 @@ pub extern "sysv64" fn _start() -> ! {
         gdt.write_entry(gdt::USER_CODE_ENTRY, gdt::USER_CODE_POSITION).unwrap();
         gdt.write_entry(gdt::USER_DATA_ENTRY, gdt::USER_DATA_POSITION).unwrap();
         //Load GDTR
-        gdt.write_gdtr(gdt::SUPERVISOR_CODE, gdt::USER_DATA, gdt::SUPERVISOR_DATA);
+        gdt.write_gdtr(gdt::SUPERVISOR_CODE, gdt::SUPERVISOR_DATA, gdt::SUPERVISOR_DATA);
         //Load Task Register
         asm!(
             "LTR {tsss:x}",
@@ -398,8 +402,8 @@ pub extern "sysv64" fn _start() -> ! {
         writeln!(printer, "APIC Base: 0x{:16X}", x86_64_timers::lapic_get_base());
         //Shift Base
         x86_64_timers::LAPIC_ADDRESS = (x86_64_timers::lapic_get_base() as usize + oct4_to_usize(IDENTITY_OCT).unwrap()) as *mut u8;
-        //Interrupt struct
-        let mut idte = InterruptDescriptorTableEntry {
+        //Spurious interrupt
+        let idte_dummy = InterruptDescriptorTableEntry {
             offset: _interrupt_dummy as extern "x86-interrupt" fn() as usize as u64,
             segment_selector: gdt::SUPERVISOR_CODE,
             segment_present: true,
@@ -407,18 +411,31 @@ pub extern "sysv64" fn _start() -> ! {
             interrupt_stack_table: 0,
             descriptor_type: DescriptorType::InterruptGate,
         };
-        //Spurious interrupt
         x86_64_timers::lapic_spurious(0xFF);
-        //idt.write_entry(&idte, 0xFF);
+        idt.write_entry(&idte_dummy, 0xFF);
         //Diagnostic
         writeln!(printer, "APIC ID:   0x{:1X}", x86_64_timers::lapic_read_register(0x20).unwrap() >> 24);
         writeln!(printer, "APIC 0xF0: 0x{:08X}", x86_64_timers::lapic_read_register(0xF0).unwrap());
         //Timer interrupt
-        idte.offset = interrupt_timer as unsafe extern "x86-interrupt" fn() as usize as u64;
-        idt.write_entry(&idte, 0x30);
+        let idte_timer = InterruptDescriptorTableEntry {
+            offset: interrupt_timer as unsafe extern "x86-interrupt" fn() as usize as u64,
+            segment_selector: gdt::SUPERVISOR_CODE,
+            segment_present: true,
+            privilege_level: PrivilegeLevel::Supervisor,
+            interrupt_stack_table: 0,
+            descriptor_type: DescriptorType::InterruptGate,
+        };
+        idt.write_entry(&idte_timer, 0x30);
         //User accessible yield interrupt
-        idte.privilege_level = PrivilegeLevel::User;
-        idt.write_entry(&idte, 0x80);
+        let idte_yield = InterruptDescriptorTableEntry {
+            offset: interrupt_yield as unsafe extern "x86-interrupt" fn() as usize as u64,
+            segment_selector: gdt::SUPERVISOR_CODE,
+            segment_present: true,
+            privilege_level: PrivilegeLevel::User,
+            interrupt_stack_table: 0,
+            descriptor_type: DescriptorType::InterruptGate,
+        };
+        idt.write_entry(&idte_yield, 0x80);
         //Set Timer Mode
         x86_64_timers::lapic_timer(0x30, false, x86_64_timers::TimerMode::Periodic);
         x86_64_timers::lapic_divide_config(x86_64_timers::LapicDivide::Divide_128);
@@ -437,7 +454,7 @@ pub extern "sysv64" fn _start() -> ! {
     unsafe {
         //asm!("MOV [{}], RSP", in(reg) addr_of!(TASK_STATE_SEGMENT.ist1));
         //writeln!(printer, "1");
-        x86_64_timers::lapic_initial_count(10_000_000);
+        x86_64_timers::lapic_initial_count(1_000_000);
         //writeln!(printer, "2");
         sti();
         //writeln!(printer, "3");
@@ -602,6 +619,68 @@ unsafe extern "x86-interrupt" fn irq_01_rust() {
 //LAPIC Timer
 #[naked] unsafe extern "x86-interrupt" fn interrupt_timer() {
     asm!(
+        //"UD2",
+        //Save Program State
+        "PUSH RAX", "PUSH RBP", "PUSH R15", "PUSH R14",
+        "PUSH R13", "PUSH R12", "PUSH R11", "PUSH R10",
+        "PUSH R9",  "PUSH R8",  "PUSH RDI", "PUSH RSI",
+        "PUSH RDX", "PUSH RCX", "PUSH RBX", "PUSH 0",
+        //Set Segment Registers
+        "MOV RAX, {supervisor_data}",
+        "MOV SS, AX",
+        "MOV DS, AX",
+        //Save Extended State
+        "SUB RSP, 100h",
+        "MOVAPS XMMWORD PTR [RSP + 0xf0], XMM15", "MOVAPS XMMWORD PTR [RSP + 0xe0], XMM14",
+        "MOVAPS XMMWORD PTR [RSP + 0xd0], XMM13", "MOVAPS XMMWORD PTR [RSP + 0xc0], XMM12",
+        "MOVAPS XMMWORD PTR [RSP + 0xb0], XMM11", "MOVAPS XMMWORD PTR [RSP + 0xa0], XMM10",
+        "MOVAPS XMMWORD PTR [RSP + 0x90], XMM9",  "MOVAPS XMMWORD PTR [RSP + 0x80], XMM8",
+        "MOVAPS XMMWORD PTR [RSP + 0x70], XMM7",  "MOVAPS XMMWORD PTR [RSP + 0x60], XMM6",
+        "MOVAPS XMMWORD PTR [RSP + 0x50], XMM5",  "MOVAPS XMMWORD PTR [RSP + 0x40], XMM4",
+        "MOVAPS XMMWORD PTR [RSP + 0x30], XMM3",  "MOVAPS XMMWORD PTR [RSP + 0x20], XMM2",
+        "MOVAPS XMMWORD PTR [RSP + 0x10], XMM1",  "MOVAPS XMMWORD PTR [RSP + 0x00], XMM0",
+        "UD2",
+        //Save stack pointer
+        "MOV RAX, [{stack_index}+RIP]",
+        "SHL RAX, 3",
+        "LEA RCX, [{stack_array}+RIP]",
+        "MOV [RCX+RAX], RSP",
+        //End interrupt
+        "CALL {lapic_eoi}",
+        //Call scheduler
+        "CALL {scheduler}",
+        //Swap to thread stack
+        "MOV RSP, RAX",
+        //Load program state
+        "MOVAPS XMM0,  XMMWORD PTR [RSP + 0x00]", "MOVAPS XMM1,  XMMWORD PTR [RSP + 0x10]",
+        "MOVAPS XMM2,  XMMWORD PTR [RSP + 0x20]", "MOVAPS XMM3,  XMMWORD PTR [RSP + 0x30]",
+        "MOVAPS XMM4,  XMMWORD PTR [RSP + 0x40]", "MOVAPS XMM5,  XMMWORD PTR [RSP + 0x50]",
+        "MOVAPS XMM6,  XMMWORD PTR [RSP + 0x60]", "MOVAPS XMM7,  XMMWORD PTR [RSP + 0x70]",
+        "MOVAPS XMM8,  XMMWORD PTR [RSP + 0x80]", "MOVAPS XMM9,  XMMWORD PTR [RSP + 0x90]",
+        "MOVAPS XMM10, XMMWORD PTR [RSP + 0xA0]", "MOVAPS XMM11, XMMWORD PTR [RSP + 0xB0]",
+        "MOVAPS XMM12, XMMWORD PTR [RSP + 0xC0]", "MOVAPS XMM13, XMMWORD PTR [RSP + 0xD0]",
+        "MOVAPS XMM14, XMMWORD PTR [RSP + 0xE0]", "MOVAPS XMM15, XMMWORD PTR [RSP + 0xF0]",
+        "ADD RSP, 100h",
+        "POP RBX", "POP RBX", "POP RCX", "POP RDX",
+        "POP RSI", "POP RDI", "POP R8",  "POP R9",
+        "POP R10", "POP R11", "POP R12", "POP R13",
+        "POP R14", "POP R15", "POP RBP", "POP RAX",
+        //Enter code
+        "IRETQ",
+        //Symbols
+        supervisor_data = const gdt::SUPERVISOR_DATA_U16,
+        stack_array  = sym TASK_STACKS,
+        stack_index  = sym TASK_INDEX,
+        scheduler    = sym scheduler,
+        lapic_eoi    = sym x86_64_timers::lapic_end_int,
+        options(noreturn),
+    )
+}
+
+//Yield
+#[naked] unsafe extern "x86-interrupt" fn interrupt_yield() {
+    asm!(
+        //"UD2",
         //Save Program State
         "PUSH RAX", "PUSH RBP", "PUSH R15", "PUSH R14",
         "PUSH R13", "PUSH R12", "PUSH R11", "PUSH R10",
@@ -621,14 +700,10 @@ unsafe extern "x86-interrupt" fn irq_01_rust() {
         "SHL RAX, 3",
         "LEA RCX, [{stack_array}+RIP]",
         "MOV [RCX+RAX], RSP",
-        //End interrupt
-        "CALL {lapic_eoi}",
         //Call scheduler
         "CALL {scheduler}",
         //Swap to thread stack
         "MOV RSP, RAX",
-        //Swap to kernel stack
-        //"MOV RSP, [{kernel_stack}+RIP]",
         //Load program state
         "MOVAPS XMM0,  XMMWORD PTR [RSP + 0x00]", "MOVAPS XMM1,  XMMWORD PTR [RSP + 0x10]",
         "MOVAPS XMM2,  XMMWORD PTR [RSP + 0x20]", "MOVAPS XMM3,  XMMWORD PTR [RSP + 0x30]",
@@ -648,9 +723,7 @@ unsafe extern "x86-interrupt" fn irq_01_rust() {
         //Symbols
         stack_array  = sym TASK_STACKS,
         stack_index  = sym TASK_INDEX,
-        //kernel_stack = sym TASK_STACKS,
         scheduler    = sym scheduler,
-        lapic_eoi    = sym x86_64_timers::lapic_end_int,
         options(noreturn),
     )
 }
