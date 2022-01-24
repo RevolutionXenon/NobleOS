@@ -95,7 +95,7 @@ fn frame_color(a: u8, b: u8, c: u8, d: u8) {
                 }
             }
         }
-        for _ in 0..100_000_000 {
+        for _ in 0..400_000_000 {
             asm!("NOP");
         }
     }
@@ -456,7 +456,16 @@ pub extern "sysv64" fn _start() -> ! {
         //writeln!(printer, "1");
         x86_64_timers::lapic_initial_count(1_000_000);
         //writeln!(printer, "2");
-        sti();
+        asm!(
+            "MOV RAX, RSP",
+            "MOV RBX, 0xFFFFFFFFFFFFFFF0",
+            "AND RAX, RBX",
+            "MOV RSP, RAX",
+            "STI",
+            "HLT",
+            options(nostack)
+        );
+        //sti();
         //writeln!(printer, "3");
         //asm!("INT 80h");
         //writeln!(printer, "4");
@@ -482,10 +491,10 @@ unsafe fn create_task(thread_index: usize, allocator: &dyn PageAllocator, instru
     write_volatile(rsp.sub(3), eflags_image as u64);
     write_volatile(rsp.sub(4), u16::from(code_selector) as u64);
     write_volatile(rsp.sub(5), instruction_pointer);
-    for i in 6..54 {
+    for i in 6..53 {
         write_volatile((stack_pointer as *mut u64).sub(i), 0);
     }
-    TASK_STACKS[thread_index] = rsp as u64 - 424;
+    TASK_STACKS[thread_index] = rsp.sub(52) as u64;
 }
 
 unsafe fn create_kernel_stack(thread_index: usize, allocator: &dyn PageAllocator) -> *mut u64 {
@@ -581,7 +590,7 @@ fn ps2_keyboard() {unsafe {
             }
         }
         write_volatile(&mut INPUT_PIPE.state as *mut RingBufferState, RingBufferState::Free);
-        read_volatile(0xFF00000000000000 as *mut u8);
+        //read_volatile(0xFF00000000000000 as *mut u8);
         asm!("INT 80h");
     }
 }}
@@ -619,12 +628,11 @@ unsafe extern "x86-interrupt" fn irq_01_rust() {
 //LAPIC Timer
 #[naked] unsafe extern "x86-interrupt" fn interrupt_timer() {
     asm!(
-        //"UD2",
         //Save Program State
         "PUSH RAX", "PUSH RBP", "PUSH R15", "PUSH R14",
         "PUSH R13", "PUSH R12", "PUSH R11", "PUSH R10",
         "PUSH R9",  "PUSH R8",  "PUSH RDI", "PUSH RSI",
-        "PUSH RDX", "PUSH RCX", "PUSH RBX", "PUSH 0",
+        "PUSH RDX", "PUSH RCX", "PUSH RBX",
         //Set Segment Registers
         "MOV RAX, {supervisor_data}",
         "MOV SS, AX",
@@ -639,7 +647,6 @@ unsafe extern "x86-interrupt" fn irq_01_rust() {
         "MOVAPS XMMWORD PTR [RSP + 0x50], XMM5",  "MOVAPS XMMWORD PTR [RSP + 0x40], XMM4",
         "MOVAPS XMMWORD PTR [RSP + 0x30], XMM3",  "MOVAPS XMMWORD PTR [RSP + 0x20], XMM2",
         "MOVAPS XMMWORD PTR [RSP + 0x10], XMM1",  "MOVAPS XMMWORD PTR [RSP + 0x00], XMM0",
-        "UD2",
         //Save stack pointer
         "MOV RAX, [{stack_index}+RIP]",
         "SHL RAX, 3",
@@ -661,7 +668,7 @@ unsafe extern "x86-interrupt" fn irq_01_rust() {
         "MOVAPS XMM12, XMMWORD PTR [RSP + 0xC0]", "MOVAPS XMM13, XMMWORD PTR [RSP + 0xD0]",
         "MOVAPS XMM14, XMMWORD PTR [RSP + 0xE0]", "MOVAPS XMM15, XMMWORD PTR [RSP + 0xF0]",
         "ADD RSP, 100h",
-        "POP RBX", "POP RBX", "POP RCX", "POP RDX",
+                   "POP RBX", "POP RCX", "POP RDX",
         "POP RSI", "POP RDI", "POP R8",  "POP R9",
         "POP R10", "POP R11", "POP R12", "POP R13",
         "POP R14", "POP R15", "POP RBP", "POP RAX",
@@ -685,7 +692,7 @@ unsafe extern "x86-interrupt" fn irq_01_rust() {
         "PUSH RAX", "PUSH RBP", "PUSH R15", "PUSH R14",
         "PUSH R13", "PUSH R12", "PUSH R11", "PUSH R10",
         "PUSH R9",  "PUSH R8",  "PUSH RDI", "PUSH RSI",
-        "PUSH RDX", "PUSH RCX", "PUSH RBX", "PUSH 0",
+        "PUSH RDX", "PUSH RCX", "PUSH RBX",
         "SUB RSP, 100h",
         "MOVAPS XMMWORD PTR [RSP + 0xf0], XMM15", "MOVAPS XMMWORD PTR [RSP + 0xe0], XMM14",
         "MOVAPS XMMWORD PTR [RSP + 0xd0], XMM13", "MOVAPS XMMWORD PTR [RSP + 0xc0], XMM12",
@@ -714,7 +721,7 @@ unsafe extern "x86-interrupt" fn irq_01_rust() {
         "MOVAPS XMM12, XMMWORD PTR [RSP + 0xC0]", "MOVAPS XMM13, XMMWORD PTR [RSP + 0xD0]",
         "MOVAPS XMM14, XMMWORD PTR [RSP + 0xE0]", "MOVAPS XMM15, XMMWORD PTR [RSP + 0xF0]",
         "ADD RSP, 100h",
-        "POP RBX", "POP RBX", "POP RCX", "POP RDX",
+                   "POP RBX", "POP RCX", "POP RDX",
         "POP RSI", "POP RDI", "POP R8",  "POP R9",
         "POP R10", "POP R11", "POP R12", "POP R13",
         "POP R14", "POP R15", "POP RBP", "POP RAX",
