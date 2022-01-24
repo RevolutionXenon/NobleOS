@@ -40,7 +40,7 @@ use x86_64::registers::control::Cr3;
 use x86_64::structures::idt::InterruptStackFrame;
 
 //Constants
-const HELIUM_VERSION: &str = "vDEV-2022-01-18"; //CURRENT VERSION OF KERNEL
+const HELIUM_VERSION: &str = "vDEV-2022-01-24"; //CURRENT VERSION OF KERNEL
 static WHITESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
 static _BLACKSPACE: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
 static _BLUESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE,  background: COLOR_BGRX_BLACK};
@@ -335,6 +335,12 @@ pub extern "sysv64" fn _start() -> ! {
                 //Enable Port 1
                 if ps2_port1_present {
                     writeln!(printer, "  PS/2 Port 1 Present.");
+                    x86_64_ps2::flush_output();
+                    x86_64_ps2::keyboard_disable_scan().unwrap();
+                    x86_64_ps2::keyboard_set_scancode_set(1).unwrap();
+                    let scancode_set = x86_64_ps2::keyboard_get_scancode_set().unwrap();
+                    writeln!(printer, "  PS/2 Keyboard Scancode Set: {}", scancode_set);
+                    x86_64_ps2::keyboard_enable_scan().unwrap();
                     x86_64_ps2::enable_port1();
                     x86_64_ps2::enable_int_port1();
                 }
@@ -342,6 +348,9 @@ pub extern "sysv64" fn _start() -> ! {
                 if ps2_port2_present {
                     writeln!(printer, "  PS/2 Port 2 Present.");
                     //ps2::enable_port2();
+                }
+                else {
+                    writeln!(printer, "  PS/2 Port 2 Not Present.");
                 }
             }
             else {writeln!(printer, "PS/2 Port tests failed.");}
@@ -454,7 +463,7 @@ pub extern "sysv64" fn _start() -> ! {
     unsafe {
         //asm!("MOV [{}], RSP", in(reg) addr_of!(TASK_STATE_SEGMENT.ist1));
         //writeln!(printer, "1");
-        x86_64_timers::lapic_initial_count(1_000_000);
+        x86_64_timers::lapic_initial_count(100_000);
         //writeln!(printer, "2");
         asm!(
             "MOV RAX, RSP",
@@ -601,11 +610,11 @@ fn ps2_keyboard() {unsafe {
 static mut PS2_SCANCODES: [u8;9] = [0u8;9];
 static mut PS2_INDEX:   usize = 0x00;
 unsafe extern "x86-interrupt" fn irq_01_rust() {
-    while x86_64_ps2::poll_input() {
-        let scancode = x86_64_ps2::read_input();
+    while x86_64_ps2::poll_output_buffer_status() {
+        let scancode = x86_64_ps2::read_output();
         PS2_SCANCODES[PS2_INDEX] = scancode;
         PS2_INDEX += 1;
-        match x86_64_ps2::scancodes_2(&PS2_SCANCODES[0..PS2_INDEX], 0x00) {
+        match x86_64_ps2::scancodes_1(&PS2_SCANCODES[0..PS2_INDEX], 0x00) {
             Ok(ps2_scan) => match ps2_scan {
                 x86_64_ps2::Ps2Scan::Finish(input_event) => {
                     INPUT_PIPE.write(&[input_event]);
@@ -801,7 +810,7 @@ extern "x86-interrupt" fn _interrupt_dummy() {unsafe {
 #[panic_handler]
 extern "sysv64" fn panic_handler(panic_info: &PanicInfo) -> ! {unsafe {
     //cli();                                                        //Turn off interrupts
-    frame_color(0, 0, 128, 0);
+    //frame_color(0, 0, 128, 0);
     //let mut pixel_renderer = PixelRendererHWD {pointer: oct4_to_pointer(FRAME_BUFFER_OCT).unwrap() as *mut ColorBGRX, height: SCREEN_HEIGHT, width: SCREEN_WIDTH};
     //let mut character_renderer = CharacterTwoToneRenderer16x16::<ColorBGRX> {renderer: &pixel_renderer, height: FRAME_HEIGHT, width: FRAME_WIDTH, y: 0, x: 0};
     //let mut printer = PrintWindow::<FRAME_HEIGHT, FRAME_HEIGHT, FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, WHITESPACE, WHITESPACE, 0, 0);

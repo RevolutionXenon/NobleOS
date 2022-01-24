@@ -14,7 +14,7 @@
   },
   "no-default-libraries": true,
   "cpu": "x86-64",
-  "features": "+soft-float,-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-3dnow,-3dnowa,-avx,-avx2",
+  "features": "+soft-float,-3dnow,-3dnowa,-avx,-avx2,-mmx,-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2",
   "dynamic-linking": false,
   "executables": true,
   "relocation-model": "pic",
