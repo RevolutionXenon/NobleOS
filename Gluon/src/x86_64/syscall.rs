@@ -3,6 +3,10 @@
 
 
 // HEADER
+//Flags
+#![allow(const_item_mutation)]
+#![allow(clippy::fn_to_numeric_cast)]
+
 //Imports
 use x86_64::registers::model_specific::*;
 

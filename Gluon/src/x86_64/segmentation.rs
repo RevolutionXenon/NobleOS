@@ -1,14 +1,14 @@
 // GLUON: x86-64 SEGMENTATION
 // Structs and enums related to the contents and handling of x86-64 GDT, IDT, and other segmentation structures
 
+
 // HEADER
 //Flags
 #![allow(asm_sub_register)]
 
-use core::ptr::write_volatile;
-
 //Imports
-use crate::{*, x86_64_paging::LinearAddress};
+use core::ptr::write_volatile;
+use crate::{*, x86_64::paging::LinearAddress};
 
 
 // GLOBAL DESCRIPTOR TABLE
@@ -211,6 +211,7 @@ impl From<SegmentSelector> for u16 {
 
 
 // TASK STATE SEGMENT
+//TSS
 #[repr(C)]
 #[repr(packed)]
 #[derive(Clone, Copy, Debug)]
@@ -242,7 +243,7 @@ pub struct InterruptDescriptorTable {
     pub address: LinearAddress,
 }
 impl InterruptDescriptorTable {
-    pub fn write_entry(&self, entry: &InterruptDescriptorTableEntry, position: u16) -> Result<(), &'static str> {
+    pub fn write_entry(&self, entry: &InterruptDescriptor, position: u16) -> Result<(), &'static str> {
         if position >  self.limit {return Err("Interrupt Descriptor Table: Entry position out of bounds on write.")}
         let data = entry.to_bytes()?;
         for (i, byte) in data.iter().enumerate().take(12) {
@@ -283,7 +284,7 @@ impl InterruptDescriptorTable {
 
 //IDT Entry
 #[derive(Clone, Copy)]
-pub struct InterruptDescriptorTableEntry {
+pub struct InterruptDescriptor {
     pub offset:                u64,
     pub segment_selector:      SegmentSelector,
     pub segment_present:       bool,
@@ -291,7 +292,7 @@ pub struct InterruptDescriptorTableEntry {
     pub interrupt_stack_table: u8,
     pub descriptor_type:       DescriptorType,
 }
-impl InterruptDescriptorTableEntry {
+impl InterruptDescriptor {
     pub fn to_bytes(&self) -> Result<[u8;16], &'static str> {
         if self.interrupt_stack_table > 0x7 {return Err("Interrupt Descriptor Table Entry: IST out of bounds.")}
         let mut result: [u8;16] = [0u8;16];

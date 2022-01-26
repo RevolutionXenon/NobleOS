@@ -23,19 +23,18 @@
 extern crate rlibc;
 extern crate alloc;
 
-
 //Imports
 use photon::*;
 use photon::formats::f2::*;
 use gluon::*;
-use gluon::sysv_executable::*;
-use gluon::x86_64_paging::*;
-use gluon::x86_64_segmentation::*;
+use gluon::noble::address_space::*;
+use gluon::sysv::executable::*;
+use gluon::x86_64::paging::*;
+use gluon::x86_64::segmentation::*;
 use core::cell::RefCell;
 use core::convert::TryInto;
 use core::fmt::Write;
-use core::panic::PanicInfo;
-use core::ptr;
+use core::ptr::null_mut;
 use core::ptr::read_volatile;
 use core::ptr::write_volatile;
 use core::str::Split;
@@ -46,11 +45,12 @@ use uefi::proto::media::file::*;
 use uefi::proto::media::fs::*;
 use uefi::table::boot::*;
 use uefi::table::runtime::*;
-use x86_64::registers::control::*;
-use x86_64::structures::idt::InterruptStackFrame;
+use ::x86_64::registers::control::*;
+use ::x86_64::structures::idt::InterruptStackFrame;
+#[cfg(not(test))] use core::panic::PanicInfo;
 
 //Constants
-const HYDROGEN_VERSION: &str = "vDEV-2022-01-14"; //CURRENT VERSION OF BOOTLOADER
+const HYDROGEN_VERSION: &str = "vDEV-2022-01-26"; //CURRENT VERSION OF BOOTLOADER
 
 
 // MACROS
@@ -78,6 +78,7 @@ macro_rules! interrupt_panic_err {
         interrupt_handler as usize as u64
     }}
 }
+
 
 // MAIN
 //Entry Point After UEFI Boot
@@ -280,7 +281,7 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
         //Setup idt
         idt = InterruptDescriptorTable {address: LinearAddress(idt_address as usize), limit: 255};
         //Generic Entry
-        let mut idte = InterruptDescriptorTableEntry {
+        let mut idte = InterruptDescriptor {
             offset: 0,
             segment_selector: SegmentSelector {descriptor_table_index: code_index, table_indicator: TableIndicator::GDT, requested_privilege_level: PrivilegeLevel::Supervisor },
             segment_present: true,
@@ -485,6 +486,7 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
 static mut PANIC_WRITE_POINTER: Option<*mut dyn Write> = None;
 
 //Panic Handler
+#[cfg(not(test))]
 #[panic_handler]
 fn panic_handler(panic_info: &PanicInfo) -> ! {
     unsafe {
@@ -496,7 +498,7 @@ fn panic_handler(panic_info: &PanicInfo) -> ! {
     }
 }
 
-static mut ALL: &str = "-all";
+
 
 // UEFI FUNCTIONS
 //Read a UEFI error status as a string
@@ -871,7 +873,7 @@ unsafe fn allocate_memory(boot_services: &BootServices, memory_type: MemoryType,
                 pointer_from_services
             }
             else {
-                return ptr::null_mut();
+                return null_mut();
             };
         let mut offset = pointer.align_offset(align);
         if offset == 0 {
@@ -882,7 +884,7 @@ unsafe fn allocate_memory(boot_services: &BootServices, memory_type: MemoryType,
         pointer_return
     }
     else {
-        boot_services.allocate_pool(memory_type, size).warning_as_error().unwrap_or(ptr::null_mut())
+        boot_services.allocate_pool(memory_type, size).warning_as_error().unwrap_or(null_mut())
     }
 }
 
@@ -942,6 +944,9 @@ impl<'a> PageAllocator for UefiPageAllocator<'a> {
 
 
 // STRINGS
+//Not sure about this one
+static mut ALL: &str = "-all";
+
 //Help String for time
 const HELP_TIME: &str = "\
 TIME        : Display the computer's Unix time in UTC.

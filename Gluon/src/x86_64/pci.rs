@@ -4,7 +4,9 @@
 
 // HEADER
 //Imports
-use crate::*;
+use crate::pc::ports::PORT_PCI_INDEX as INDEX_PORT;
+use crate::pc::ports::PORT_PCI_DATA as DATA_PORT;
+use ::x86_64::instructions::port::*;
 
 
 // PCI DEVICES
@@ -22,8 +24,8 @@ impl PciEndpoint {
         if function > 0x07 {return Err("PCI Register: Function out of bounds.")}
         if register > 0x3F {return Err("PCI Register: Register out of bounds.")}
         //Read register
-        PORT_PCI_INDEX.write((1<<31)|(bus<<16)|(device<<11)|(function<<8)|(register<<2));
-        Ok(PORT_PCI_DATA.read())
+        INDEX_PORT.write((1<<31)|(bus<<16)|(device<<11)|(function<<8)|(register<<2));
+        Ok(DATA_PORT.read())
     }
 
     pub unsafe fn register(&self, register: u32) -> Result<u32, &'static str> {

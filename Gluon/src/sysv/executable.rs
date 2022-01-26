@@ -570,7 +570,7 @@ numeric_enum! {
 }
 
 
-//Program: Dynamic Entry
+// PROGRAM: DYNAMIC ENTRY
 //Dynamic Entry
 #[derive(Clone, Copy)]
 #[derive(Debug)]

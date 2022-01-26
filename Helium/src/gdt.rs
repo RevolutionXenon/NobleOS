@@ -4,7 +4,7 @@
 
 // HEADER
 //Imports
-use gluon::x86_64_segmentation::*;
+use gluon::x86_64::segmentation::*;
 
 
 // TASK STATE SEGMENT ENTRY
@@ -69,8 +69,6 @@ pub const SUPERVISOR_DATA: SegmentSelector = SegmentSelector {
     table_indicator: TableIndicator::GDT,
     requested_privilege_level: PrivilegeLevel::Supervisor,
 };
-
-pub const SUPERVISOR_DATA_U16: u16 = (SUPERVISOR_DATA_POSITION<<3) | 0x0;
 
 
 // RING 1 CODE ENTRY
