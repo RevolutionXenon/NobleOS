@@ -39,13 +39,18 @@ A Rust Library which handles:
 
 A Rust Library which handles:
 
-* The Noble address space layout
-* x86-64:
-    * Long mode page tables
-    * Segmentation data structures
-    * The syscall instruction
-    * The PCI bus
-    * The PS/2 controller and devices
-    * The Programmable Interrupt Controller and Advanced Programmable Interrupt Controller
-* System V:
-    * System V object files (ELF files)
+* The x86-64 CPU Architecture:
+  * Long mode page tables
+  * Segmentation data structures
+  * The syscall instruction
+  * The PCI bus
+  * The PS/2 controller and devices
+  * The Programmable Interrupt Controller
+  * The Local Advanced Programmable Interrupt Controller
+* The PC Defacto Standard System Architecture
+  * The PC's standard io-space layout
+* The System V OS Architecture:
+  * System V object files (ELF files)
+* The Noble OS Architecture:
+  * The Noble address space layout
+  * User keyboard, mouse, and controller inputs
