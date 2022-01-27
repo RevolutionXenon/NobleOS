@@ -3,4 +3,4 @@ members = ["Photon", "Gluon", "Hydrogen", "Helium"]
 exclude = []
 
 [profile.dev]
-opt-level=1
+opt-level=3

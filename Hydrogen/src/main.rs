@@ -34,6 +34,7 @@ use gluon::x86_64::segmentation::*;
 use core::cell::RefCell;
 use core::convert::TryInto;
 use core::fmt::Write;
+use core::panic::PanicInfo;
 use core::ptr::null_mut;
 use core::ptr::read_volatile;
 use core::ptr::write_volatile;
@@ -47,7 +48,6 @@ use uefi::table::boot::*;
 use uefi::table::runtime::*;
 use ::x86_64::registers::control::*;
 use ::x86_64::structures::idt::InterruptStackFrame;
-#[cfg(not(test))] use core::panic::PanicInfo;
 
 //Constants
 const HYDROGEN_VERSION: &str = "vDEV-2022-01-26"; //CURRENT VERSION OF BOOTLOADER
@@ -486,7 +486,6 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
 static mut PANIC_WRITE_POINTER: Option<*mut dyn Write> = None;
 
 //Panic Handler
-#[cfg(not(test))]
 #[panic_handler]
 fn panic_handler(panic_info: &PanicInfo) -> ! {
     unsafe {

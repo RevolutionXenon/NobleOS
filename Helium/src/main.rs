@@ -40,7 +40,7 @@ use gluon::x86_64::pci::*;
 use gluon::x86_64::segmentation::*;
 use core::convert::TryFrom;
 use core::fmt::Write;
-use core::ptr::addr_of;
+use core::panic::PanicInfo;
 use core::ptr::read_volatile;
 use core::ptr::write_volatile;
 use ::x86_64::instructions::hlt as halt;
@@ -48,7 +48,6 @@ use ::x86_64::instructions::interrupts::disable as cli;
 use ::x86_64::instructions::interrupts::enable as sti;
 use ::x86_64::registers::control::Cr3;
 use ::x86_64::structures::idt::InterruptStackFrame;
-#[cfg(not(test))] use core::panic::PanicInfo;
 
 //Constants
 const HELIUM_VERSION: &str = "vDEV-2022-01-24"; //CURRENT VERSION OF KERNEL
@@ -59,7 +58,7 @@ static REDSPACE:    CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX
 
 
 // MACROS
-//Interrupt that Panics
+//Interrupt that Panics (no error code)
 macro_rules!interrupt_panic_noe {
     ($text:expr) => {{
         unsafe extern "x86-interrupt" fn handler(stack_frame: InterruptStackFrame) {
@@ -71,6 +70,7 @@ macro_rules!interrupt_panic_noe {
     }}
 }
 
+//Interrupt that panics (with error code)
 macro_rules!interrupt_panic_err {
     ($text:expr) => {{
         unsafe extern "x86-interrupt" fn handler(stack_frame: InterruptStackFrame, error_code: u64) {
@@ -402,7 +402,7 @@ pub extern "sysv64" fn _start() -> ! {
         //Instruction pointers
         let i1p = read_loop as fn() as usize as u64;
         let i2p = byte_loop as fn() as usize as u64;
-        let i3p = ps2_keyboard as fn() as usize as u64;
+        let i3p = ps2_keyboard as unsafe fn() as usize as u64;
         //Create tasks
         create_task(1, &u_alloc, i1p, gdt::SUPERVISOR_CODE, 0x00000202, s1p, gdt::SUPERVISOR_DATA);
         create_task(2, &u_alloc, i2p, gdt::USER_CODE, 0x00000202, s2p, gdt::USER_DATA);
@@ -445,17 +445,10 @@ pub extern "sysv64" fn _start() -> ! {
     // FINISH LOADING
     writeln!(printer, "\n=== STARTUP COMPLETE ===\n");
     unsafe {
-        //Update IST Pointers
-        asm!(
-            "MOV RAX, RSP",
-            "MOV RBX, 0xFFFFFFFFFFFFFFF0",
-            "AND RAX, RBX",
-            "MOV [{ist1}], RAX",
-            "MOV [{ist2}], RAX",
-            ist1 = in(reg) addr_of!(TASK_STATE_SEGMENT.ist1),
-            ist2 = in(reg) addr_of!(TASK_STATE_SEGMENT.ist2),
-            options(nostack)
-        );
+        //Update TSS
+        let kernel_stack = create_kernel_stack(0, &u_alloc) as u64;
+        TASK_STATE_SEGMENT.ist1 = kernel_stack;
+        TASK_STATE_SEGMENT.ist2 = kernel_stack;
         //Start LAPIC timer
         lapic::initial_count(100_000);
         //Enable Interrupts
@@ -491,6 +484,7 @@ unsafe fn create_task(thread_index: usize, allocator: &dyn PageAllocator, instru
     TASK_STACKS[thread_index] = rsp.sub(52) as u64;
 }
 
+//Kernel Stack Allocation
 unsafe fn create_kernel_stack(thread_index: usize, allocator: &dyn PageAllocator) -> *mut u64 {
     //Page map
     let pml4_physical = PhysicalAddress(Cr3::read().0.start_address().as_u64() as usize);
@@ -501,53 +495,55 @@ unsafe fn create_kernel_stack(thread_index: usize, allocator: &dyn PageAllocator
     for address in &mut group {
         *address = allocator.allocate_page().unwrap();
     }
-    pml3.map_pages_group_4kib(&group, ((thread_index - 1) * 4) + 1, true, true, true).unwrap();
+    pml3.map_pages_group_4kib(&group, (thread_index * 4) + 1, true, true, true).unwrap();
     //Initialize stack
-    oct4_to_pointer(STACKS_OCT).unwrap().add(thread_index * 16 * KIB) as *mut u64
+    oct4_to_pointer(STACKS_OCT).unwrap().add((thread_index + 1) * 16 * KIB) as *mut u64
 }
 
 //Scheduler
 unsafe extern "sysv64" fn scheduler() -> u64 {
+    //Process thread to switch to
     let result = 
-    if      INPUT_PIPE.state == RingBufferState::WriteWait || INPUT_PIPE.state == RingBufferState::ReadBlock  {TASK_INDEX = 3; TASK_STACKS[3]}
-    else if TIMER_PIPE.state == RingBufferState::WriteWait || TIMER_PIPE.state == RingBufferState::ReadBlock  {TASK_INDEX = 1; TASK_STACKS[1]}
-    else if TIMER_PIPE.state == RingBufferState::ReadWait  || TIMER_PIPE.state == RingBufferState::WriteBlock {TASK_INDEX = 2; TASK_STACKS[2]}
-    else                                                                                                      {TASK_INDEX = 0; TASK_STACKS[0]};
-    TASK_STATE_SEGMENT.ist2 = (oct4_to_usize(STACKS_OCT).unwrap() + (TASK_INDEX * 16 * KIB)) as u64;
+    if      INPUT_PIPE.state  == RingBufferState::WriteWait                                                    {TASK_INDEX = 3; TASK_STACKS[3]}
+    else if STRING_PIPE.state == RingBufferState::WriteWait || STRING_PIPE.state == RingBufferState::ReadBlock {TASK_INDEX = 1; TASK_STACKS[1]}
+    else                                                                                                       {TASK_INDEX = 0; TASK_STACKS[0]};
+    //Change task state segment to new task
+    TASK_STATE_SEGMENT.ist2 = (oct4_to_usize(STACKS_OCT).unwrap() + ((TASK_INDEX + 1) * 16 * KIB)) as u64;
+    //Finish
     result
 }
 
-//Pipe Testing Task
-static mut TIMER_VAL: u8 = 0xFF;
-static mut TIMER_PIPE: RingBuffer<u8, 4096> = RingBuffer{data: [0xFF; 4096], read_head: 0, write_head: 0, state: RingBufferState::ReadWait};
+
+// THREADS
+//Thread 1: Pipe Read and Print
+static mut STRING_PIPE: RingBuffer<u8, 4096> = RingBuffer{data: [0xFF; 4096], read_head: 0, write_head: 0, state: RingBufferState::ReadWait};
 fn read_loop() {unsafe {
     let printer = &mut *GLOBAL_WRITE_POINTER.unwrap();
     loop {
-        write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::ReadBlock);
-        write!(printer, "{}", core::str::from_utf8(TIMER_PIPE.read(&mut [0xFF; 4096])).unwrap());
-        writeln!(printer, "{:?}", TIMER_PIPE.read(&mut [0xFF; 4096])).unwrap();
-        write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::ReadWait);
-        asm!("INT 80h");
-    }
-}}
-fn byte_loop() {unsafe {
-    loop {
-        write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::WriteBlock);
-        TIMER_VAL = TIMER_VAL.wrapping_add(1);
-        TIMER_PIPE.write("HELLO FROM USERSPACE! ".as_bytes());
-        TIMER_PIPE.write(&[ps2::read_status()]);
-        write_volatile(&mut TIMER_PIPE.state as *mut RingBufferState, RingBufferState::WriteWait);
+        write_volatile(&mut STRING_PIPE.state as *mut RingBufferState, RingBufferState::ReadBlock);
+        writeln!(printer, "{}", core::str::from_utf8(STRING_PIPE.read(&mut [0xFF; 4096])).unwrap());
+        write_volatile(&mut STRING_PIPE.state as *mut RingBufferState, RingBufferState::ReadWait);
         asm!("INT 80h");
     }
 }}
 
-//PS/2 Keyboard Task
+//Thread 2: Pipe Write
+fn byte_loop() {unsafe {
+    loop {
+        write_volatile(&mut STRING_PIPE.state as *mut RingBufferState, RingBufferState::WriteBlock);
+        STRING_PIPE.write("HELLO FROM USERSPACE! ".as_bytes());
+        write_volatile(&mut STRING_PIPE.state as *mut RingBufferState, RingBufferState::WriteWait);
+        asm!("INT 80h");
+    }
+}}
+
+//Thread 3: PS/2 Keyboard
 static mut LEFT_SHIFT:  bool = false;
 static mut RIGHT_SHIFT: bool = false;
 static mut CAPS_LOCK:   bool = false;
 static mut NUM_LOCK:    bool = false;
 static mut INPUT_PIPE: RingBuffer<InputEvent, 512> = RingBuffer{data: [InputEvent{device_id: 0xFF, event_type: InputEventType::Blank, event_id: 0, event_data: 0}; 512], read_head: 0, write_head: 0, state: RingBufferState::Free};
-fn ps2_keyboard() {unsafe {
+unsafe fn ps2_keyboard() {
     let printer = &mut *GLOBAL_WRITE_POINTER.unwrap();
     let inputter: &mut InputWindow::<INPUT_LENGTH, INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = &mut *GLOBAL_INPUT_POINTER.unwrap();
     loop {
@@ -570,8 +566,21 @@ fn ps2_keyboard() {unsafe {
                             }},
                             KeyStr::Str(s) => {match press_type {PressType::Press => {
                                 for codepoint in s.chars() {
-                                    inputter.push_render(CharacterTwoTone{codepoint, foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK}, WHITESPACE);
-                                    //frame_color(0, 255, 0, 0);
+                                    if codepoint == '\n' {
+                                        while STRING_PIPE.state == RingBufferState::ReadBlock {}
+                                        write_volatile(&mut STRING_PIPE.state as *mut RingBufferState, RingBufferState::WriteBlock);
+                                        let mut buffer = [0u8; INPUT_LENGTH*4];
+                                        let string = match inputter.to_str(&mut buffer) {
+                                            Ok(string) => string,
+                                            Err(error) => error,
+                                        };
+                                        STRING_PIPE.write(string.as_bytes());
+                                        write_volatile(&mut STRING_PIPE.state as *mut RingBufferState, RingBufferState::WriteWait);
+                                        inputter.flush(WHITESPACE);
+                                    }
+                                    else {
+                                        inputter.push_render(CharacterTwoTone{codepoint, foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK}, WHITESPACE);
+                                    }
                                 }
                             } PressType::Unpress => {}}}
                         }
@@ -580,13 +589,17 @@ fn ps2_keyboard() {unsafe {
             }
         }
         write_volatile(&mut INPUT_PIPE.state as *mut RingBufferState, RingBufferState::Free);
-        //read_volatile(0xFF00000000000000 as *mut u8);
         asm!("INT 80h");
     }
-}}
+}
 
 
 // INTERRUPT FUNCTIONS
+//INT 20h-FFh: Immediate Return Interrupt
+#[naked] unsafe extern "x86-interrupt" fn interrupt_immediate_return() {
+    asm!("IRETQ", options(noreturn))
+}
+
 //INT 21h: PS/2 Keyboard IRQ
 static mut PS2_SCANCODES: [u8;9] = [0u8;9];
 static mut PS2_INDEX:   usize = 0x00;
@@ -725,11 +738,6 @@ extern "x86-interrupt" fn interrupt_spurious() {unsafe {
     lapic::end_int()
 }}
 
-//Others: Immediate Return Interrupt
-#[naked] unsafe extern "x86-interrupt" fn interrupt_immediate_return() {
-    asm!("IRETQ", options(noreturn))
-}
-
 //Unused: Generic Interrupt
 #[naked] unsafe extern "x86-interrupt" fn _interrupt_gen<const FP: u64>() {
     asm!(
@@ -785,7 +793,6 @@ extern "x86-interrupt" fn interrupt_spurious() {unsafe {
 
 
 // PANIC HANDLER
-#[cfg(not(test))]
 #[panic_handler]
 unsafe extern "sysv64" fn panic_handler(panic_info: &PanicInfo) -> ! {
     cli();                                                            //Turn off interrupts

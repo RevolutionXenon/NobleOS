@@ -232,6 +232,9 @@ numeric_enum! {
         Fenix             = 0x10,
         Cloud             = 0x11,
         VOS               = 0x12,
+        ARMEABI           = 0x40,
+        ARM               = 0x61,
+        Standalone        = 0xFF,
     }
 }
 
@@ -257,32 +260,70 @@ numeric_enum! {
     #[derive(Clone, Copy)]
     #[derive(Debug)]
     pub enum InstructionSetArchitecture {
-        None          = 0x0000, EmM32         = 0x0001, EmSparc       = 0x0002, Em386         = 0x0003,
-        Em68K         = 0x0004, Em88K         = 0x0005, /*Reserved*/            Em860         = 0x0007,
-        EmMips        = 0x0008, EmS370        = 0x0009, EmMipsRS3LE   = 0x000A, /*Reserved*/           
-        /*Reserved*/            /*Reserved*/            /*Reserved*/            EmPaRisc      = 0x000F,
-        /*Reserved*/            EmVPP500      = 0x0011, EmSparc32Plus = 0x0012, Em960         = 0x0013,
-        EmPPC         = 0x0014, EmPPC64       = 0x0015, EmS390        = 0x0016, /*Reserved*/           
-        /*Reserved*/            /*Reserved*/            /*Reserved*/            /*Reserved*/           
-        /*Reserved*/            /*Reserved*/            /*Reserved*/            /*Reserved*/           
-        /*Reserved*/            /*Reserved*/            /*Reserved*/            /*Reserved*/           
-        EmV800        = 0x0024, EmFR20        = 0x0025, EmRH32        = 0x0026, EmRCE         = 0x0027,
-        EmARM         = 0x0028, EmAlpha       = 0x0029, EmSH          = 0x002A, EmSparcV9     = 0x002B,
-        EmTriCore     = 0x002C, EmARC         = 0x002D, EmH8300       = 0x002E, EmH8300H      = 0x002F,
-        EmH8S         = 0x0030, EmH8500       = 0x0031, EmIA64        = 0x0032, EmMipsX       = 0x0033,
-        EmColdFire    = 0x0034, Em68HC12      = 0x0035, EmMMA         = 0x0036, EmPCP         = 0x0037,
-        EmNCPU        = 0x0038, EmNDR1        = 0x0039, EmStarCore    = 0x003A, EmME16        = 0x003B,
-        EmST100       = 0x003C, EmTinyJ       = 0x003D, EmX86_64      = 0x003E, EmPDSP        = 0x003F,
-        EmPDP10       = 0x0040, EmPDP11       = 0x0041, EmFX66        = 0x0042, EmST9Plus     = 0x0043,
-        EmST7         = 0x0044, Em68HC16      = 0x0045, Em68HC11      = 0x0046, Em68HC08      = 0x0047,
-        Em68HC05      = 0x0048, EmSVx         = 0x0049, EmST19        = 0x004A, EmVAX         = 0x004B,
-        EmCRIS        = 0x004C, EmJavelin     = 0x004D, EmFirepath    = 0x004E, EmZSP         = 0x004F,
-        EmMMIX        = 0x0050, EmHUANY       = 0x0051, EmPrism       = 0x0052, EmAVR         = 0x0053,
-        EmFR30        = 0x0054, EmD10V        = 0x0055, EmD30V        = 0x0056, EmV850        = 0x0057,
-        EmM32R        = 0x0058, EmMN10300     = 0x0059, EmMN10200     = 0x005A, EmPJ          = 0x005B,
-        EmOpenRISC    = 0x005C, EmARCA5       = 0x005D, EmXtensa      = 0x005E, EmVideoCore   = 0x005F,
-        EmTMMGPP      = 0x0060, EmNS32K       = 0x0061, EmTPC         = 0x0062, EmPNP1K       = 0x0063,
-        EmST200       = 0x0064,
+        None            = 0x0000, EmM32           = 0x0001, EmSparc         = 0x0002, Em386           = 0x0003,
+        Em68K           = 0x0004, Em88K           = 0x0005, EmIamcu         = 0x0006, Em860           = 0x0007,
+        EmMips          = 0x0008, EmS370          = 0x0009, EmMipsRS3LE     = 0x000A, /*Reserved*/             
+        /*Reserved*/              /*Reserved*/              /*Reserved*/              EmPaRisc        = 0x000F,
+        /*Reserved*/              EmVPP500        = 0x0011, EmSparc32Plus   = 0x0012, Em960           = 0x0013,
+        EmPPC           = 0x0014, EmPPC64         = 0x0015, EmS390          = 0x0016, /*Reserved*/             
+        /*Reserved*/              /*Reserved*/              /*Reserved*/              /*Reserved*/             
+        /*Reserved*/              /*Reserved*/              /*Reserved*/              /*Reserved*/             
+        /*Reserved*/              /*Reserved*/              /*Reserved*/              /*Reserved*/             
+        EmV800          = 0x0024, EmFR20          = 0x0025, EmRH32          = 0x0026, EmRCE           = 0x0027,
+        EmARM           = 0x0028, EmAlpha         = 0x0029, EmSH            = 0x002A, EmSparcV9       = 0x002B,
+        EmTriCore       = 0x002C, EmARC           = 0x002D, EmH8300         = 0x002E, EmH8300H        = 0x002F,
+        EmH8S           = 0x0030, EmH8500         = 0x0031, EmIA64          = 0x0032, EmMipsX         = 0x0033,
+        EmColdFire      = 0x0034, Em68HC12        = 0x0035, EmMMA           = 0x0036, EmPCP           = 0x0037,
+        EmNCPU          = 0x0038, EmNDR1          = 0x0039, EmStarCore      = 0x003A, EmME16          = 0x003B,
+        EmST100         = 0x003C, EmTinyJ         = 0x003D, EmX86_64        = 0x003E, EmPDSP          = 0x003F,
+        EmPDP10         = 0x0040, EmPDP11         = 0x0041, EmFX66          = 0x0042, EmST9Plus       = 0x0043,
+        EmST7           = 0x0044, Em68HC16        = 0x0045, Em68HC11        = 0x0046, Em68HC08        = 0x0047,
+        Em68HC05        = 0x0048, EmSVx           = 0x0049, EmST19          = 0x004A, EmVAX           = 0x004B,
+        EmCRIS          = 0x004C, EmJavelin       = 0x004D, EmFirepath      = 0x004E, EmZSP           = 0x004F,
+        EmMMIX          = 0x0050, EmHUANY         = 0x0051, EmPrism         = 0x0052, EmAVR           = 0x0053,
+        EmFR30          = 0x0054, EmD10V          = 0x0055, EmD30V          = 0x0056, EmV850          = 0x0057,
+        EmM32R          = 0x0058, EmMN10300       = 0x0059, EmMN10200       = 0x005A, EmPJ            = 0x005B,
+        EmOpenRISC      = 0x005C, EmARCA5         = 0x005D, EmXtensa        = 0x005E, EmVideoCore     = 0x005F,
+        EmTMMGPP        = 0x0060, EmNS32K         = 0x0061, EmTPC           = 0x0062, EmSNP1K         = 0x0063,
+        EmST200         = 0x0064, EmIP2K          = 0x0065, EmMAX           = 0x0066, EmCR            = 0x0067,
+        EmF2MC16        = 0x0068, EmMsp430        = 0x0069, EmBlackfin      = 0x006A, EmSEC33         = 0x006B,
+        EmSEP           = 0x006C, EmArca          = 0x006D, EmUnicore       = 0x006E, EmExcess        = 0x006F,
+        EmDXP           = 0x0070, EmAlteraNoisII  = 0x0071, EmCRX           = 0x0072, EmXGATE         = 0x0073,
+        EmC166          = 0x0074, EmM16C          = 0x0075, EmDsPIC30F      = 0x0076, EmCE            = 0x0077,
+        EmM32C          = 0x0078, /*Reserved*/              /*Reserved*/              /*Reserved*/             
+        /*Reserved*/              /*Reserved*/              /*Reserved*/              /*Reserved*/             
+        /*Reserved*/              /*Reserved*/              /*Reserved*/              EmTSK3000       = 0x0083,
+        EmRS08          = 0x0084, EmSHARC         = 0x0085, EmECOG2         = 0x0086, EmScore7        = 0x0087,
+        EmDSP24         = 0x0088, EmVideoCore3    = 0x0089, EmLatticeMico32 = 0x008A, EmSEC17         = 0x008B,
+        EmTIC6000       = 0x008C, EmTIC2000       = 0x008D, EmTIC5500       = 0x008E, EmTIARP32       = 0x008F,
+        EmTIPRU         = 0x0090, /*Reserved*/              /*Reserved*/              /*Reserved*/             
+        /*Reserved*/              /*Reserved*/              /*Reserved*/              /*Reserved*/             
+        /*Reserved*/              /*Reserved*/              /*Reserved*/              /*Reserved*/             
+        /*Reserved*/              /*Reserved*/              /*Reserved*/              /*Reserved*/             
+        EmMMDSPPlus     = 0x00A0, EmCypressM8C    = 0x00A1, EmR32C          = 0x00A2, EmTriMedia      = 0x00A3,
+        EmQDSP6         = 0x00A4, Em8051          = 0x00A5, EmSTxP7x        = 0x00A6, EmNDS32         = 0x00A7,
+        EmECOG1X        = 0x00A8, EmMAXQ30        = 0x00A9, EmXIMO16        = 0x00AA, EmManik         = 0x00AB,
+        EmCrayNV2       = 0x00AC, EmRX            = 0x00AD, EmMETAG         = 0x00AE, EmMCSTElbrus    = 0x00AF,
+        EmECOG16        = 0x00B0, EmCR16          = 0x00B1, EmETPU          = 0x00B2, EmSLE9X         = 0x00B3,
+        EmL10M          = 0x00B4, EmK10M          = 0x00B5, /*Reserved*/              EmAARCH64       = 0x00B7,
+        /*Reserved*/              EmAVR32         = 0x00B9, EmSTM8          = 0x00BA, EmTILE64        = 0x00BB,
+        EmTILEPro       = 0x00BC, EmMicroBlaze    = 0x00BD, EmCUDA          = 0x00BE, EmTILEGx        = 0x00BF,
+        EmCloudShield   = 0x00C0, EmCoreA1st      = 0x00C1, EmCoreA2nd      = 0x00C2, EmARCCompact2   = 0x00C3,
+        EmOpen8         = 0x00C4, EmRL78          = 0x00C5, EmVideoCore5    = 0x00C6, Em78KOR         = 0x00C7,
+        Em56800EX       = 0x00C8, EmBA1           = 0x00C9, EmBA2           = 0x00CA, EmXCORE         = 0x00CB,
+        EmMCHPPIC       = 0x00CC, /*Reserved*/              /*Reserved*/              /*Reserved*/             
+        /*Reserved*/              /*Reserved*/              EmKM32          = 0x00D2, EmKMX32         = 0x00D3,
+        EmEMX16         = 0x00D4, EmEMX8          = 0x00D5, EmKVARC         = 0x00D6, EmCDP           = 0x00D7,
+        EmCOGE          = 0x00D8, EmCool          = 0x00D9, EmNORC          = 0x00DA, EmCSRKalimba    = 0x00DB,
+        EmZ80           = 0x00DC, EmVISIUM        = 0x00DD, EmFT32          = 0x00DE, EmMoxie         = 0x00DF,
+        EmAMDGPU        = 0x00E0, /*Reserved*/              /*Reserved*/              /*Reserved*/             
+        /*Reserved*/              /*Reserved*/              /*Reserved*/              /*Reserved*/             
+        /*Reserved*/              /*Reserved*/              /*Reserved*/              /*Reserved*/             
+        /*Reserved*/              /*Reserved*/              /*Reserved*/              /*Reserved*/             
+        /*Reserved*/              /*Reserved*/              /*Reserved*/              EmRISCV         = 0x00F3,
+        /*Reserved*/              /*Reserved*/              /*Reserved*/              EmBPF           = 0x00F7,
+        EmCSKY          = 0x00F8, /*Reserved*/              /*Reserved*/              /*Reserved*/             
+        /*Reserved*/              /*Reserved*/              /*Reserved*/              /*Reserved*/             
     }
 }
 
@@ -549,23 +590,45 @@ numeric_enum! {
     #[derive(Clone, Copy)]
     #[derive(Debug)]
     pub enum SectionType {
-        Null                           = 0x00_00_00_00,
-        ProgramData                    = 0x00_00_00_01,
-        SymbolTable                    = 0x00_00_00_02,
-        StringTable                    = 0x00_00_00_03,
-        ExplicitRelocationTable        = 0x00_00_00_04,
-        SymbolHashTable                = 0x00_00_00_05,
-        DynamicLinkingInformation      = 0x00_00_00_06,
-        Notes                          = 0x00_00_00_07,
-        ProgramNoData                  = 0x00_00_00_08,
-        ImplicitRelocationTable        = 0x00_00_00_09,
-        DynamicSymbolTable             = 0x00_00_00_0B,
-        InitializationFunctionArray    = 0x00_00_00_0E,
-        TerminationFunctionArray       = 0x00_00_00_0F,
-        PreInitializationFunctionArray = 0x00_00_00_10,
-        SectionGroup                   = 0x00_00_00_11,
-        ExtendedSectionIndex           = 0x00_00_00_12,
-        Number                         = 0x00_00_00_13,
+        Null                           = 0x00000000,
+        ProgramData                    = 0x00000001,
+        SymbolTable                    = 0x00000002,
+        StringTable                    = 0x00000003,
+        ExplicitRelocationTable        = 0x00000004,
+        SymbolHashTable                = 0x00000005,
+        DynamicLinkingInformation      = 0x00000006,
+        Notes                          = 0x00000007,
+        ProgramNoData                  = 0x00000008,
+        ImplicitRelocationTable        = 0x00000009,
+        DynamicSymbolTable             = 0x0000000B,
+        /*Reserved*/                                
+        InitializationFunctionArray    = 0x0000000E,
+        TerminationFunctionArray       = 0x0000000F,
+        PreInitializationFunctionArray = 0x00000010,
+        SectionGroup                   = 0x00000011,
+        ExtendedSectionIndex           = 0x00000012,
+    }
+}
+
+//Section Flags
+numeric_enum! {
+    #[repr(u64)]
+    #[derive(PartialEq)]
+    #[derive(Clone, Copy)]
+    #[derive(Debug)]
+    pub enum SectionFlags {
+        Writeable          = 0x0000000000000001,
+        Allocated          = 0x0000000000000002,
+        Executable         = 0x0000000000000004,
+        /*Reserved*/                            
+        Merged             = 0x0000000000000010,
+        Strings            = 0x0000000000000020,
+        InfoLink           = 0x0000000000000040,
+        LinkOrder          = 0x0000000000000080,
+        OSNonConforming    = 0x0000000000000100,
+        GroupMember        = 0x0000000000000200,
+        ThreadLocalStorage = 0x0000000000000400,
+        Compressed         = 0x0000000000000800,
     }
 }
 

@@ -8,7 +8,7 @@ use crate::numeric_enum;
 use core::convert::TryFrom;
 
 
-// INPUT EVENT HANDLING\
+// INPUT EVENT HANDLING
 //Input Event
 #[derive(Clone, Copy)]
 #[derive(Debug)]
