@@ -208,7 +208,15 @@ impl From<SegmentSelector> for u16 {
         (segment_selector.descriptor_table_index << 3) | ((segment_selector.table_indicator as u16) << 2) | (segment_selector.requested_privilege_level as u16)
     }
 }
-
+impl From<u16> for SegmentSelector {
+    fn from(raw: u16) -> Self {
+        Self {
+            descriptor_table_index: raw >> 3,
+            table_indicator: TableIndicator::try_from(((raw as u8) & 0x4) >> 2).unwrap(),
+            requested_privilege_level: PrivilegeLevel::try_from(raw as u8 & 0x3).unwrap(),
+        }
+    }
+}
 
 // TASK STATE SEGMENT
 //TSS
@@ -317,6 +325,37 @@ impl InterruptDescriptor {
         //Return
         Ok(result)
     }
+}
+
+
+// INTERRUPT STACK FRAME
+//ISF
+#[repr(C)]
+pub struct InterruptStackFrame {
+    rip:    u64,
+    cs:     u64,
+    rflags: u64,
+    rsp:    u64,
+    ss:     u64,
+}
+impl InterruptStackFrame {
+    //Constructor
+    pub fn new(code_pointer: LinearAddress, stack_pointer: LinearAddress, code_selector: SegmentSelector, stack_selector: SegmentSelector, rflags_image: u64) -> Self {
+        Self {
+            rip:    code_pointer.0 as u64,
+            cs:     u16::from(code_selector) as u64,
+            rflags: rflags_image,
+            rsp:    stack_pointer.0 as u64,
+            ss:     u16::from(stack_selector) as u64,
+        }
+    }
+
+    //Retrieval
+    pub fn code_pointer(&self)   -> LinearAddress   {LinearAddress(self.rip as usize)}
+    pub fn stack_pointer(&self)  -> LinearAddress   {LinearAddress(self.rsp as usize)}
+    pub fn code_selector(&self)  -> SegmentSelector {SegmentSelector::from(self.cs as u16)}
+    pub fn stack_selector(&self) -> SegmentSelector {SegmentSelector::from(self.ss as u16)}
+    pub fn rflags_image(&self)   -> u64             {self.rflags}
 }
 
 

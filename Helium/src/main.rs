@@ -47,7 +47,6 @@ use ::x86_64::instructions::hlt as halt;
 use ::x86_64::instructions::interrupts::disable as cli;
 use ::x86_64::instructions::interrupts::enable as sti;
 use ::x86_64::registers::control::Cr3;
-use ::x86_64::structures::idt::InterruptStackFrame;
 
 //Constants
 const HELIUM_VERSION: &str = "vDEV-2022-01-24"; //CURRENT VERSION OF KERNEL
@@ -64,7 +63,20 @@ macro_rules!interrupt_panic_noe {
         unsafe extern "x86-interrupt" fn handler(stack_frame: InterruptStackFrame) {
             asm!("MOV SS, {:x}", in(reg) u16::from(gdt::SUPERVISOR_DATA));
             asm!("MOV DS, {:x}", in(reg) u16::from(gdt::SUPERVISOR_DATA));
-            panic!("\n{}\n{:?}\n", $text, stack_frame)
+            let rip = stack_frame.code_pointer().0;
+            let rsp = stack_frame.stack_pointer().0;
+            let rflags = stack_frame.rflags_image();
+            let cs = stack_frame.code_selector();
+            let ss = stack_frame.stack_selector();
+            if let Some(printer_pointer) = GLOBAL_WRITE_POINTER {
+                let printer = &mut *printer_pointer;
+                writeln!(printer, "\n{}\nRIP:    {:016X}\nRSP:    {:016X}\nCS:     Index: {:02X} RPL: {:01X}\nSS:     Index: {:02X} RPL: {:01X}\nRFLAGS: {:016X}\n",
+                $text, rip, rsp,
+                cs.descriptor_table_index, cs.requested_privilege_level as u8,
+                ss.descriptor_table_index, ss.requested_privilege_level as u8,
+                rflags);
+            }
+            loop {halt();};
         }
         handler as unsafe extern "x86-interrupt" fn(InterruptStackFrame) as usize as u64
     }}
@@ -76,7 +88,20 @@ macro_rules!interrupt_panic_err {
         unsafe extern "x86-interrupt" fn handler(stack_frame: InterruptStackFrame, error_code: u64) {
             asm!("MOV SS, {:x}", in(reg) u16::from(gdt::SUPERVISOR_DATA));
             asm!("MOV DS, {:x}", in(reg) u16::from(gdt::SUPERVISOR_DATA));
-            panic!("\n{}\n{:?}\nERROR CODE: {:016X}\n", $text, stack_frame, error_code)
+            let rip = stack_frame.code_pointer().0;
+            let rsp = stack_frame.stack_pointer().0;
+            let rflags = stack_frame.rflags_image();
+            let cs = stack_frame.code_selector();
+            let ss = stack_frame.stack_selector();
+            if let Some(printer_pointer) = GLOBAL_WRITE_POINTER {
+                let printer = &mut *printer_pointer;
+                writeln!(printer, "\n{}\nRIP:    {:016X}\nRSP:    {:016X}\nCS:     Index: {:02X} RPL: {:01X}\nSS:     Index: {:02X} RPL: {:01X}\nRFLAGS: {:016X}\nERROR:  {:016X}\n",
+                $text, rip, rsp,
+                cs.descriptor_table_index, cs.requested_privilege_level as u8,
+                ss.descriptor_table_index, ss.requested_privilege_level as u8,
+                rflags, error_code);
+            }
+            loop {halt();};
         }
         handler as unsafe extern "x86-interrupt" fn(InterruptStackFrame, u64) as usize as u64
     }}
@@ -562,6 +587,7 @@ unsafe fn ps2_keyboard() {
                                 (KeyID::KeyLeftShift,  PressType::Unpress) => {LEFT_SHIFT  = false;}
                                 (KeyID::KeyRightShift, PressType::Press)   => {RIGHT_SHIFT = true;}
                                 (KeyID::KeyRightShift, PressType::Unpress) => {RIGHT_SHIFT = false;}
+                                (KeyID::KeyEscape,     PressType::Press)   => {asm!("INT3")}
                                 _ => {}
                             }},
                             KeyStr::Str(s) => {match press_type {PressType::Press => {
@@ -813,6 +839,7 @@ unsafe extern "sysv64" fn panic_handler(panic_info: &PanicInfo) -> ! {
 
 
 // MEMORY MANAGEMENT
+//Address translator which cannot allocate
 struct NoneAllocator {
     pub identity_offset: usize
 }
@@ -828,6 +855,7 @@ impl PageAllocator for NoneAllocator {
     }
 }
 
+//Stack allocator handed over from bootloader
 struct StackPageAllocator {
     pub position:    *mut usize,
     pub base_offset: *mut u64,

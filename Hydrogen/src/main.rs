@@ -292,6 +292,7 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
         //Write entries for CPU exceptions
         idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x00 (#DE): Divide Error                      \n{:?}\n");                       idt.write_entry(&idte, 0x00);
         idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x01 (#DB): Debug Exception                   \n{:?}\n");                       idt.write_entry(&idte, 0x01);
+        idte.offset = interrupt_panic_noe!("\nKernel Boot Error                                              \n{:?}\n");                       idt.write_entry(&idte, 0x02);
         idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x03 (#BP): Breakpoint                        \n{:?}\n");                       idt.write_entry(&idte, 0x03);
         idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x04 (#OF): Overflow                          \n{:?}\n");                       idt.write_entry(&idte, 0x04);
         idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x05 (#BR): Bound Range Exceeded              \n{:?}\n");                       idt.write_entry(&idte, 0x05);
@@ -375,7 +376,7 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
     // DEBUGGING
     unsafe {
         write_volatile(0x1000 as *mut u8, 0xCD);
-        write_volatile(0x1001 as *mut u8, 0x15);
+        write_volatile(0x1001 as *mut u8, 0x02);
     }
 
     // COMMAND LINE
@@ -496,7 +497,6 @@ fn panic_handler(panic_info: &PanicInfo) -> ! {
         loop {}
     }
 }
-
 
 
 // UEFI FUNCTIONS
