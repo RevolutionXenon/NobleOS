@@ -14,7 +14,6 @@
 #![allow(clippy::single_char_pattern)]
 #![feature(abi_efiapi)]
 #![feature(abi_x86_interrupt)]
-#![feature(asm)]
 #![feature(asm_sym)]
 #![feature(bench_black_box)]
 #![feature(box_syntax)]
@@ -28,10 +27,13 @@ use photon::*;
 use photon::formats::f2::*;
 use gluon::*;
 use gluon::noble::address_space::*;
+use gluon::pc::fat::*;
 use gluon::sysv::executable::*;
 use gluon::x86_64::paging::*;
 use gluon::x86_64::segmentation::*;
+use core::arch::asm;
 use core::cell::RefCell;
+use core::convert::TryFrom;
 use core::convert::TryInto;
 use core::fmt::Write;
 use core::panic::PanicInfo;
@@ -46,36 +48,58 @@ use uefi::proto::media::file::*;
 use uefi::proto::media::fs::*;
 use uefi::table::boot::*;
 use uefi::table::runtime::*;
+use ::x86_64::instructions::hlt as halt;
 use ::x86_64::registers::control::*;
-use ::x86_64::structures::idt::InterruptStackFrame;
 
 //Constants
-const HYDROGEN_VERSION: &str = "vDEV-2022-01-26"; //CURRENT VERSION OF BOOTLOADER
+const HYDROGEN_VERSION: &str = "vDEV-2022-02-03"; //CURRENT VERSION OF BOOTLOADER
 
 
 // MACROS
 //Interrupt that Panics
-macro_rules! interrupt_panic_noe {
+//Interrupt that halts (no error code)
+macro_rules!interrupt_halt_noe {
     ($text:expr) => {{
-        unsafe extern "x86-interrupt" fn interrupt_handler(stack_frame: InterruptStackFrame) {
-            panic!($text, stack_frame);
+        unsafe extern "x86-interrupt" fn handler(stack_frame: InterruptStackFrame) {
+            let rip = stack_frame.code_pointer().0;
+            let rsp = stack_frame.stack_pointer().0;
+            let rflags = stack_frame.rflags_image();
+            let cs = stack_frame.code_selector();
+            let ss = stack_frame.stack_selector();
+            if let Some(printer_pointer) = GLOBAL_WRITE_POINTER {
+                let printer = &mut *printer_pointer;
+                writeln!(printer, "\n{}\nRIP:    {:016X}\nRSP:    {:016X}\nCS:     Index: {:02X} RPL: {:01X}\nSS:     Index: {:02X} RPL: {:01X}\nRFLAGS: {:016X}\n",
+                $text, rip, rsp,
+                cs.descriptor_table_index, cs.requested_privilege_level as u8,
+                ss.descriptor_table_index, ss.requested_privilege_level as u8,
+                rflags);
+            }
+            loop {halt();};
         }
-        interrupt_handler as usize as u64
+        handler as unsafe extern "x86-interrupt" fn(InterruptStackFrame) as usize as u64
     }}
 }
 
-macro_rules! interrupt_panic_err {
+//Interrupt that halts (with error code)
+macro_rules!interrupt_halt_err {
     ($text:expr) => {{
-        unsafe extern "x86-interrupt" fn interrupt_handler(stack_frame: InterruptStackFrame, error_code: u64) {
-            let printer = &mut *PANIC_WRITE_POINTER.unwrap();
-            for i in 0..10 {
-                let p: *const u64 = stack_frame.stack_pointer.as_ptr();
-                let a = read_volatile((p as *mut u64).add(i));
-                writeln!(printer, "{:p}: {:016X}", p, a);
+        unsafe extern "x86-interrupt" fn handler(stack_frame: InterruptStackFrame, error_code: u64) {
+            let rip = stack_frame.code_pointer().0;
+            let rsp = stack_frame.stack_pointer().0;
+            let rflags = stack_frame.rflags_image();
+            let cs = stack_frame.code_selector();
+            let ss = stack_frame.stack_selector();
+            if let Some(printer_pointer) = GLOBAL_WRITE_POINTER {
+                let printer = &mut *printer_pointer;
+                writeln!(printer, "\n{}\nRIP:    {:016X}\nRSP:    {:016X}\nCS:     Index: {:02X} RPL: {:01X}\nSS:     Index: {:02X} RPL: {:01X}\nRFLAGS: {:016X}\nERROR:  {:016X}\n",
+                $text, rip, rsp,
+                cs.descriptor_table_index, cs.requested_privilege_level as u8,
+                ss.descriptor_table_index, ss.requested_privilege_level as u8,
+                rflags, error_code);
             }
-            panic!($text, stack_frame, error_code);
+            loop {halt();};
         }
-        interrupt_handler as usize as u64
+        handler as unsafe extern "x86-interrupt" fn(InterruptStackFrame, u64) as usize as u64
     }}
 }
 
@@ -113,7 +137,7 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
     let mut printer: PrintWindow::<PRINT_LINES, PRINT_HEIGHT, PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = PrintWindow::<PRINT_LINES, PRINT_HEIGHT, PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, whitespace, whitespace, PRINT_Y, PRINT_X);
     let mut inputter: InputWindow::<INPUT_LENGTH, INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>  = InputWindow::<INPUT_LENGTH, INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, whitespace, INPUT_Y, INPUT_X);
     //Panic printer
-    unsafe {PANIC_WRITE_POINTER = Some(&mut printer as &mut dyn Write as *mut dyn Write)};
+    unsafe {GLOBAL_WRITE_POINTER = Some(&mut printer as &mut dyn Write as *mut dyn Write)};
     //Graphics Output Protocol: Set Graphics Mode
     uefi_set_graphics_mode(graphics_output_protocol);
     writeln!(printer, "PIXEL STRIDE {:?}", graphics_output_protocol.current_mode_info().stride());
@@ -201,6 +225,7 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
     // MEMORY MAP SETUP
     let pml4: PageMap;
     let pml3_free_memory: PageMap;
+    let pml3_ramdisk: PageMap;
     let page_allocator = UefiPageAllocator{boot_services};
     unsafe {
         // NX BIT
@@ -226,6 +251,9 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
         //Page Map Level 3: Kernel Stacks
         let pml3_kernel_stacks:       PageMap = PageMap::new(allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA), PageMapLevel::L3, &page_allocator).unwrap();
         writeln!(printer, "PML3 KSTAK: 0x{:16X}", pml3_kernel_stacks.linear.0);
+        //Page Map Level 3: RAM Disk
+            pml3_ramdisk                      = PageMap::new(allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA), PageMapLevel::L3, &page_allocator).unwrap();
+        writeln!(printer, "PML3 RAMST: 0x{:16X}", pml3_ramdisk.linear.0);
         //Page Map Level 3: Frame Buffer
         let pml3_frame_buffer:        PageMap = PageMap::new(allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA), PageMapLevel::L3, &page_allocator).unwrap();
             pml3_frame_buffer         .map_pages_offset_4kib(PhysicalAddress(graphics_frame_pointer as usize), 0, SCREEN_HEIGHT*SCREEN_WIDTH*4, true, true, true).unwrap();
@@ -240,11 +268,41 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
         pml4.write_entry(PHYSICAL_OCT,     PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_efi_physical_memory.physical, true, true, false).unwrap()).unwrap();
         pml4.write_entry(KERNEL_OCT,       PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_kernel             .physical, true, true, false).unwrap()).unwrap();
         pml4.write_entry(STACKS_OCT,       PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_kernel_stacks      .physical, true, false,false).unwrap()).unwrap();
+        pml4.write_entry(RAMDISK_OCT,      PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_ramdisk            .physical, true, false,true ).unwrap()).unwrap();
         pml4.write_entry(FRAME_BUFFER_OCT, PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_frame_buffer       .physical, true, true, true ).unwrap()).unwrap();
         pml4.write_entry(FREE_MEMORY_OCT,  PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_free_memory        .physical, true, true, true ).unwrap()).unwrap();
         pml4.write_entry(IDENTITY_OCT,     PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_offset_identity_map.physical, true, true, true ).unwrap()).unwrap();
         //pml4.write_entry(PAGE_MAP_OCT,     PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml4                    .physical, true, true, true ).unwrap()).unwrap();
         // FINISH
+    }
+
+    // RAMDISK SETUP
+    unsafe {
+        let address = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
+        let pointer = address.0 as *mut u8;
+        let boot_sector = BootSector16 {
+            jump_instruction:      [0xEB, 0x3C, 0x90],
+            oem_name:              [0x4E, 0x6F, 0x62, 0x6C, 0x65, 0x4F, 0x53, 0x20],
+            bytes_per_sector:      BytesPerSector::bps_4096,
+            sectors_per_cluster:   SectorsPerCluster::spc_1,
+            reserved_sector_count: ReservedSectorCount::FAT16,
+            fat_number:            0x02,
+            root_entry_count:      0x0200,
+            total_sectors_16:      0x0001,
+            media:                 MediaType::FIXED_DISK,
+            fat_size_16:           0x0004,
+            sectors_per_track:     0x0000,
+            heads_number:          0x0000,
+            hidden_sectors:        0x00000000,
+            total_sectors_32:      0x00000000,
+            drive_number:          0x80,
+            volume_id:             0x00000000,
+            volume_label:          [0x4E, 0x6F, 0x62, 0x6C, 0x65, 0x4F, 0x53, 0x20, 0x52, 0x41, 0x4D],
+            file_system_type:      [0x46, 0x41, 0x54, 0x20, 0x20, 0x20, 0x20, 0x20],
+            bootstrap_code:        [0xCC; 448],
+        };
+        write_volatile(pointer as *mut [u8;512], <[u8;512]>::try_from(boot_sector).unwrap());
+        pml3_ramdisk.map_pages_offset_4kib(address, 0, PAGE_SIZE_4KIB, false, false, true);
     }
 
     // IDT SETUP
@@ -290,26 +348,26 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
             descriptor_type: DescriptorType::InterruptGate,
         };
         //Write entries for CPU exceptions
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x00 (#DE): Divide Error                      \n{:?}\n");                       idt.write_entry(&idte, 0x00);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x01 (#DB): Debug Exception                   \n{:?}\n");                       idt.write_entry(&idte, 0x01);
-        idte.offset = interrupt_panic_noe!("\nKernel Boot Error                                              \n{:?}\n");                       idt.write_entry(&idte, 0x02);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x03 (#BP): Breakpoint                        \n{:?}\n");                       idt.write_entry(&idte, 0x03);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x04 (#OF): Overflow                          \n{:?}\n");                       idt.write_entry(&idte, 0x04);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x05 (#BR): Bound Range Exceeded              \n{:?}\n");                       idt.write_entry(&idte, 0x05);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x06 (#UD): Invalid Opcode                    \n{:?}\n");                       idt.write_entry(&idte, 0x06);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x07 (#NM): No Floating Point Unit            \n{:?}\n");                       idt.write_entry(&idte, 0x07);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x08 (#DF): Double Fault                      \n{:?}\n");                       idt.write_entry(&idte, 0x08);
-        idte.offset = interrupt_panic_err!("\nInterrupt Vector 0x0A (#TS): Invalid Task State Segment        \n{:?}\nError Code 0x{:016X}\n"); idt.write_entry(&idte, 0x0A);
-        idte.offset = interrupt_panic_err!("\nInterrupt Vector 0x0B (#NP): Segment Not Present               \n{:?}\nError Code 0x{:016X}\n"); idt.write_entry(&idte, 0x0B);
-        idte.offset = interrupt_panic_err!("\nInterrupt Vector 0x0C (#SS): Stack Segment Fault               \n{:?}\nError Code 0x{:016X}\n"); idt.write_entry(&idte, 0x0C);
-        idte.offset = interrupt_panic_err!("\nInterrupt Vector 0x0D (#GP): General Protection Error          \n{:?}\nError Code 0x{:016X}\n"); idt.write_entry(&idte, 0x0D);
-        idte.offset = interrupt_panic_err!("\nInterrupt Vector 0x0E (#PF): Page Fault                        \n{:?}\nError Code 0x{:016X}\n"); idt.write_entry(&idte, 0x0E);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x10 (#MF): Floating Point Math Fault         \n{:?}\n");                       idt.write_entry(&idte, 0x10);
-        idte.offset = interrupt_panic_err!("\nInterrupt Vector 0x11 (#AC): Alignment Check                   \n{:?}\nError Code 0x{:016X}\n"); idt.write_entry(&idte, 0x11);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x12 (#MC): Machine Check                     \n{:?}\n");                       idt.write_entry(&idte, 0x12);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x13 (#XM): SIMD Floating Point Math Exception\n{:?}\n");                       idt.write_entry(&idte, 0x13);
-        idte.offset = interrupt_panic_noe!("\nInterrupt Vector 0x14 (#VE): Virtualization Exception          \n{:?}\n");                       idt.write_entry(&idte, 0x14);
-        idte.offset = interrupt_panic_err!("\nInterrupt Vector 0x15 (#CP): Control Protection Exception      \n{:?}\nError Code 0x{:016X}\n"); idt.write_entry(&idte, 0x15);
+        idte.offset = interrupt_halt_noe!("\nInterrupt Vector 0x00 (#DE): Divide Error                      \n{:?}\n");                       idt.write_entry(&idte, 0x00);
+        idte.offset = interrupt_halt_noe!("\nInterrupt Vector 0x01 (#DB): Debug Exception                   \n{:?}\n");                       idt.write_entry(&idte, 0x01);
+        idte.offset = interrupt_halt_noe!("\nKernel Boot Error                                              \n{:?}\n");                       idt.write_entry(&idte, 0x02);
+        idte.offset = interrupt_halt_noe!("\nInterrupt Vector 0x03 (#BP): Breakpoint                        \n{:?}\n");                       idt.write_entry(&idte, 0x03);
+        idte.offset = interrupt_halt_noe!("\nInterrupt Vector 0x04 (#OF): Overflow                          \n{:?}\n");                       idt.write_entry(&idte, 0x04);
+        idte.offset = interrupt_halt_noe!("\nInterrupt Vector 0x05 (#BR): Bound Range Exceeded              \n{:?}\n");                       idt.write_entry(&idte, 0x05);
+        idte.offset = interrupt_halt_noe!("\nInterrupt Vector 0x06 (#UD): Invalid Opcode                    \n{:?}\n");                       idt.write_entry(&idte, 0x06);
+        idte.offset = interrupt_halt_noe!("\nInterrupt Vector 0x07 (#NM): No Floating Point Unit            \n{:?}\n");                       idt.write_entry(&idte, 0x07);
+        idte.offset = interrupt_halt_noe!("\nInterrupt Vector 0x08 (#DF): Double Fault                      \n{:?}\n");                       idt.write_entry(&idte, 0x08);
+        idte.offset = interrupt_halt_err!("\nInterrupt Vector 0x0A (#TS): Invalid Task State Segment        \n{:?}\nError Code 0x{:016X}\n"); idt.write_entry(&idte, 0x0A);
+        idte.offset = interrupt_halt_err!("\nInterrupt Vector 0x0B (#NP): Segment Not Present               \n{:?}\nError Code 0x{:016X}\n"); idt.write_entry(&idte, 0x0B);
+        idte.offset = interrupt_halt_err!("\nInterrupt Vector 0x0C (#SS): Stack Segment Fault               \n{:?}\nError Code 0x{:016X}\n"); idt.write_entry(&idte, 0x0C);
+        idte.offset = interrupt_halt_err!("\nInterrupt Vector 0x0D (#GP): General Protection Error          \n{:?}\nError Code 0x{:016X}\n"); idt.write_entry(&idte, 0x0D);
+        idte.offset = interrupt_halt_err!("\nInterrupt Vector 0x0E (#PF): Page Fault                        \n{:?}\nError Code 0x{:016X}\n"); idt.write_entry(&idte, 0x0E);
+        idte.offset = interrupt_halt_noe!("\nInterrupt Vector 0x10 (#MF): Floating Point Math Fault         \n{:?}\n");                       idt.write_entry(&idte, 0x10);
+        idte.offset = interrupt_halt_err!("\nInterrupt Vector 0x11 (#AC): Alignment Check                   \n{:?}\nError Code 0x{:016X}\n"); idt.write_entry(&idte, 0x11);
+        idte.offset = interrupt_halt_noe!("\nInterrupt Vector 0x12 (#MC): Machine Check                     \n{:?}\n");                       idt.write_entry(&idte, 0x12);
+        idte.offset = interrupt_halt_noe!("\nInterrupt Vector 0x13 (#XM): SIMD Floating Point Math Exception\n{:?}\n");                       idt.write_entry(&idte, 0x13);
+        idte.offset = interrupt_halt_noe!("\nInterrupt Vector 0x14 (#VE): Virtualization Exception          \n{:?}\n");                       idt.write_entry(&idte, 0x14);
+        idte.offset = interrupt_halt_err!("\nInterrupt Vector 0x15 (#CP): Control Protection Exception      \n{:?}\nError Code 0x{:016X}\n"); idt.write_entry(&idte, 0x15);
         //Write IDTR
         //idt.write_idtr();
     }
@@ -484,13 +542,13 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
 
 // PANIC HANDLER
 //Panic Variables
-static mut PANIC_WRITE_POINTER: Option<*mut dyn Write> = None;
+static mut GLOBAL_WRITE_POINTER: Option<*mut dyn Write> = None;
 
 //Panic Handler
 #[panic_handler]
 fn panic_handler(panic_info: &PanicInfo) -> ! {
     unsafe {
-        let printer = &mut *PANIC_WRITE_POINTER.unwrap();
+        let printer = &mut *GLOBAL_WRITE_POINTER.unwrap();
         writeln!(printer, "{}", panic_info);
         command_crread(printer, &mut ALL.split(" "));
         asm!("HLT");

@@ -6,4 +6,4 @@ edition = "2018"
 [dependencies]
 photon = {path = "../Photon"}
 gluon = {path = "../Gluon"}
-x86_64 = "0.14.4"
+x86_64 = "0.14.8"

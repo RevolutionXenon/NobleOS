@@ -17,7 +17,6 @@
 #![allow(clippy::if_same_then_else)]
 #![allow(clippy::fn_to_numeric_cast)]
 #![feature(abi_x86_interrupt)]
-#![feature(asm)]
 #![feature(asm_sym)]
 #![feature(asm_const)]
 #![feature(naked_functions)]
@@ -31,6 +30,7 @@ use photon::formats::f2::*;
 use gluon::GLUON_VERSION;
 use gluon::noble::address_space::*;
 use gluon::noble::input_events::*;
+use gluon::pc::fat::*;
 use gluon::pc::ports::*;
 use gluon::x86_64::lapic;
 use gluon::x86_64::pic;
@@ -38,6 +38,7 @@ use gluon::x86_64::ps2;
 use gluon::x86_64::paging::*;
 use gluon::x86_64::pci::*;
 use gluon::x86_64::segmentation::*;
+use core::arch::asm;
 use core::convert::TryFrom;
 use core::fmt::Write;
 use core::panic::PanicInfo;
@@ -46,10 +47,11 @@ use core::ptr::write_volatile;
 use ::x86_64::instructions::hlt as halt;
 use ::x86_64::instructions::interrupts::disable as cli;
 use ::x86_64::instructions::interrupts::enable as sti;
+use ::x86_64::registers::control::Cr2;
 use ::x86_64::registers::control::Cr3;
 
 //Constants
-const HELIUM_VERSION: &str = "vDEV-2022-01-24"; //CURRENT VERSION OF KERNEL
+const HELIUM_VERSION: &str = "vDEV-2022-02-03"; //CURRENT VERSION OF KERNEL
 static WHITESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
 static _BLACKSPACE: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
 static _BLUESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE,  background: COLOR_BGRX_BLACK};
@@ -57,8 +59,8 @@ static REDSPACE:    CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX
 
 
 // MACROS
-//Interrupt that Panics (no error code)
-macro_rules!interrupt_panic_noe {
+//Interrupt that halts (no error code)
+macro_rules!interrupt_halt_noe {
     ($text:expr) => {{
         unsafe extern "x86-interrupt" fn handler(stack_frame: InterruptStackFrame) {
             asm!("MOV SS, {:x}", in(reg) u16::from(gdt::SUPERVISOR_DATA));
@@ -70,11 +72,11 @@ macro_rules!interrupt_panic_noe {
             let ss = stack_frame.stack_selector();
             if let Some(printer_pointer) = GLOBAL_WRITE_POINTER {
                 let printer = &mut *printer_pointer;
-                writeln!(printer, "\n{}\nRIP:    {:016X}\nRSP:    {:016X}\nCS:     Index: {:02X} RPL: {:01X}\nSS:     Index: {:02X} RPL: {:01X}\nRFLAGS: {:016X}\n",
+                writeln!(printer, "\n{}\nRIP:    {:016X}\nRSP:    {:016X}\nCS:     Index: {:02X} RPL: {:01X}\nSS:     Index: {:02X} RPL: {:01X}\nRFLAGS: {:016X}\nCR2:    {:016X}\n",
                 $text, rip, rsp,
                 cs.descriptor_table_index, cs.requested_privilege_level as u8,
                 ss.descriptor_table_index, ss.requested_privilege_level as u8,
-                rflags);
+                rflags, Cr2::read_raw());
             }
             loop {halt();};
         }
@@ -82,8 +84,8 @@ macro_rules!interrupt_panic_noe {
     }}
 }
 
-//Interrupt that panics (with error code)
-macro_rules!interrupt_panic_err {
+//Interrupt that halts (with error code)
+macro_rules!interrupt_halt_err {
     ($text:expr) => {{
         unsafe extern "x86-interrupt" fn handler(stack_frame: InterruptStackFrame, error_code: u64) {
             asm!("MOV SS, {:x}", in(reg) u16::from(gdt::SUPERVISOR_DATA));
@@ -95,11 +97,11 @@ macro_rules!interrupt_panic_err {
             let ss = stack_frame.stack_selector();
             if let Some(printer_pointer) = GLOBAL_WRITE_POINTER {
                 let printer = &mut *printer_pointer;
-                writeln!(printer, "\n{}\nRIP:    {:016X}\nRSP:    {:016X}\nCS:     Index: {:02X} RPL: {:01X}\nSS:     Index: {:02X} RPL: {:01X}\nRFLAGS: {:016X}\nERROR:  {:016X}\n",
+                writeln!(printer, "\n{}\nRIP:    {:016X}\nRSP:    {:016X}\nCS:     Index: {:02X} RPL: {:01X}\nSS:     Index: {:02X} RPL: {:01X}\nRFLAGS: {:016X}\nERROR:  {:016X}\nCR2:    {:016X}\n",
                 $text, rip, rsp,
                 cs.descriptor_table_index, cs.requested_privilege_level as u8,
                 ss.descriptor_table_index, ss.requested_privilege_level as u8,
-                rflags, error_code);
+                rflags, error_code, Cr2::read_raw());
             }
             loop {halt();};
         }
@@ -128,6 +130,7 @@ pub extern "sysv64" fn _start() -> ! {
         printer = PrintWindow::<PRINT_LINES, PRINT_HEIGHT, PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, WHITESPACE, WHITESPACE, PRINT_Y, PRINT_X);
         unsafe {GLOBAL_WRITE_POINTER = Some(&mut printer as &mut dyn Write as *mut dyn Write)};
         unsafe {GLOBAL_INPUT_POINTER = Some(&mut inputter as *mut InputWindow<INPUT_LENGTH, INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>)};
+        unsafe {GLOBAL_PRINT_POINTER = Some(&mut printer as *mut PrintWindow<PRINT_LINES, PRINT_HEIGHT, PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>)}
         //User Interface initialization
         frame.horizontal_line(PRINT_Y-1, 0, FRAME_WIDTH-1, REDSPACE);
         frame.horizontal_line(INPUT_Y-1, 0, FRAME_WIDTH-1, REDSPACE);
@@ -156,7 +159,7 @@ pub extern "sysv64" fn _start() -> ! {
         //Diagnostics
         writeln!(printer, "Physical Memory Area Present: {}", pml4.read_entry(PHYSICAL_OCT    ).unwrap().present);
         writeln!(printer, "Kernel Area Present:          {}", pml4.read_entry(KERNEL_OCT      ).unwrap().present);
-        writeln!(printer, "Programs Area Present:        {}", pml4.read_entry(PROGRAMS_OCT    ).unwrap().present);
+        writeln!(printer, "Programs Area Present:        {}", pml4.read_entry(RAMDISK_OCT    ).unwrap().present);
         writeln!(printer, "Frame Buffer Area Present:    {}", pml4.read_entry(FRAME_BUFFER_OCT).unwrap().present);
         writeln!(printer, "Free Memory Area Present:     {}", pml4.read_entry(FREE_MEMORY_OCT ).unwrap().present);
         writeln!(printer, "Offset Identity Area Present: {}", pml4.read_entry(IDENTITY_OCT    ).unwrap().present);
@@ -252,7 +255,7 @@ pub extern "sysv64" fn _start() -> ! {
     // IDT SETUP
     writeln!(printer, "\n=== INTERRUPT DESCRIPTOR TABLE ===\n");
     let idt: InterruptDescriptorTable;
-    {
+    unsafe {
         //Allocate space for IDT
         idt = InterruptDescriptorTable {address: u_alloc.physical_to_linear(u_alloc.allocate_page().unwrap()).unwrap(), limit: 255};
         //INT 00h - INT 19h
@@ -265,26 +268,26 @@ pub extern "sysv64" fn _start() -> ! {
             interrupt_stack_table: 1,
             descriptor_type: DescriptorType::InterruptGate,
         };
-        int_exception.offset = interrupt_panic_noe!("INTERRUPT VECTOR 0x00 (#DE): Divide Error");                 idt.write_entry(&int_exception, 0x00);
-        int_exception.offset = interrupt_panic_noe!("INTERRUPT VECTOR 0x01 (#DB): Debug");                        idt.write_entry(&int_exception, 0x01);
-        int_exception.offset = interrupt_panic_noe!("INTERRUPT VECTOR 0x02: Non-Maskable Interrupt");             idt.write_entry(&int_exception, 0x02);
-        int_exception.offset = interrupt_panic_noe!("INTERRUPT VECTOR 0x03 (#BP): Breakpoint");                   idt.write_entry(&int_exception, 0x03);
-        int_exception.offset = interrupt_panic_noe!("INTERRUPT VECTOR 0x04 (#OF): Overflow");                     idt.write_entry(&int_exception, 0x04);
-        int_exception.offset = interrupt_panic_noe!("INTERRUPT VECTOR 0x05 (#BR): Bound Range Exceeded");         idt.write_entry(&int_exception, 0x05);
-        int_exception.offset = interrupt_panic_noe!("INTERRUPT VECTOR 0x06 (#UD): Invalid Opcode");               idt.write_entry(&int_exception, 0x06);
-        int_exception.offset = interrupt_panic_noe!("INTERRUPT VECTOR 0x07 (#NM): Device Not Available");         idt.write_entry(&int_exception, 0x07);
-        int_exception.offset = interrupt_panic_noe!("INTERRUPT VECTOR 0x08 (#DF): Double Fault");                 idt.write_entry(&int_exception, 0x08);
-        int_exception.offset = interrupt_panic_err!("INTERRUPT VECTOR 0x0A (#TS): Invalid Task State Segment");   idt.write_entry(&int_exception, 0x0A);
-        int_exception.offset = interrupt_panic_err!("INTERRUPT VECTOR 0x0B (#NP): Segment Not Present");          idt.write_entry(&int_exception, 0x0B);
-        int_exception.offset = interrupt_panic_err!("INTERRUPT VECTOR 0x0C (#SS): Stack Fault");                  idt.write_entry(&int_exception, 0x0C);
-        int_exception.offset = interrupt_panic_err!("INTERRUPT VECTOR 0x0D (#GP): General Protection Fault");     idt.write_entry(&int_exception, 0x0D);
-        int_exception.offset = interrupt_panic_err!("INTERRUPT VECTOR 0x0E (#PF): Page Fault");                   idt.write_entry(&int_exception, 0x0E);
-        int_exception.offset = interrupt_panic_noe!("INTERRUPT VECTOR 0x10 (#MF): x87 FPU Floating Point Error"); idt.write_entry(&int_exception, 0x10);
-        int_exception.offset = interrupt_panic_err!("INTERRUPT VECTOR 0x11 (#AC): Alignment Check");              idt.write_entry(&int_exception, 0x11);
-        int_exception.offset = interrupt_panic_noe!("INTERRUPT VECTOR 0x12 (#MC): Machine Check");                idt.write_entry(&int_exception, 0x12);
-        int_exception.offset = interrupt_panic_noe!("INTERRUPT VECTOR 0x13 (#XM): SIMD Floating Point Error");    idt.write_entry(&int_exception, 0x13);
-        int_exception.offset = interrupt_panic_noe!("INTERRUPT VECTOR 0x14 (#VE): Virtualization Fault");         idt.write_entry(&int_exception, 0x14);
-        int_exception.offset = interrupt_panic_err!("INTERRUPT VECTOR 0x15 (#CP): Control Protection Fault");     idt.write_entry(&int_exception, 0x15);
+        int_exception.offset = interrupt_halt_noe!("INTERRUPT VECTOR 0x00 (#DE): Divide Error");                 idt.write_entry(&int_exception, 0x00);
+        int_exception.offset = interrupt_halt_noe!("INTERRUPT VECTOR 0x01 (#DB): Debug");                        idt.write_entry(&int_exception, 0x01);
+        int_exception.offset = interrupt_halt_noe!("INTERRUPT VECTOR 0x02: Non-Maskable Interrupt");             idt.write_entry(&int_exception, 0x02);
+        int_exception.offset = interrupt_halt_noe!("INTERRUPT VECTOR 0x03 (#BP): Breakpoint");                   idt.write_entry(&int_exception, 0x03);
+        int_exception.offset = interrupt_halt_noe!("INTERRUPT VECTOR 0x04 (#OF): Overflow");                     idt.write_entry(&int_exception, 0x04);
+        int_exception.offset = interrupt_halt_noe!("INTERRUPT VECTOR 0x05 (#BR): Bound Range Exceeded");         idt.write_entry(&int_exception, 0x05);
+        int_exception.offset = interrupt_halt_noe!("INTERRUPT VECTOR 0x06 (#UD): Invalid Opcode");               idt.write_entry(&int_exception, 0x06);
+        int_exception.offset = interrupt_halt_noe!("INTERRUPT VECTOR 0x07 (#NM): Device Not Available");         idt.write_entry(&int_exception, 0x07);
+        int_exception.offset = interrupt_halt_noe!("INTERRUPT VECTOR 0x08 (#DF): Double Fault");                 idt.write_entry(&int_exception, 0x08);
+        int_exception.offset = interrupt_halt_err!("INTERRUPT VECTOR 0x0A (#TS): Invalid Task State Segment");   idt.write_entry(&int_exception, 0x0A);
+        int_exception.offset = interrupt_halt_err!("INTERRUPT VECTOR 0x0B (#NP): Segment Not Present");          idt.write_entry(&int_exception, 0x0B);
+        int_exception.offset = interrupt_halt_err!("INTERRUPT VECTOR 0x0C (#SS): Stack Fault");                  idt.write_entry(&int_exception, 0x0C);
+        int_exception.offset = interrupt_halt_err!("INTERRUPT VECTOR 0x0D (#GP): General Protection Fault");     idt.write_entry(&int_exception, 0x0D);
+        int_exception.offset = interrupt_halt_err!("INTERRUPT VECTOR 0x0E (#PF): Page Fault");                   idt.write_entry(&int_exception, 0x0E);
+        int_exception.offset = interrupt_halt_noe!("INTERRUPT VECTOR 0x10 (#MF): x87 FPU Floating Point Error"); idt.write_entry(&int_exception, 0x10);
+        int_exception.offset = interrupt_halt_err!("INTERRUPT VECTOR 0x11 (#AC): Alignment Check");              idt.write_entry(&int_exception, 0x11);
+        int_exception.offset = interrupt_halt_noe!("INTERRUPT VECTOR 0x12 (#MC): Machine Check");                idt.write_entry(&int_exception, 0x12);
+        int_exception.offset = interrupt_halt_noe!("INTERRUPT VECTOR 0x13 (#XM): SIMD Floating Point Error");    idt.write_entry(&int_exception, 0x13);
+        int_exception.offset = interrupt_halt_noe!("INTERRUPT VECTOR 0x14 (#VE): Virtualization Fault");         idt.write_entry(&int_exception, 0x14);
+        int_exception.offset = interrupt_halt_err!("INTERRUPT VECTOR 0x15 (#CP): Control Protection Fault");     idt.write_entry(&int_exception, 0x15);
         //INT 20h - INT FFh
         //Immediate returns to all non-exception interrupts
         let int_user = InterruptDescriptor {
@@ -344,6 +347,10 @@ pub extern "sysv64" fn _start() -> ! {
         unsafe {idt.write_idtr();}
         //Diagnostic
         writeln!(printer, "IDT Linear Address: 0x{:016X}", idt.address.0);
+        //Update TSS
+        let kernel_stack = create_kernel_stack(0, &u_alloc) as u64;
+        TASK_STATE_SEGMENT.ist1 = kernel_stack;
+        TASK_STATE_SEGMENT.ist2 = kernel_stack;
     }
 
     // PIC SETUP
@@ -467,13 +474,17 @@ pub extern "sysv64" fn _start() -> ! {
         lapic::enable();
     }
 
+    // RAMDISK TESTING
+    writeln!(printer, "\n=== RAMDISK TEST ===\n");
+    unsafe {
+        let bytes: [u8;0x200] = read_volatile(oct4_to_pointer(RAMDISK_OCT).unwrap() as *const [u8;0x200]);
+        let boot_sector = BootSector16::try_from(&bytes[..]);
+        writeln!(printer, "{:?}", boot_sector);
+    }
+
     // FINISH LOADING
     writeln!(printer, "\n=== STARTUP COMPLETE ===\n");
     unsafe {
-        //Update TSS
-        let kernel_stack = create_kernel_stack(0, &u_alloc) as u64;
-        TASK_STATE_SEGMENT.ist1 = kernel_stack;
-        TASK_STATE_SEGMENT.ist2 = kernel_stack;
         //Start LAPIC timer
         lapic::initial_count(100_000);
         //Enable Interrupts
@@ -487,6 +498,7 @@ pub extern "sysv64" fn _start() -> ! {
 // TASKING
 //Global variables
 static mut GLOBAL_WRITE_POINTER: Option<*mut dyn Write> = None;
+static mut GLOBAL_PRINT_POINTER: Option<*mut PrintWindow::<PRINT_LINES, PRINT_HEIGHT, PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>> = None;
 static mut GLOBAL_INPUT_POINTER: Option<*mut InputWindow::<INPUT_LENGTH, INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>> = None;
 static mut TASK_INDEX: usize = 0;
 static mut TASK_STACKS: [u64; 4] = [0;4];
@@ -570,7 +582,8 @@ static mut NUM_LOCK:    bool = false;
 static mut INPUT_PIPE: RingBuffer<InputEvent, 512> = RingBuffer{data: [InputEvent{device_id: 0xFF, event_type: InputEventType::Blank, event_id: 0, event_data: 0}; 512], read_head: 0, write_head: 0, state: RingBufferState::Free};
 unsafe fn ps2_keyboard() {
     let printer = &mut *GLOBAL_WRITE_POINTER.unwrap();
-    let inputter: &mut InputWindow::<INPUT_LENGTH, INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = &mut *GLOBAL_INPUT_POINTER.unwrap();
+    let inputter = &mut *GLOBAL_INPUT_POINTER.unwrap();
+    let window = &mut *GLOBAL_PRINT_POINTER.unwrap();
     loop {
         write_volatile(&mut INPUT_PIPE.state as *mut RingBufferState, RingBufferState::ReadBlock);
         let mut buffer = [InputEvent{device_id: 0xFF, event_type: InputEventType::Blank, event_id: 0, event_data: 0}; 512];
@@ -587,6 +600,12 @@ unsafe fn ps2_keyboard() {
                                 (KeyID::KeyLeftShift,  PressType::Unpress) => {LEFT_SHIFT  = false;}
                                 (KeyID::KeyRightShift, PressType::Press)   => {RIGHT_SHIFT = true;}
                                 (KeyID::KeyRightShift, PressType::Unpress) => {RIGHT_SHIFT = false;}
+                                (KeyID::KeyHome,       PressType::Press)   => {window.end_up();}
+                                (KeyID::KeyEnd,        PressType::Press)   => {window.end_down();}
+                                (KeyID::KeyPageUp,     PressType::Press)   => {window.page_up();}
+                                (KeyID::KeyPageDown,   PressType::Press)   => {window.page_down();}
+                                (KeyID::KeyUpArrow,    PressType::Press)   => {window.line_up();}
+                                (KeyID::KeyDownArrow,  PressType::Press)   => {window.line_down();}
                                 (KeyID::KeyEscape,     PressType::Press)   => {asm!("INT3")}
                                 _ => {}
                             }},

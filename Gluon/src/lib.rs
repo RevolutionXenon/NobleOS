@@ -9,9 +9,10 @@
 //   segmentation:  Structs and enums related to the contents and handling of x86-64 GDT, IDT, and other segmentation structures
 //   syscall:       Structs and functions related to the handling of system calls on x86-64
 // Modules handling the PC de-facto standard system architecture:
+//   fat:           Structs and enums related to the contents and handling of the FAT16 file system
 //   ports:         Functions and objects related to the handling of the PC architecture's standard port-space layout
 // Modules handling the Unix System V OS architecture:
-//   executable:    Structs, enums, and traits related to the contents and handling of System V object files (ELF files)
+//   executable:    Structs and enums related to the contents and handling of System V object files (ELF files)
 // Modules handling the Noble OS architecture:
 //   address_space: Constants related to the Noble address space layout
 //   input_events:  Structs, enums, and functions for handling user keyboard, mouse, and controller inputs
@@ -26,7 +27,6 @@
 #![allow(clippy::too_many_arguments)]
 #![allow(clippy::type_complexity)]
 #![feature(arbitrary_enum_discriminant)]
-#![feature(asm)]
 #![feature(asm_sym)]
 #![feature(naked_functions)]
 
@@ -40,7 +40,7 @@ pub mod sysv;
 pub mod x86_64;
 
 //Constants
-pub const GLUON_VERSION: &str = "vDEV-2022-01-26"; //CURRENT VERSION OF LIBRARY
+pub const GLUON_VERSION: &str = "vDEV-2022-02-03"; //CURRENT VERSION OF LIBRARY
 
 
 // MACROS
@@ -68,4 +68,11 @@ macro_rules!numeric_enum {(
             }
         }
     }
+}
+
+
+//TRAITS
+//Locational Read
+pub trait LocationalRead {
+    fn read(&self, offset: usize, buffer: &mut [u8]) -> Result<(), &'static str>;
 }

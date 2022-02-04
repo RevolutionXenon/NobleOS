@@ -1,5 +1,5 @@
 // GLUON: SYSTEM V EXECUTABLE
-// Structs, enums, and traits related to the contents and handling of System V object files (ELF files)
+// Structs and enums related to the contents and handling of System V object files (ELF files)
 
 
 // HEADER
@@ -11,11 +11,6 @@ use core::ptr::write_volatile;
 
 
 // ELF FILES
-//Locational Read
-pub trait LocationalRead {
-    fn read(&self, offset: usize, buffer: &mut [u8]) -> Result<(), &'static str>;
-}
-
 //Full ELF File Handling Routines
 #[derive(Debug)]
 pub struct ELFFile<'a, LR: 'a+LocationalRead> {
@@ -168,7 +163,7 @@ impl Header {
         if bytes.len()       <  0x40                             {return Err("ELF File Header: Length of data given to parse from not large enough to contain header.")}
         if bytes[0x09..0x10] != [0x00u8; 7]                      {return Err("ELF File Header: Invalid Padding (ei_pad).")}
         let endianness:Endianness = Endianness::try_from(bytes[0x05]).map_err(|_| "ELF File Header: Invalid Endianness (ei_data).")?;
-        let (u16_fb, u32_fb, u64_fb): (fn([u8;2])->u16, fn([u8;4])->u32, fn([u8;8])->u64) = match endianness{
+        let (u16_fb, u32_fb, u64_fb): (fn([u8;2])->u16, fn([u8;4])->u32, fn([u8;8])->u64) = match endianness {
             Endianness::Little => (u16::from_le_bytes, u32::from_le_bytes, u64::from_le_bytes),
             Endianness::Big    => (u16::from_be_bytes, u32::from_be_bytes, u64::from_be_bytes),
         };

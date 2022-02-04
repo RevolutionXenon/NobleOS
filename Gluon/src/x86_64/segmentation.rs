@@ -7,6 +7,7 @@
 #![allow(asm_sub_register)]
 
 //Imports
+use core::arch::asm;
 use core::ptr::write_volatile;
 use crate::{*, x86_64::paging::LinearAddress};
 

@@ -8,6 +8,7 @@
 #![allow(clippy::fn_to_numeric_cast)]
 
 //Imports
+use core::arch::asm;
 use x86_64::registers::model_specific::*;
 
 
