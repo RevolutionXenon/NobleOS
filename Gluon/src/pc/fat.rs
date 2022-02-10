@@ -403,26 +403,36 @@ impl <'s, RW: 's+LocationalRead+LocationalWrite> FATFile<'s, RW> {
 }
 impl <'s, RW: 's+LocationalRead+LocationalWrite> LocationalRead for FATFile<'s, RW> {
     fn read (&self, offset: usize, buffer: &mut [u8]) -> Result<(), &'static str> {
-        //Tests
-        if offset              >= 2^32           {return Err("FAT16 File: Offset larger than 4GiB requested.")}
-        if buffer.len()        >= 2^32           {return Err("FAT16 File: Buffer larger than 4GiB requested.")}
-        let read_offset = offset as u32;
-        let buffer_len = buffer.len() as u32;
-        if read_offset + buffer_len >= self.file_size {return Err("FAT16 File: Out of bounds on read.")}
-        //Offsets
-        let start_cluster_offset = read_offset % self.cluster_size;
-        let start_index = read_offset / self.cluster_size;
-        let end_index = read_offset + buffer_len / self.cluster_size;
-        let end_cluster_offset = {let temp = read_offset + buffer_len % self.cluster_size; if temp == 0 {self.cluster_size} else {temp}};
-        //Start reading
+        //Test bounds to ensure read won't fail
+        if offset                 >= 2^32           {return Err("FAT16 File: Offset larger than 4GiB requested.")}
+        if buffer.len()           >= 2^32           {return Err("FAT16 File: Buffer larger than 4GiB requested.")}
+        let read_offset: u32      =  offset as u32;
+        let buffer_len: u32       =  buffer.len() as u32;
+        if read_offset+buffer_len >= self.file_size {return Err("FAT16 File: Out of bounds on read.")}
+        //Calculate cluster and byte offsets into volume
+        let start_cluster_offset: u32 = read_offset % self.cluster_size;
+        let start_index: u32          = read_offset / self.cluster_size;
+        let end_index: u32            = read_offset + buffer_len / self.cluster_size;
+        let end_cluster_offset: u32   = {let temp = read_offset + buffer_len % self.cluster_size; if temp == 0 {self.cluster_size} else {temp}};
+        //Move to first cluster which needs to be read from
         let mut current_cluster: u32 = self.start_cluster;
+        for _ in 0..start_index {
+            //Retrieve next cluster
+            current_cluster = match self.fat.read_entry(current_cluster as u16)? {
+                FATTableEntry::Used(cluster) => cluster as u32,
+                _ => {return Err("FAT16 File: Cluster error (corrupted file).")}
+            };
+        }
+        //Start reading
         let mut buffer_offset: usize = 0;
         for index in start_index..end_index+1 {
+            //If only one cluster needs to be accessed
             if index == start_index && index == end_index {
                 //Read Data
                 let offset: u32 = self.data_area_offset + current_cluster * self.cluster_size + start_cluster_offset;
                 self.volume.read(offset as usize, buffer)?;
             }
+            //If its in the first cluster (may need to truncate)
             else if index == start_index {
                 //Read Data
                 let offset: u32 = self.data_area_offset + current_cluster * self.cluster_size + start_cluster_offset;
@@ -432,14 +442,16 @@ impl <'s, RW: 's+LocationalRead+LocationalWrite> LocationalRead for FATFile<'s, 
                 //Retrieve next cluster
                 current_cluster = match self.fat.read_entry(current_cluster as u16)? {
                     FATTableEntry::Used(cluster) => cluster as u32,
-                    _ => {return Err("FAT16 File: Cluster error.")}
+                    _ => {return Err("FAT16 File: Cluster error (corrupted file).")}
                 };
             }
+            //If its in the final cluster (may need to truncate)
             else if index == end_index {
                 //Read Data
                 let offset: u32 = self.data_area_offset + current_cluster * self.cluster_size;
                 self.volume.read(offset as usize, &mut buffer[buffer_offset..buffer_offset+end_cluster_offset as usize])?;
             }
+            //If its in the middle (always reads entire cluster)
             else {
                 //Read Data
                 let offset: u32 = self.data_area_offset + current_cluster * self.cluster_size;
@@ -449,7 +461,7 @@ impl <'s, RW: 's+LocationalRead+LocationalWrite> LocationalRead for FATFile<'s, 
                 //Retrieve next cluster
                 current_cluster = match self.fat.read_entry(current_cluster as u16)? {
                     FATTableEntry::Used(cluster) => cluster as u32,
-                    _ => {return Err("FAT16 File: Cluster error.")}
+                    _ => {return Err("FAT16 File: Cluster error (corrupted file).")}
                 };
             }
         }
