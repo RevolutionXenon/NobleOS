@@ -21,7 +21,7 @@ impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
     // CONSTRUCTOR
     pub fn new(file: &'a LR) -> Result<ELFFile<'a, LR>, &'static str> {
         //Load File Header
-        let file_header = Header::new(&{
+        let header = Header::new(&{
             let mut buffer:[u8; 0x40] = [0u8; 0x40]; 
             file.read(0x00, &mut buffer)?;
             buffer}
@@ -29,7 +29,7 @@ impl<'a, LR: 'a+LocationalRead> ELFFile<'a, LR> {
         //Return
         Ok(ELFFile {
             file,
-            header: file_header,
+            header,
         })
     }
 

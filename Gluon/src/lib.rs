@@ -5,12 +5,12 @@
 //   paging:        Structs, enums, traits, constants, and functions related to the contents and handling of x86-64 page tables
 //   pci:           Structs and objects related to the handling of the PCI bus
 //   pic:           Functions related to the handling of the Programmable Interrupt Controller
-//   ps2:           Functions and objects related to the handling of the PS/2 controller and devices
 //   segmentation:  Structs and enums related to the contents and handling of x86-64 GDT, IDT, and other segmentation structures
 //   syscall:       Structs and functions related to the handling of system calls on x86-64
 // Modules handling the PC de-facto standard system architecture:
 //   fat:           Structs and enums related to the contents and handling of the FAT16 file system
 //   ports:         Functions and objects related to the handling of the PC architecture's standard port-space layout
+//   ps2:           Functions and objects related to the handling of the PS/2 controller and devices
 // Modules handling the Unix System V OS architecture:
 //   executable:    Structs and enums related to the contents and handling of System V object files (ELF files)
 // Modules handling the Noble OS architecture:
@@ -40,7 +40,7 @@ pub mod sysv;
 pub mod x86_64;
 
 //Constants
-pub const GLUON_VERSION: &str = "vDEV-2022-02-03"; //CURRENT VERSION OF LIBRARY
+pub const GLUON_VERSION: &str = "vDEV-2022-02-10"; //CURRENT VERSION OF LIBRARY
 
 
 // MACROS
@@ -72,7 +72,6 @@ macro_rules!numeric_enum {(
 
 
 //TRAITS
-//Locational Read
-pub trait LocationalRead {
-    fn read(&self, offset: usize, buffer: &mut [u8]) -> Result<(), &'static str>;
-}
+//Locational Read and Write
+pub trait LocationalRead  {fn read (&self, offset: usize, buffer: &mut [u8]) -> Result<(), &'static str>;}
+pub trait LocationalWrite {fn write(&self, offset: usize, buffer: &[u8])     -> Result<(), &'static str>;}

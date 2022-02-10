@@ -44,11 +44,12 @@ A Rust Library which handles:
   * Segmentation data structures
   * The syscall instruction
   * The PCI bus
-  * The PS/2 controller and devices
   * The Programmable Interrupt Controller
   * The Local Advanced Programmable Interrupt Controller
 * The PC Defacto Standard System Architecture
   * The PC's standard io-space layout
+  * The File Allocation Table (FAT) file system
+  * The PS/2 controller and devices
 * The System V OS Architecture:
   * System V object files (ELF files)
 * The Noble OS Architecture:

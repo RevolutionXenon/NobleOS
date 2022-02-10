@@ -38,7 +38,6 @@ use core::convert::TryInto;
 use core::fmt::Write;
 use core::panic::PanicInfo;
 use core::ptr::null_mut;
-use core::ptr::read_volatile;
 use core::ptr::write_volatile;
 use core::str::Split;
 use uefi::prelude::*;
@@ -52,7 +51,7 @@ use ::x86_64::instructions::hlt as halt;
 use ::x86_64::registers::control::*;
 
 //Constants
-const HYDROGEN_VERSION: &str = "vDEV-2022-02-03"; //CURRENT VERSION OF BOOTLOADER
+const HYDROGEN_VERSION: &str = "vDEV-2022-02-10"; //CURRENT VERSION OF BOOTLOADER
 
 
 // MACROS
@@ -280,17 +279,17 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
     unsafe {
         let address = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
         let pointer = address.0 as *mut u8;
-        let boot_sector = BootSector16 {
+        let boot_sector = FATBootSector {
             jump_instruction:      [0xEB, 0x3C, 0x90],
             oem_name:              [0x4E, 0x6F, 0x62, 0x6C, 0x65, 0x4F, 0x53, 0x20],
             bytes_per_sector:      BytesPerSector::bps_4096,
             sectors_per_cluster:   SectorsPerCluster::spc_1,
-            reserved_sector_count: ReservedSectorCount::FAT16,
-            fat_number:            0x02,
-            root_entry_count:      0x0200,
-            total_sectors_16:      0x0001,
+            reserved_sector_count: 0x10,
+            fat_number:            0x01,
+            root_entry_count:      0x0800,
+            total_sectors_16:      0x0040,
             media:                 MediaType::FIXED_DISK,
-            fat_size_16:           0x0004,
+            sectors_per_fat:       0x0020,
             sectors_per_track:     0x0000,
             heads_number:          0x0000,
             hidden_sectors:        0x00000000,

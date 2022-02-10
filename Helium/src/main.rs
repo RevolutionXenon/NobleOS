@@ -32,9 +32,9 @@ use gluon::noble::address_space::*;
 use gluon::noble::input_events::*;
 use gluon::pc::fat::*;
 use gluon::pc::ports::*;
+use gluon::pc::ps2;
 use gluon::x86_64::lapic;
 use gluon::x86_64::pic;
-use gluon::x86_64::ps2;
 use gluon::x86_64::paging::*;
 use gluon::x86_64::pci::*;
 use gluon::x86_64::segmentation::*;
@@ -51,7 +51,7 @@ use ::x86_64::registers::control::Cr2;
 use ::x86_64::registers::control::Cr3;
 
 //Constants
-const HELIUM_VERSION: &str = "vDEV-2022-02-03"; //CURRENT VERSION OF KERNEL
+const HELIUM_VERSION: &str = "vDEV-2022-02-10"; //CURRENT VERSION OF KERNEL
 static WHITESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
 static _BLACKSPACE: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
 static _BLUESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE,  background: COLOR_BGRX_BLACK};
@@ -478,8 +478,19 @@ pub extern "sysv64" fn _start() -> ! {
     writeln!(printer, "\n=== RAMDISK TEST ===\n");
     unsafe {
         let bytes: [u8;0x200] = read_volatile(oct4_to_pointer(RAMDISK_OCT).unwrap() as *const [u8;0x200]);
-        let boot_sector = BootSector16::try_from(&bytes[..]);
-        writeln!(printer, "{:?}", boot_sector);
+        let boot_sector_r = FATBootSector::try_from(bytes);
+        writeln!(printer, "{:?}", boot_sector_r);
+        match boot_sector_r {
+            Ok(boot_sector) => {
+                writeln!(printer, "Total Sectors:     {:16X}", boot_sector.total_sectors());
+                writeln!(printer, "Cluster Size:      {:16X}", boot_sector.cluster_size());
+                writeln!(printer, "First FAT Sector:  {:16X}", boot_sector.first_fat_sector());
+                writeln!(printer, "First Root Sector: {:16X}", boot_sector.first_root_sector());
+                writeln!(printer, "First Data Sector: {:16X}", boot_sector.first_data_sector());
+            },
+            Err(_) => {writeln!(printer, "Boot sector invalid.");},
+        }
+        
     }
 
     // FINISH LOADING
