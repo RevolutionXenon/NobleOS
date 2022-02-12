@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="1000"
+   height="1000"
+   viewBox="0 0 264.58333 264.58334"
+   version="1.1"
+   id="svg5"
+   inkscape:version="1.1.1 (3bf5ae0d25, 2021-09-20)"
+   sodipodi:docname="Large Icons.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview7"
+     pagecolor="#ffffff"
+     bordercolor="#111111"
+     borderopacity="1"
+     inkscape:pageshadow="0"
+     inkscape:pageopacity="0"
+     inkscape:pagecheckerboard="1"
+     inkscape:document-units="mm"
+     showgrid="false"
+     units="px"
+     inkscape:zoom="0.37059484"
+     inkscape:cx="524.83192"
+     inkscape:cy="605.78286"
+     inkscape:window-width="1920"
+     inkscape:window-height="1017"
+     inkscape:window-x="1912"
+     inkscape:window-y="32"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="g33164" />
+  <defs
+     id="defs2">
+    <inkscape:path-effect
+       effect="fillet_chamfer"
+       id="path-effect33168"
+       is_visible="true"
+       lpeversion="1"
+       satellites_param="F,0,0,1,0,52.916667,0,1 @ F,0,0,1,0,52.916667,0,1 @ F,0,0,1,0,52.916667,0,1 @ F,0,0,1,0,52.916667,0,1"
+       unit="px"
+       method="auto"
+       mode="F"
+       radius="200"
+       chamfer_steps="1"
+       flexible="false"
+       use_knot_distance="true"
+       apply_no_radius="true"
+       apply_with_radius="true"
+       only_selected="false"
+       hide_knots="false" />
+    <inkscape:path-effect
+       effect="fillet_chamfer"
+       id="path-effect969"
+       is_visible="true"
+       lpeversion="1"
+       satellites_param="F,0,0,1,0,52.916667,0,1 @ F,0,0,1,0,52.916667,0,1 @ F,0,0,1,0,52.916667,0,1 @ F,0,0,1,0,52.916667,0,1"
+       unit="px"
+       method="auto"
+       mode="F"
+       radius="200"
+       chamfer_steps="1"
+       flexible="false"
+       use_knot_distance="true"
+       apply_no_radius="true"
+       apply_with_radius="true"
+       only_selected="false"
+       hide_knots="false" />
+  </defs>
+  <g
+     inkscape:label="Hydrogen"
+     inkscape:groupmode="layer"
+     id="g33164"
+     style="display:inline">
+    <path
+       id="path33144"
+       style="fill:#334cb2;stroke-width:59.215;stroke-miterlimit:1.33333"
+       d="M 59.53125,6.6145833 H 205.05208 A 52.916667,52.916667 45 0 1 257.96875,59.53125 v 145.52083 a 52.916667,52.916667 135 0 1 -52.91667,52.91667 H 59.53125 A 52.916667,52.916667 45 0 1 6.6145833,205.05208 V 59.53125 A 52.916667,52.916667 135 0 1 59.53125,6.6145833 Z"
+       inkscape:original-d="M 6.6145833,6.6145833 H 257.96875 V 257.96875 H 6.6145833 Z"
+       inkscape:path-effect="#path-effect33168" />
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:105.833px;line-height:1.25;font-family:'Fira Code';-inkscape-font-specification:'Fira Code Bold';stroke-width:0.264583"
+       x="34.184166"
+       y="139.4881"
+       id="text33148"><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:105.833px;font-family:'Fira Code';-inkscape-font-specification:'Fira Code Bold';stroke-width:0.264583"
+         x="34.184166"
+         y="139.4881"
+         id="tspan33146">H</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:50.8px;line-height:1.25;font-family:'Fira Code';-inkscape-font-specification:'Fira Code';stroke-width:0.264583"
+       x="34.8615"
+       y="61.434132"
+       id="text33152"><tspan
+         sodipodi:role="line"
+         id="tspan33150"
+         style="stroke-width:0.264583"
+         x="34.8615"
+         y="61.434132">1</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:35.2778px;line-height:0.9;font-family:'Fira Code';-inkscape-font-specification:'Fira Code';stroke-width:0.264583"
+       x="37.553192"
+       y="198.03183"
+       id="text33158"><tspan
+         sodipodi:role="line"
+         id="tspan33154"
+         style="font-size:35.2778px;stroke-width:0.264583"
+         x="37.553192"
+         y="198.03183">Bootstrap</tspan><tspan
+         sodipodi:role="line"
+         style="font-size:35.2778px;stroke-width:0.264583"
+         x="37.553192"
+         y="229.78185"
+         id="tspan33156">vDev-2022</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:42.3333px;line-height:1.25;font-family:'Fira Code';-inkscape-font-specification:'Fira Code';stroke-width:0.264583"
+       x="24.987978"
+       y="199.90385"
+       id="text33162"><tspan
+         sodipodi:role="line"
+         id="tspan33160"
+         style="font-size:42.3333px;stroke-width:0.264583"
+         x="24.987978"
+         y="199.90385" /></text>
+  </g>
+  <g
+     inkscape:label="Helium"
+     inkscape:groupmode="layer"
+     id="layer1"
+     style="display:inline">
+    <path
+       id="rect846"
+       style="fill:#993333;stroke-width:59.215;stroke-miterlimit:1.33333"
+       d="M 59.53125,6.6145833 H 205.05208 A 52.916667,52.916667 45 0 1 257.96875,59.53125 v 145.52083 a 52.916667,52.916667 135 0 1 -52.91667,52.91667 H 59.53125 A 52.916667,52.916667 45 0 1 6.6145833,205.05208 V 59.53125 A 52.916667,52.916667 135 0 1 59.53125,6.6145833 Z"
+       inkscape:original-d="M 6.6145833,6.6145833 H 257.96875 V 257.96875 H 6.6145833 Z"
+       inkscape:path-effect="#path-effect969" />
+    <text
+       xml:space="preserve"
+       style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:105.833px;line-height:1.25;font-family:'Fira Code';-inkscape-font-specification:'Fira Code Bold';stroke-width:0.264583"
+       x="34.184166"
+       y="139.4881"
+       id="text4763"><tspan
+         sodipodi:role="line"
+         style="font-style:normal;font-variant:normal;font-weight:bold;font-stretch:normal;font-size:105.833px;font-family:'Fira Code';-inkscape-font-specification:'Fira Code Bold';stroke-width:0.264583"
+         x="34.184166"
+         y="139.4881"
+         id="tspan5029">He</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:50.8px;line-height:1.25;font-family:'Fira Code';-inkscape-font-specification:'Fira Code';stroke-width:0.264583"
+       x="36.6903"
+       y="61.992931"
+       id="text15647"><tspan
+         sodipodi:role="line"
+         id="tspan15645"
+         style="stroke-width:0.264583"
+         x="36.6903"
+         y="61.992931">2</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:35.2778px;line-height:0.9;font-family:'Fira Code';-inkscape-font-specification:'Fira Code';stroke-width:0.264583"
+       x="37.553192"
+       y="198.03183"
+       id="text18441"><tspan
+         sodipodi:role="line"
+         id="tspan18439"
+         style="font-size:35.2778px;stroke-width:0.264583"
+         x="37.553192"
+         y="198.03183">Kernel</tspan><tspan
+         sodipodi:role="line"
+         style="font-size:35.2778px;stroke-width:0.264583"
+         x="37.553192"
+         y="229.78185"
+         id="tspan28239">vDev-2022</tspan></text>
+    <text
+       xml:space="preserve"
+       style="font-size:42.3333px;line-height:1.25;font-family:'Fira Code';-inkscape-font-specification:'Fira Code';stroke-width:0.264583"
+       x="24.987978"
+       y="199.90385"
+       id="text22999"><tspan
+         sodipodi:role="line"
+         id="tspan22997"
+         style="font-size:42.3333px;stroke-width:0.264583"
+         x="24.987978"
+         y="199.90385" /></text>
+  </g>
+</svg>

@@ -3,19 +3,24 @@
 
 
 // HEADER
+//Flags
+#![allow(clippy::needless_range_loop)]
+
 //Imports
-use crate::*;
+use crate::numeric_enum;
+use crate::noble::file_system::*;
 use core::{convert::{TryFrom, TryInto}};
+use core::str;
 
 
 // FAT16 FILE SYSTEMS
 //Full FAT16 Handling Routines
-pub struct FATFileSystem<'s, RW: 's+LocationalRead+LocationalWrite> {
+pub struct FATFileSystem<'s, RW: 's> {
     pub volume:  &'s RW,
     pub boot_sector: FATBootSector,
     pub fat:         FATTable<'s, RW>,
 }
-impl<'s, RW: 's+LocationalRead+LocationalWrite> FATFileSystem<'s, RW> {
+impl<'s, RW: 's>            FATFileSystem<'s, RW> {
     // CONSTRUCTOR
     pub fn new(volume: &'s RW, boot_sector: FATBootSector) -> Result <Self, &'static str> {
         //Create FAT
@@ -23,6 +28,9 @@ impl<'s, RW: 's+LocationalRead+LocationalWrite> FATFileSystem<'s, RW> {
         //Return
         Ok(Self {volume, boot_sector, fat})
     }
+}
+impl<'s, RW: 's+VolumeRead> FATFileSystem<'s, RW> {
+    // CONSTRUCTOR
     pub fn from_existing_volume(volume: &'s RW) -> Result<Self, &'static str> {
         //Load Boot Sector
         let mut buffer: [u8; 0x200] = [0u8; 0x200];
@@ -189,14 +197,14 @@ numeric_enum! {
 
 // FAT STRUCTURE
 //File Allocation Table
-pub struct FATTable<'s, RW: 's+LocationalRead+LocationalWrite> {
+pub struct FATTable<'s, RW: 's> {
     volume:     &'s RW,
     start_location: u32,
     entry_count:    u32,
     fat_count:      u32,
     fat_size:       u32,
 }
-impl<'s, RW: 's+LocationalRead+LocationalWrite> FATTable<'s, RW> {
+impl<'s, RW: 's>             FATTable<'s, RW> {
     // CONSTRUCTOR
     pub fn new(volume: &'s RW, boot_sector: FATBootSector) -> Self {
         let start_location = boot_sector.first_fat_sector() * boot_sector.bytes_per_sector as u32;
@@ -205,8 +213,9 @@ impl<'s, RW: 's+LocationalRead+LocationalWrite> FATTable<'s, RW> {
         let fat_size = boot_sector.sectors_per_fat as u32 * boot_sector.bytes_per_sector as u32;
         Self {volume, start_location, entry_count, fat_count, fat_size,}
     }
-
-    // READ AND WRITE
+}
+impl<'s, RW: 's+VolumeRead>  FATTable<'s, RW> {
+    // READ ONLY
     pub fn read_entry(&self, cluster: u16) -> Result<FATTableEntry, &'static str> {
         if cluster as u32 > self.entry_count {return Err("FAT 16 Table Read Entry: Cluster index out of bounds.")}
         let mut buffer = [0u8;2];
@@ -222,7 +231,9 @@ impl<'s, RW: 's+LocationalRead+LocationalWrite> FATTable<'s, RW> {
             0xFFF8..=0xFFFF => FATTableEntry::End,
         })
     }
-
+}
+impl<'s, RW: 's+VolumeWrite> FATTable<'s, RW> {
+    // WRITE ONLY
     pub fn write_entry(&self, cluster: u16, entry: FATTableEntry) -> Result<(), &'static str> {
         if cluster as u32 > self.entry_count {return Err("FAT 16 Table Write Entry: Cluster index out of bounds.")}
         let table_offset = (cluster * 2) as u32;
@@ -247,6 +258,7 @@ impl<'s, RW: 's+LocationalRead+LocationalWrite> FATTable<'s, RW> {
         }
         Ok(())
     }
+
 }
 
 //File Allocation Table Entry
@@ -261,11 +273,11 @@ pub enum FATTableEntry {
 
 // FAT DIRECTORY
 //Directory
-pub struct FATDirectory<'s, RW: 's+LocationalRead+LocationalWrite> {
+pub struct FATDirectory<'s, RW: 's+VolumeRead+VolumeWrite> {
     pub directory: &'s RW,
     pub num_entries:   u32,
 }
-impl<'s, RW: 's+LocationalRead+LocationalWrite> FATDirectory<'s, RW> {
+impl<'s, RW: 's+VolumeRead+VolumeWrite> FATDirectory<'s, RW> {
     pub fn read_entry(&self, position: u32) -> Result<FATDirectoryEntry, &'static str> {
         if position >= self.num_entries {return Err("FAT16 Directory: Index out of bounds on read.")}
         FATDirectoryEntry::try_from({
@@ -323,7 +335,7 @@ impl TryFrom<FATDirectoryEntry> for [u8;0x20] {
 
     fn try_from(entry: FATDirectoryEntry) -> Result<Self, Self::Error> {
         if entry.creation_time_ss >= 200 {return Err("FAT16 Directory Entry: Invalid timestamp.")}
-        let mut bytes = [0u8;32];
+        let mut bytes = [0u8;0x20];
         bytes[0x00..0x0B].clone_from_slice(&entry.file_name);
         bytes[0x0B..0x0D].clone_from_slice(&<[u8;2]>::from(entry.file_attributes));
         bytes[0x0D] = entry.creation_time_ss;
@@ -344,9 +356,59 @@ pub struct FATFileAttributes {
     pub volume_label:    bool, //Bit  3
     pub subdirectory:    bool, //Bit  4
     pub archive:         bool, //Bit  5
+    pub reserved_6:      bool, //Bit  6
+    pub reserved_7:      bool, //Bit  7
     pub read_password:   bool, //Bit  8
     pub write_password:  bool, //Bit  9
     pub delete_password: bool, //Bit 10
+    pub reserved_b:      bool, //Bit 11
+    pub reserved_c:      bool, //Bit 12
+    pub reserved_d:      bool, //Bit 13
+    pub reserved_e:      bool, //Bit 14
+    pub reserved_f:      bool, //Bit 15
+}
+impl FATFileAttributes {
+    // CONSTRUCTOR
+    pub fn new_file(read_only: bool, hidden: bool, system: bool) -> Self {
+        Self {
+            read_only,
+            hidden,
+            system,
+            volume_label:    false,
+            subdirectory:    false,
+            archive:         false,
+            reserved_6:      false,
+            reserved_7:      false,
+            read_password:   false,
+            write_password:  false,
+            delete_password: false,
+            reserved_b:      false,
+            reserved_c:      false,
+            reserved_d:      false,
+            reserved_e:      false,
+            reserved_f:      false,
+        }
+    }
+    pub fn new_directory(read_only: bool, hidden: bool, system: bool) -> Self {
+        Self {
+            read_only,
+            hidden,
+            system,
+            volume_label:    false,
+            subdirectory:    true,
+            archive:         false,
+            reserved_6:      false,
+            reserved_7:      false,
+            read_password:   false,
+            write_password:  false,
+            delete_password: false,
+            reserved_b:      false,
+            reserved_c:      false,
+            reserved_d:      false,
+            reserved_e:      false,
+            reserved_f:      false,
+        }
+    }
 }
 impl From<[u8;2]> for FATFileAttributes {
     fn from(bytes: [u8;2]) -> Self {
@@ -357,9 +419,16 @@ impl From<[u8;2]> for FATFileAttributes {
             volume_label:    bytes[0] & 0b0000_1000 > 0,
             subdirectory:    bytes[0] & 0b0001_0000 > 0,
             archive:         bytes[0] & 0b0010_0000 > 0,
+            reserved_6:      bytes[0] & 0b0100_0000 > 0,
+            reserved_7:      bytes[0] & 0b1000_0000 > 0,
             read_password:   bytes[1] & 0b0000_0001 > 0,
             write_password:  bytes[1] & 0b0000_0010 > 0,
             delete_password: bytes[1] & 0b0000_0100 > 0,
+            reserved_b:      bytes[0] & 0b0000_1000 > 0,
+            reserved_c:      bytes[0] & 0b0001_0000 > 0,
+            reserved_d:      bytes[0] & 0b0010_0000 > 0,
+            reserved_e:      bytes[0] & 0b0100_0000 > 0,
+            reserved_f:      bytes[0] & 0b1000_0000 > 0,
         }
     }
 }
@@ -370,30 +439,41 @@ impl From<FATFileAttributes> for [u8;2] {
          if attributes.system          {0b0000_0100} else {0} +
          if attributes.volume_label    {0b0000_1000} else {0} +
          if attributes.subdirectory    {0b0001_0000} else {0} +
-         if attributes.archive         {0b0010_0000} else {0},
+         if attributes.archive         {0b0010_0000} else {0} +
+         if attributes.reserved_6      {0b0100_0000} else {0} +
+         if attributes.reserved_7      {0b1000_0000} else {0},
          if attributes.read_password   {0b0000_0001} else {0} +
          if attributes.write_password  {0b0000_0010} else {0} +
-         if attributes.delete_password {0b0000_0100} else {0}]
+         if attributes.delete_password {0b0000_0100} else {0} +
+         if attributes.reserved_b      {0b0000_1000} else {0} +
+         if attributes.reserved_c      {0b0001_0000} else {0} +
+         if attributes.reserved_d      {0b0010_0000} else {0} +
+         if attributes.reserved_e      {0b0100_0000} else {0} +
+         if attributes.reserved_f      {0b1000_0000} else {0}]
     }
 }
 
 
 // FILE HANDLE
-pub struct FATFile<'s, RW: 's+LocationalRead+LocationalWrite> {
-    volume:       &'s RW,
-    fat:          &'s FATTable<'s, RW>,
-    data_area_offset: u32,
-    start_cluster:    u32,
-    cluster_size:     u32,
-    file_size:        u32,
+//FAT File
+pub struct FATFile<'s, RW: 's> {
+    volume:              &'s RW,
+    fat:                 &'s FATTable<'s, RW>,
+    directory_entry_pointer: u32,
+    data_area_offset:        u32,
+    start_cluster:           u32,
+    cluster_size:            u32,
+    file_size:               u32,
 }
-impl <'s, RW: 's+LocationalRead+LocationalWrite> FATFile<'s, RW> {
-    pub fn new_from_start_cluster(fs: &'s FATFileSystem<RW>, start_cluster: u32, file_size: u32) -> Result<Self, &'static str> {
+impl <'s, RW: 's>                                        FATFile<'s, RW> {
+    // CONSTRUCTOR
+    pub fn new_from_start_cluster(fs: &'s FATFileSystem<RW>, directory_entry_pointer: u32, start_cluster: u32, file_size: u32) -> Result<Self, &'static str> {
         let bs = fs.boot_sector;
         let fat = &fs.fat;
         Ok(Self {
             volume: fs.volume,
             fat,
+            directory_entry_pointer,
             data_area_offset: bs.first_data_sector() * bs.bytes_per_sector as u32,
             start_cluster,
             cluster_size: bs.cluster_size(),
@@ -401,19 +481,19 @@ impl <'s, RW: 's+LocationalRead+LocationalWrite> FATFile<'s, RW> {
         })
     }
 }
-impl <'s, RW: 's+LocationalRead+LocationalWrite> LocationalRead for FATFile<'s, RW> {
+impl <'s, RO: 's+VolumeRead>             VolumeRead  for FATFile<'s, RO> {
+    // READ ONLY
     fn read (&self, offset: usize, buffer: &mut [u8]) -> Result<(), &'static str> {
         //Test bounds to ensure read won't fail
-        if offset                 >= 2^32           {return Err("FAT16 File: Offset larger than 4GiB requested.")}
-        if buffer.len()           >= 2^32           {return Err("FAT16 File: Buffer larger than 4GiB requested.")}
-        let read_offset: u32      =  offset as u32;
-        let buffer_len: u32       =  buffer.len() as u32;
+        if buffer.is_empty()                        {return Ok(())}
+        let read_offset: u32 = u32::try_from(offset      ).map_err(|_| "FAT16 File: Offset larger than 4GiB requested.")?;
+        let buffer_len:  u32 = u32::try_from(buffer.len()).map_err(|_| "FAT16 File: Buffer larger than 4GiB requested.")?;
         if read_offset+buffer_len >= self.file_size {return Err("FAT16 File: Out of bounds on read.")}
         //Calculate cluster and byte offsets into volume
         let start_cluster_offset: u32 = read_offset % self.cluster_size;
-        let start_index: u32          = read_offset / self.cluster_size;
-        let end_index: u32            = read_offset + buffer_len / self.cluster_size;
-        let end_cluster_offset: u32   = {let temp = read_offset + buffer_len % self.cluster_size; if temp == 0 {self.cluster_size} else {temp}};
+        let start_index:          u32 = read_offset / self.cluster_size;
+        let end_index:            u32 = (read_offset + buffer_len - 1) / self.cluster_size;
+        let end_cluster_offset:   u32 = (read_offset + buffer_len - 1) % self.cluster_size + 1;
         //Move to first cluster which needs to be read from
         let mut current_cluster: u32 = self.start_cluster;
         for _ in 0..start_index {
@@ -425,19 +505,19 @@ impl <'s, RW: 's+LocationalRead+LocationalWrite> LocationalRead for FATFile<'s, 
         }
         //Start reading
         let mut buffer_offset: usize = 0;
-        for index in start_index..end_index+1 {
+        for index in start_index..=end_index {
             //If only one cluster needs to be accessed
             if index == start_index && index == end_index {
                 //Read Data
-                let offset: u32 = self.data_area_offset + current_cluster * self.cluster_size + start_cluster_offset;
-                self.volume.read(offset as usize, buffer)?;
+                let volume_offset: u32 = self.data_area_offset + current_cluster * self.cluster_size + start_cluster_offset;
+                self.volume.read(volume_offset as usize, buffer)?;
             }
             //If its in the first cluster (may need to truncate)
             else if index == start_index {
                 //Read Data
-                let offset: u32 = self.data_area_offset + current_cluster * self.cluster_size + start_cluster_offset;
+                let volume_offset: u32 = self.data_area_offset + current_cluster * self.cluster_size + start_cluster_offset;
                 let new_buffer_offset: usize = (self.cluster_size - start_cluster_offset) as usize;
-                self.volume.read(offset as usize, &mut buffer[0..new_buffer_offset])?;
+                self.volume.read(volume_offset as usize, &mut buffer[0..new_buffer_offset])?;
                 buffer_offset = new_buffer_offset;
                 //Retrieve next cluster
                 current_cluster = match self.fat.read_entry(current_cluster as u16)? {
@@ -448,15 +528,15 @@ impl <'s, RW: 's+LocationalRead+LocationalWrite> LocationalRead for FATFile<'s, 
             //If its in the final cluster (may need to truncate)
             else if index == end_index {
                 //Read Data
-                let offset: u32 = self.data_area_offset + current_cluster * self.cluster_size;
-                self.volume.read(offset as usize, &mut buffer[buffer_offset..buffer_offset+end_cluster_offset as usize])?;
+                let volume_offset: u32 = self.data_area_offset + current_cluster * self.cluster_size;
+                self.volume.read(volume_offset as usize, &mut buffer[buffer_offset..buffer_offset+end_cluster_offset as usize])?;
             }
             //If its in the middle (always reads entire cluster)
             else {
                 //Read Data
-                let offset: u32 = self.data_area_offset + current_cluster * self.cluster_size;
+                let volume_offset: u32 = self.data_area_offset + current_cluster * self.cluster_size;
                 let new_buffer_offset: usize = buffer_offset + self.cluster_size as usize;
-                self.volume.read(offset as usize, &mut buffer[buffer_offset..new_buffer_offset])?;
+                self.volume.read(volume_offset as usize, &mut buffer[buffer_offset..new_buffer_offset])?;
                 buffer_offset = new_buffer_offset;
                 //Retrieve next cluster
                 current_cluster = match self.fat.read_entry(current_cluster as u16)? {
@@ -465,6 +545,194 @@ impl <'s, RW: 's+LocationalRead+LocationalWrite> LocationalRead for FATFile<'s, 
                 };
             }
         }
+        Ok(())
+    }
+}
+impl <'s, RW: 's+VolumeRead+VolumeWrite> VolumeWrite for FATFile<'s, RW> {
+    // WRITE
+    fn write(&self, offset: usize, buffer: &[u8])     -> Result<(), &'static str> {
+        //Test bounds to ensure read won't fail
+        if buffer.is_empty()                        {return Ok(())}
+        let read_offset: u32 = u32::try_from(offset      ).map_err(|_| "FAT16 File: Offset larger than 4GiB requested.")?;
+        let buffer_len:  u32 = u32::try_from(buffer.len()).map_err(|_| "FAT16 File: Buffer larger than 4GiB requested.")?;
+        if read_offset+buffer_len >= self.file_size {return Err("FAT16 File: Out of bounds on read.")}
+        //Calculate cluster and byte offsets into volume
+        let start_cluster_offset: u32 = read_offset % self.cluster_size;
+        let start_index:          u32 = read_offset / self.cluster_size;
+        let end_index:            u32 = (read_offset + buffer_len - 1) / self.cluster_size;
+        let end_cluster_offset:   u32 = (read_offset + buffer_len - 1) % self.cluster_size + 1;
+        //Move to first cluster which needs to be read from
+        let mut current_cluster: u32 = self.start_cluster;
+        for _ in 0..start_index {
+            //Retrieve next cluster
+            current_cluster = match self.fat.read_entry(current_cluster as u16)? {
+                FATTableEntry::Used(cluster) => cluster as u32,
+                _ => {return Err("FAT16 File: Cluster error (corrupted file).")}
+            };
+        }
+        //Start writing
+        let mut buffer_offset: usize = 0;
+        for index in start_index..=end_index {
+            //If only one cluster needs to be accessed
+            if index == start_index && index == end_index {
+                //Write Data
+                let volume_offset: u32 = self.data_area_offset + current_cluster * self.cluster_size + start_cluster_offset;
+                self.volume.write(volume_offset as usize, buffer)?;
+            }
+            //If its in the first cluster (may need to truncate)
+            else if index == start_index {
+                //Write Data
+                let volume_offset: u32 = self.data_area_offset + current_cluster * self.cluster_size + start_cluster_offset;
+                let new_buffer_offset: usize = (self.cluster_size - start_cluster_offset) as usize;
+                self.volume.write(volume_offset as usize, &buffer[0..new_buffer_offset])?;
+                buffer_offset = new_buffer_offset;
+                //Retrieve next cluster
+                current_cluster = match self.fat.read_entry(current_cluster as u16)? {
+                    FATTableEntry::Used(cluster) => cluster as u32,
+                    _ => {return Err("FAT16 File: Cluster error (corrupted file).")}
+                };
+            }
+            //If its in the final cluster (may need to truncate)
+            else if index == end_index {
+                //Write Data
+                let volume_offset: u32 = self.data_area_offset + current_cluster * self.cluster_size;
+                self.volume.write(volume_offset as usize, &buffer[buffer_offset..buffer_offset+end_cluster_offset as usize])?;
+            }
+            //If its in the middle (always reads entire cluster)
+            else {
+                //Write data
+                let volume_offset: u32 = self.data_area_offset + current_cluster * self.cluster_size;
+                let new_buffer_offset: usize = buffer_offset + self.cluster_size as usize;
+                self.volume.write(volume_offset as usize, &buffer[buffer_offset..new_buffer_offset])?;
+                buffer_offset = new_buffer_offset;
+                //Retrieve next cluster
+                current_cluster = match self.fat.read_entry(current_cluster as u16)? {
+                    FATTableEntry::Used(cluster) => cluster as u32,
+                    _ => {return Err("FAT16 File: Cluster error (corrupted file).")}
+                };
+            }
+        }
+        Ok(())
+    }
+}
+impl <'s, RO: 's+VolumeRead>             FileRead    for FATFile<'s, RO> {
+    // FILE READ ROUTINES
+    fn get_name<'f>  (&self, buffer: &'f mut [u8]) -> Result<&'f str,  &'static str> {
+        if buffer.len() < 12 {return Err("FAT16 File: Get name provided buffer of insufficient size.")}
+        let mut directory_buffer: [u8; 0x20] = [0u8; 0x20];
+        self.volume.read(self.directory_entry_pointer as usize, &mut directory_buffer)?;
+        let directory_entry: FATDirectoryEntry = FATDirectoryEntry::try_from(directory_buffer)?;
+        let name_raw = directory_entry.file_name;
+        let name_array = &name_raw[0..8];
+        let ext_array = &name_raw[8..11];
+        let mut index = 0;
+        for i in 0..8 {
+            let ascii = name_array[i];
+            if !(0x20..=0x7E).contains(&ascii) {return Err("FAT16 File: Get name found invalid characters.")}
+            if ascii == 0x20 {break}
+            buffer[index] = ascii;
+            index += 1;
+        }
+        buffer[index] = 0x2E;
+        index += 1;
+        for i in 0..3 {
+            let ascii = ext_array[i];
+            if !(0x20..=0x7E).contains(&ascii) {return Err("FAT16 File: Get name found invalid characters.")}
+            if ascii == 0x20 {break}
+            buffer[index] = ascii;
+            index += 1;
+        }
+        let ret_str = str::from_utf8(&buffer[0..index]).map_err(|_| "FAT16 File: Get name encountered error converting raw filename.")?;
+        Ok(ret_str)
+    }
+    fn get_size      (&self)                       -> Result<usize,    &'static str> {
+        Ok(self.file_size as usize)
+    }
+    fn get_timestamp (&self)                       -> Result<i64,      &'static str> {
+        /*let mut directory_buffer: [u8; 0x20] = [0u8; 0x20];
+        self.volume.read(self.directory_entry_pointer as usize, &mut directory_buffer)?;
+        let directory_entry: FATDirectoryEntry = FATDirectoryEntry::try_from(directory_buffer)?;*/
+        Err("FAT16 File: Read timestamp not yet implemented.")
+    }
+    fn get_write     (&self)                       -> Result<bool,     &'static str> {
+        let mut directory_buffer: [u8; 0x20] = [0u8; 0x20];
+        self.volume.read(self.directory_entry_pointer as usize, &mut directory_buffer)?;
+        let directory_entry: FATDirectoryEntry = FATDirectoryEntry::try_from(directory_buffer)?;
+        Ok(!directory_entry.file_attributes.read_only)
+    }
+    fn get_hidden    (&self)                       -> Result<bool,     &'static str> {
+        let mut directory_buffer: [u8; 0x20] = [0u8; 0x20];
+        self.volume.read(self.directory_entry_pointer as usize, &mut directory_buffer)?;
+        let directory_entry: FATDirectoryEntry = FATDirectoryEntry::try_from(directory_buffer)?;
+        Ok(!directory_entry.file_attributes.hidden)
+    }
+}
+impl <'s, RW: 's+VolumeRead+VolumeWrite> FileWrite   for FATFile<'s, RW> {
+    fn set_name      (&self, name_in: &str)        -> Result<(),       &'static str> {
+        //Check name string is valid
+        if !name_in.is_ascii() {return Err("FAT16 File: Set name given invalid characters.")}
+        let name_bytes = name_in.as_bytes();
+        if name_bytes.len() > 12 {return Err("FAT16 File: Set name provided a name string which is too long.")}
+        //Find delimiter between name and extension
+        let mut delimiter_index: Option<usize> = None;
+        for i in 0..12 {
+            if name_bytes[i] == 0x2E {delimiter_index = Some(i)}
+        }
+        //Determine name and extension from array
+        let name_array = match delimiter_index {
+            Some(i) => &name_bytes[0..i],
+            None => name_bytes,
+        };
+        let ext_array = match delimiter_index {
+            Some(i) => &name_bytes[i+1..],
+            None => &[],
+        };
+        //Check name and extension are valid
+        if name_array.len() > 8 {return Err("FAT16 File: Set name provided a name which is too long.")}
+        if ext_array.len()  > 3 {return Err("FAT16 File: Set name provided an extension which is too long.")}
+        //Create name array
+        let mut name_final = [0x20u8; 11];
+        name_final[0..8].clone_from_slice(name_array);
+        name_final[8..11].clone_from_slice(ext_array);
+        //Load directory entry
+        let mut directory_buffer: [u8; 0x20] = [0u8; 0x20];
+        self.volume.read(self.directory_entry_pointer as usize, &mut directory_buffer)?;
+        let mut directory_entry: FATDirectoryEntry = FATDirectoryEntry::try_from(directory_buffer)?;
+        //Change directory entry
+        directory_entry.file_name = name_final;
+        let directory_array = <[u8;0x20]>::try_from(directory_entry)?;
+        //Write directory entry
+        self.volume.write(self.directory_entry_pointer as usize, &directory_array)?;
+        Ok(())
+    }
+    fn set_size      (&self, _size: usize)         -> Result<(),       &'static str> {
+        Err("FAT16 File: Set file size not yet implemented.")
+    }
+    fn set_timestamp (&self, _timestamp: i64)      -> Result<(),       &'static str> {
+        Err("FAT16 File: Set timestamp not yet implemented.")
+    }
+    fn set_write     (&self, write: bool)          -> Result<(),       &'static str> {
+        //Load directory entry
+        let mut directory_buffer: [u8; 0x20] = [0u8; 0x20];
+        self.volume.read(self.directory_entry_pointer as usize, &mut directory_buffer)?;
+        let mut directory_entry: FATDirectoryEntry = FATDirectoryEntry::try_from(directory_buffer)?;
+        //Change directory entry
+        directory_entry.file_attributes.read_only = !write;
+        let directory_array = <[u8;0x20]>::try_from(directory_entry)?;
+        //Write directory entry
+        self.volume.write(self.directory_entry_pointer as usize, &directory_array)?;
+        Ok(())
+    }
+    fn set_hidden    (&self, hidden: bool)         -> Result<(),       &'static str> {
+        //Load directory entry
+        let mut directory_buffer: [u8; 0x20] = [0u8; 0x20];
+        self.volume.read(self.directory_entry_pointer as usize, &mut directory_buffer)?;
+        let mut directory_entry: FATDirectoryEntry = FATDirectoryEntry::try_from(directory_buffer)?;
+        //Change directory entry
+        directory_entry.file_attributes.hidden = hidden;
+        let directory_array = <[u8;0x20]>::try_from(directory_entry)?;
+        //Write directory entry
+        self.volume.write(self.directory_entry_pointer as usize, &directory_array)?;
         Ok(())
     }
 }

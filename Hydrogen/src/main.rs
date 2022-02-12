@@ -27,6 +27,7 @@ use photon::*;
 use photon::formats::f2::*;
 use gluon::*;
 use gluon::noble::address_space::*;
+use gluon::noble::file_system::*;
 use gluon::pc::fat::*;
 use gluon::sysv::executable::*;
 use gluon::x86_64::paging::*;
@@ -959,7 +960,7 @@ unsafe fn allocate_page_zeroed(boot_services: &BootServices, memory_type: Memory
 struct LocationalReadWrapper<'a> {
     ref_cell: RefCell<&'a mut RegularFile>,
 }
-impl<'a> LocationalRead for LocationalReadWrapper<'a> {
+impl<'a> VolumeRead for LocationalReadWrapper<'a> {
     fn read(&self, offset: usize, buffer: &mut [u8]) -> Result<(), &'static str> {
         match self.ref_cell.try_borrow_mut() {
             Ok(mut file) => {

@@ -16,6 +16,7 @@
 // Modules handling the Noble OS architecture:
 //   address_space: Constants related to the Noble address space layout
 //   input_events:  Structs, enums, and functions for handling user keyboard, mouse, and controller inputs
+//   file_system:   Structs and traits for handling file systems in a generic manner
 
 
 // HEADER
@@ -69,9 +70,3 @@ macro_rules!numeric_enum {(
         }
     }
 }
-
-
-//TRAITS
-//Locational Read and Write
-pub trait LocationalRead  {fn read (&self, offset: usize, buffer: &mut [u8]) -> Result<(), &'static str>;}
-pub trait LocationalWrite {fn write(&self, offset: usize, buffer: &[u8])     -> Result<(), &'static str>;}
