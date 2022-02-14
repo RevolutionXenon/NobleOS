@@ -344,7 +344,7 @@ pub extern "sysv64" fn _start() -> ! {
         };
         idt.write_entry(&int_spurious, 0xFF);
         //Write IDTR
-        unsafe {idt.write_idtr();}
+        idt.write_idtr();
         //Diagnostic
         writeln!(printer, "IDT Linear Address: 0x{:016X}", idt.address.0);
         //Update TSS
@@ -490,7 +490,6 @@ pub extern "sysv64" fn _start() -> ! {
             },
             Err(_) => {writeln!(printer, "Boot sector invalid.");},
         }
-        
     }
 
     // FINISH LOADING

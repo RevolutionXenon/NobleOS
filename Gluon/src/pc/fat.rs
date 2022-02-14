@@ -15,31 +15,58 @@ use core::str;
 
 // FAT16 FILE SYSTEMS
 //Full FAT16 Handling Routines
-pub struct FATFileSystem<'s, RW: 's> {
-    pub volume:  &'s RW,
-    pub boot_sector: FATBootSector,
-    pub fat:         FATTable<'s, RW>,
+pub struct FATFileSystem<'s, V: 's> {
+    pub volume:     &'s V,
+    pub boot_sector:    FATBootSector,
+    pub fat:            FATTable<'s, V>,
+    pub root_directory: FATDirectory<VolumeFromVolume<'s, V>>,
 }
-impl<'s, RW: 's>            FATFileSystem<'s, RW> {
+impl<'s, WO: 's+VolumeWrite> FATFileSystem<'s, WO> {
     // CONSTRUCTOR
-    pub fn new(volume: &'s RW, boot_sector: FATBootSector) -> Result <Self, &'static str> {
+    pub fn format_new(volume: &'s WO, boot_sector: FATBootSector) -> Result <Self, &'static str> {
+        //Clear
+        for i in 0..(boot_sector.first_data_sector() * boot_sector.bytes_per_sector as u32) as usize / 0x200 {  
+            volume.write(0x200*i, &[0u8; 0x200])?;
+        }
+        //Write Boot Sector
+        volume.write(0, &<[u8;512]>::try_from(boot_sector)?)?;
         //Create FAT
         let fat = FATTable::new(volume, boot_sector);
+        fat.write_raw(0, 0xFFF0)?;
+        fat.write_raw(1, 0xFFFF)?;
+        //Create Root Directory
+        let root_directory = FATDirectory {
+            directory: VolumeFromVolume {
+                volume,
+                offset: (boot_sector.first_root_sector() * boot_sector.bytes_per_sector as u32) as usize,
+                size: boot_sector.root_entry_count as usize * 32,
+            },
+            num_entries: boot_sector.root_entry_count as u32,
+        };
         //Return
-        Ok(Self {volume, boot_sector, fat})
+        Ok(Self {volume, boot_sector, fat, root_directory})
     }
 }
-impl<'s, RW: 's+VolumeRead> FATFileSystem<'s, RW> {
+impl<'s, RO: 's+VolumeRead>  FATFileSystem<'s, RO> {
     // CONSTRUCTOR
-    pub fn from_existing_volume(volume: &'s RW) -> Result<Self, &'static str> {
+    pub fn from_existing_volume(volume: &'s RO) -> Result<Self, &'static str> {
         //Load Boot Sector
         let mut buffer: [u8; 0x200] = [0u8; 0x200];
         volume.read(0x00, &mut buffer)?;
         let boot_sector = FATBootSector::try_from(buffer)?;
         //Load FAT
         let fat = FATTable::new(volume, boot_sector);
+        //Load Root Directory
+        let root_directory = FATDirectory {
+            directory: VolumeFromVolume {
+                volume,
+                offset: (boot_sector.first_root_sector() * boot_sector.bytes_per_sector as u32) as usize,
+                size: boot_sector.root_entry_count as usize * 32,
+            },
+            num_entries: boot_sector.root_entry_count as u32,
+        };
         //Return
-        Ok(Self {volume, boot_sector, fat})
+        Ok(Self {volume, boot_sector, fat, root_directory})
     }
 }
 
@@ -73,8 +100,12 @@ impl FATBootSector {
     pub fn total_sectors     (&self) -> u32 {if self.total_sectors_16 != 0 {self.total_sectors_16 as u32} else {self.total_sectors_32}}
     pub fn cluster_size      (&self) -> u32 {self.bytes_per_sector as u32 * self.sectors_per_cluster as u32}
     pub fn first_fat_sector  (&self) -> u32 {self.reserved_sector_count as u32}
+    pub fn fat_location      (&self) -> u32 {self.first_fat_sector() * self.bytes_per_sector as u32}
+    pub fn fat_size          (&self) -> u32 {self.sectors_per_fat as u32 * self.bytes_per_sector as u32}
     pub fn first_root_sector (&self) -> u32 {self.first_fat_sector() + (self.sectors_per_fat as u32 * self.fat_number as u32)}
+    pub fn root_location     (&self) -> u32 {self.first_root_sector() * self.bytes_per_sector as u32}
     pub fn first_data_sector (&self) -> u32 {self.first_root_sector() + ((self.root_entry_count as u32 * 32) / self.bytes_per_sector as u32)}
+    pub fn data_location     (&self) -> u32 {self.first_data_sector() * self.bytes_per_sector as u32}
 }
 impl TryFrom<[u8;0x200]> for FATBootSector {
     type Error = &'static str;
@@ -207,11 +238,13 @@ pub struct FATTable<'s, RW: 's> {
 impl<'s, RW: 's>             FATTable<'s, RW> {
     // CONSTRUCTOR
     pub fn new(volume: &'s RW, boot_sector: FATBootSector) -> Self {
-        let start_location = boot_sector.first_fat_sector() * boot_sector.bytes_per_sector as u32;
-        let entry_count = (boot_sector.total_sectors() - boot_sector.first_data_sector()) / boot_sector.sectors_per_cluster as u32 + 2;
-        let fat_count = boot_sector.fat_number as u32;
-        let fat_size = boot_sector.sectors_per_fat as u32 * boot_sector.bytes_per_sector as u32;
-        Self {volume, start_location, entry_count, fat_count, fat_size,}
+        Self {
+            volume,
+            start_location: boot_sector.fat_location(),
+            entry_count:    (boot_sector.total_sectors() - boot_sector.first_data_sector()) / boot_sector.sectors_per_cluster as u32 + 2,
+            fat_count:      boot_sector.fat_number as u32,
+            fat_size:       boot_sector.fat_size()
+        }
     }
 }
 impl<'s, RW: 's+VolumeRead>  FATTable<'s, RW> {
@@ -219,8 +252,8 @@ impl<'s, RW: 's+VolumeRead>  FATTable<'s, RW> {
     pub fn read_entry(&self, cluster: u16) -> Result<FATTableEntry, &'static str> {
         if cluster as u32 > self.entry_count {return Err("FAT 16 Table Read Entry: Cluster index out of bounds.")}
         let mut buffer = [0u8;2];
-        let offset = self.start_location as usize + (2 * cluster as usize);
-        self.volume.read(offset, &mut buffer)?;
+        let table_offset = (cluster * 2) as u32;
+        self.volume.read((self.start_location + table_offset) as usize, &mut buffer)?;
         let entry_raw = u16::from_le_bytes(buffer);
         Ok(match entry_raw {
             0x0000          => FATTableEntry::Free,
@@ -254,14 +287,14 @@ impl<'s, RW: 's+VolumeWrite> FATTable<'s, RW> {
         let table_offset = (cluster * 2) as u32;
         let entry_bytes = entry.to_le_bytes();
         for i in 0..self.fat_count {
-            self.volume.write((self.start_location + i*self.fat_size + table_offset) as usize, &entry_bytes)?;
+            self.volume.write((self.start_location + (i*self.fat_size) + table_offset) as usize, &entry_bytes)?;
         }
         Ok(())
     }
-
 }
 
 //File Allocation Table Entry
+#[derive(Debug)]
 pub enum FATTableEntry {
     Free,
     Reserved,
@@ -273,11 +306,11 @@ pub enum FATTableEntry {
 
 // FAT DIRECTORY
 //Directory
-pub struct FATDirectory<'s, RW: 's+VolumeRead+VolumeWrite> {
-    pub directory: &'s RW,
+pub struct FATDirectory<V> {
+    pub directory:     V,
     pub num_entries:   u32,
 }
-impl<'s, RW: 's+VolumeRead+VolumeWrite> FATDirectory<'s, RW> {
+impl<RW: VolumeRead+VolumeWrite> FATDirectory<RW> {
     pub fn read_entry(&self, position: u32) -> Result<FATDirectoryEntry, &'static str> {
         if position >= self.num_entries {return Err("FAT16 Directory: Index out of bounds on read.")}
         FATDirectoryEntry::try_from({
@@ -485,10 +518,10 @@ impl <'s, RO: 's+VolumeRead>             VolumeRead  for FATFile<'s, RO> {
     // READ ONLY
     fn read (&self, offset: usize, buffer: &mut [u8]) -> Result<(), &'static str> {
         //Test bounds to ensure read won't fail
-        if buffer.is_empty()                        {return Ok(())}
+        if buffer.is_empty()                       {return Ok(())}
         let read_offset: u32 = u32::try_from(offset      ).map_err(|_| "FAT16 File: Offset larger than 4GiB requested.")?;
         let buffer_len:  u32 = u32::try_from(buffer.len()).map_err(|_| "FAT16 File: Buffer larger than 4GiB requested.")?;
-        if read_offset+buffer_len >= self.file_size {return Err("FAT16 File: Out of bounds on read.")}
+        if read_offset+buffer_len > self.file_size {return Err("FAT16 File: Out of bounds on read.")}
         //Calculate cluster and byte offsets into volume
         let start_cluster_offset: u32 = read_offset % self.cluster_size;
         let start_index:          u32 = read_offset / self.cluster_size;
@@ -500,7 +533,7 @@ impl <'s, RO: 's+VolumeRead>             VolumeRead  for FATFile<'s, RO> {
             //Retrieve next cluster
             current_cluster = match self.fat.read_entry(current_cluster as u16)? {
                 FATTableEntry::Used(cluster) => cluster as u32,
-                _ => {return Err("FAT16 File: Cluster error (corrupted file).")}
+                _ => {return Err("FAT16 File: Cluster error during read seek (corrupted file).")}
             };
         }
         //Start reading
@@ -509,39 +542,39 @@ impl <'s, RO: 's+VolumeRead>             VolumeRead  for FATFile<'s, RO> {
             //If only one cluster needs to be accessed
             if index == start_index && index == end_index {
                 //Read Data
-                let volume_offset: u32 = self.data_area_offset + current_cluster * self.cluster_size + start_cluster_offset;
+                let volume_offset: u32 = self.data_area_offset + (current_cluster - 2) * self.cluster_size + start_cluster_offset;
                 self.volume.read(volume_offset as usize, buffer)?;
             }
             //If its in the first cluster (may need to truncate)
             else if index == start_index {
                 //Read Data
-                let volume_offset: u32 = self.data_area_offset + current_cluster * self.cluster_size + start_cluster_offset;
+                let volume_offset: u32 = self.data_area_offset + (current_cluster - 2) * self.cluster_size + start_cluster_offset;
                 let new_buffer_offset: usize = (self.cluster_size - start_cluster_offset) as usize;
                 self.volume.read(volume_offset as usize, &mut buffer[0..new_buffer_offset])?;
                 buffer_offset = new_buffer_offset;
                 //Retrieve next cluster
                 current_cluster = match self.fat.read_entry(current_cluster as u16)? {
                     FATTableEntry::Used(cluster) => cluster as u32,
-                    _ => {return Err("FAT16 File: Cluster error (corrupted file).")}
+                    _ => {return Err("FAT16 File: Cluster error during first sector read (corrupted file).")}
                 };
             }
             //If its in the final cluster (may need to truncate)
             else if index == end_index {
                 //Read Data
-                let volume_offset: u32 = self.data_area_offset + current_cluster * self.cluster_size;
+                let volume_offset: u32 = self.data_area_offset + (current_cluster - 2) * self.cluster_size;
                 self.volume.read(volume_offset as usize, &mut buffer[buffer_offset..buffer_offset+end_cluster_offset as usize])?;
             }
             //If its in the middle (always reads entire cluster)
             else {
                 //Read Data
-                let volume_offset: u32 = self.data_area_offset + current_cluster * self.cluster_size;
+                let volume_offset: u32 = self.data_area_offset + (current_cluster - 2) * self.cluster_size;
                 let new_buffer_offset: usize = buffer_offset + self.cluster_size as usize;
                 self.volume.read(volume_offset as usize, &mut buffer[buffer_offset..new_buffer_offset])?;
                 buffer_offset = new_buffer_offset;
                 //Retrieve next cluster
                 current_cluster = match self.fat.read_entry(current_cluster as u16)? {
                     FATTableEntry::Used(cluster) => cluster as u32,
-                    _ => {return Err("FAT16 File: Cluster error (corrupted file).")}
+                    _ => {return Err("FAT16 File: Cluster error during mid sector read (corrupted file).")}
                 };
             }
         }
@@ -553,21 +586,21 @@ impl <'s, RW: 's+VolumeRead+VolumeWrite> VolumeWrite for FATFile<'s, RW> {
     fn write(&self, offset: usize, buffer: &[u8])     -> Result<(), &'static str> {
         //Test bounds to ensure read won't fail
         if buffer.is_empty()                        {return Ok(())}
-        let read_offset: u32 = u32::try_from(offset      ).map_err(|_| "FAT16 File: Offset larger than 4GiB requested.")?;
+        let write_offset: u32 = u32::try_from(offset      ).map_err(|_| "FAT16 File: Offset larger than 4GiB requested.")?;
         let buffer_len:  u32 = u32::try_from(buffer.len()).map_err(|_| "FAT16 File: Buffer larger than 4GiB requested.")?;
-        if read_offset+buffer_len >= self.file_size {return Err("FAT16 File: Out of bounds on read.")}
+        if write_offset+buffer_len > self.file_size {return Err("FAT16 File: Out of bounds on write.")}
         //Calculate cluster and byte offsets into volume
-        let start_cluster_offset: u32 = read_offset % self.cluster_size;
-        let start_index:          u32 = read_offset / self.cluster_size;
-        let end_index:            u32 = (read_offset + buffer_len - 1) / self.cluster_size;
-        let end_cluster_offset:   u32 = (read_offset + buffer_len - 1) % self.cluster_size + 1;
+        let start_cluster_offset: u32 = write_offset % self.cluster_size;
+        let start_index:          u32 = write_offset / self.cluster_size;
+        let end_index:            u32 = (write_offset + buffer_len - 1) / self.cluster_size;
+        let end_cluster_offset:   u32 = (write_offset + buffer_len - 1) % self.cluster_size + 1;
         //Move to first cluster which needs to be read from
         let mut current_cluster: u32 = self.start_cluster;
         for _ in 0..start_index {
             //Retrieve next cluster
             current_cluster = match self.fat.read_entry(current_cluster as u16)? {
                 FATTableEntry::Used(cluster) => cluster as u32,
-                _ => {return Err("FAT16 File: Cluster error (corrupted file).")}
+                _ => {return Err("FAT16 File: Cluster error during write seek (corrupted file).")}
             };
         }
         //Start writing
@@ -576,39 +609,39 @@ impl <'s, RW: 's+VolumeRead+VolumeWrite> VolumeWrite for FATFile<'s, RW> {
             //If only one cluster needs to be accessed
             if index == start_index && index == end_index {
                 //Write Data
-                let volume_offset: u32 = self.data_area_offset + current_cluster * self.cluster_size + start_cluster_offset;
+                let volume_offset: u32 = self.data_area_offset + (current_cluster - 2) * self.cluster_size + start_cluster_offset;
                 self.volume.write(volume_offset as usize, buffer)?;
             }
             //If its in the first cluster (may need to truncate)
             else if index == start_index {
                 //Write Data
-                let volume_offset: u32 = self.data_area_offset + current_cluster * self.cluster_size + start_cluster_offset;
+                let volume_offset: u32 = self.data_area_offset + (current_cluster - 2) * self.cluster_size + start_cluster_offset;
                 let new_buffer_offset: usize = (self.cluster_size - start_cluster_offset) as usize;
                 self.volume.write(volume_offset as usize, &buffer[0..new_buffer_offset])?;
                 buffer_offset = new_buffer_offset;
                 //Retrieve next cluster
                 current_cluster = match self.fat.read_entry(current_cluster as u16)? {
                     FATTableEntry::Used(cluster) => cluster as u32,
-                    _ => {return Err("FAT16 File: Cluster error (corrupted file).")}
+                    _ => {return Err("FAT16 File: Cluster error during first sector write (corrupted file).")}
                 };
             }
             //If its in the final cluster (may need to truncate)
             else if index == end_index {
                 //Write Data
-                let volume_offset: u32 = self.data_area_offset + current_cluster * self.cluster_size;
+                let volume_offset: u32 = self.data_area_offset + (current_cluster - 2) * self.cluster_size;
                 self.volume.write(volume_offset as usize, &buffer[buffer_offset..buffer_offset+end_cluster_offset as usize])?;
             }
             //If its in the middle (always reads entire cluster)
             else {
                 //Write data
-                let volume_offset: u32 = self.data_area_offset + current_cluster * self.cluster_size;
+                let volume_offset: u32 = self.data_area_offset + (current_cluster - 2) * self.cluster_size;
                 let new_buffer_offset: usize = buffer_offset + self.cluster_size as usize;
                 self.volume.write(volume_offset as usize, &buffer[buffer_offset..new_buffer_offset])?;
                 buffer_offset = new_buffer_offset;
                 //Retrieve next cluster
                 current_cluster = match self.fat.read_entry(current_cluster as u16)? {
                     FATTableEntry::Used(cluster) => cluster as u32,
-                    _ => {return Err("FAT16 File: Cluster error (corrupted file).")}
+                    _ => {return Err("FAT16 File: Cluster error during mid sector write (corrupted file).")}
                 };
             }
         }

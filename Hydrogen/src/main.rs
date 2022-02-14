@@ -156,19 +156,22 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
 
     // GRAPHICS SETUP
     //User Interface initialization
-    frame.horizontal_line(PRINT_Y-1,     0,         FRAME_WIDTH-1,  bluespace);
-    frame.horizontal_line(INPUT_Y-1,     0,         FRAME_WIDTH-1,  bluespace);
-    frame.horizontal_line(INPUT_Y+1,     0,         FRAME_WIDTH-1,  bluespace);
-    frame.vertical_line(  0,             PRINT_Y-1, INPUT_Y+1,      bluespace);
-    frame.vertical_line(  FRAME_WIDTH-1, PRINT_Y-1, INPUT_Y+1,      bluespace);
-    frame.horizontal_string("NOBLE OS",            0, 0,                                         bluespace);
-    frame.horizontal_string("HYDROGEN BOOTLOADER", 0, FRAME_WIDTH - 20 - HYDROGEN_VERSION.len(), bluespace);
-    frame.horizontal_string(HYDROGEN_VERSION,      0, FRAME_WIDTH -      HYDROGEN_VERSION.len(), bluespace);
-    frame.render();
-    writeln!(printer, "\n=== WELCOME TO NOBLE OS ===\n");
-    writeln!(printer, "Hydrogen Bootloader     {}", HYDROGEN_VERSION);
-    writeln!(printer, "Photon Graphics Library {}", PHOTON_VERSION);
-    writeln!(printer, "Gluon Boot Library      {}", GLUON_VERSION);
+    {
+        frame.horizontal_line(PRINT_Y-1,     0,         FRAME_WIDTH-1,  bluespace);
+        frame.horizontal_line(INPUT_Y-1,     0,         FRAME_WIDTH-1,  bluespace);
+        frame.horizontal_line(INPUT_Y+1,     0,         FRAME_WIDTH-1,  bluespace);
+        frame.vertical_line(  0,             PRINT_Y-1, INPUT_Y+1,      bluespace);
+        frame.vertical_line(  FRAME_WIDTH-1, PRINT_Y-1, INPUT_Y+1,      bluespace);
+        frame.horizontal_string("NOBLE OS",            0, 0,                                         bluespace);
+        frame.horizontal_string("HYDROGEN BOOTLOADER", 0, FRAME_WIDTH - 20 - HYDROGEN_VERSION.len(), bluespace);
+        frame.horizontal_string(HYDROGEN_VERSION,      0, FRAME_WIDTH -      HYDROGEN_VERSION.len(), bluespace);
+        frame.render();
+        writeln!(printer, "\n=== WELCOME TO NOBLE OS ===\n");
+        writeln!(printer, "Hydrogen Bootloader     {}", HYDROGEN_VERSION);
+        writeln!(printer, "Photon Graphics Library {}", PHOTON_VERSION);
+        writeln!(printer, "Gluon Boot Library      {}", GLUON_VERSION);
+    }
+
 
     // LOAD KERNEL
     //Find kernel on disk
@@ -211,16 +214,18 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
     }
     //Print ELF header info
     writeln!(printer, "\n=== KERNEL INFO ===\n");
-    writeln!(printer, "Kernel Entry Point:                 0x{:16X}", kernel.header.entry_point);
-    writeln!(printer, "Kernel Program Header Offset:       0x{:16X}", kernel.header.program_header_offset);
-    writeln!(printer, "Kernel Section Header Offset:       0x{:16X}", kernel.header.section_header_offset);
-    writeln!(printer, "Kernel ELF Header Size:             0x{:16X}", kernel.header.header_size);
-    writeln!(printer, "Kernel Program Header Entry Size:   0x{:16X}", kernel.header.program_header_entry_size);
-    writeln!(printer, "Kernel Program Header Number:       0x{:16X}", kernel.header.program_header_number);
-    writeln!(printer, "Kernel Section Header Entry Size:   0x{:16X}", kernel.header.section_header_entry_size);
-    writeln!(printer, "Kernel Section Header Number:       0x{:16X}", kernel.header.section_header_number);
-    writeln!(printer, "Kernel Section Header String Index: 0x{:16X}", kernel.header.string_section_index);
-    writeln!(printer, "Kernel Code Size:                   0x{:16X} or {}KiB", kernel_size, kernel_size / KIB);
+    {
+        writeln!(printer, "Kernel Entry Point:                 0x{:16X}", kernel.header.entry_point);
+        writeln!(printer, "Kernel Program Header Offset:       0x{:16X}", kernel.header.program_header_offset);
+        writeln!(printer, "Kernel Section Header Offset:       0x{:16X}", kernel.header.section_header_offset);
+        writeln!(printer, "Kernel ELF Header Size:             0x{:16X}", kernel.header.header_size);
+        writeln!(printer, "Kernel Program Header Entry Size:   0x{:16X}", kernel.header.program_header_entry_size);
+        writeln!(printer, "Kernel Program Header Number:       0x{:16X}", kernel.header.program_header_number);
+        writeln!(printer, "Kernel Section Header Entry Size:   0x{:16X}", kernel.header.section_header_entry_size);
+        writeln!(printer, "Kernel Section Header Number:       0x{:16X}", kernel.header.section_header_number);
+        writeln!(printer, "Kernel Section Header String Index: 0x{:16X}", kernel.header.string_section_index);
+        writeln!(printer, "Kernel Code Size:                   0x{:16X} or {}KiB", kernel_size, kernel_size / KIB);
+    }
 
     // MEMORY MAP SETUP
     let pml4: PageMap;
@@ -274,35 +279,6 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
         pml4.write_entry(IDENTITY_OCT,     PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml3_offset_identity_map.physical, true, true, true ).unwrap()).unwrap();
         //pml4.write_entry(PAGE_MAP_OCT,     PageMapEntry::new(PageMapLevel::L4, PageMapEntryType::Table, pml4                    .physical, true, true, true ).unwrap()).unwrap();
         // FINISH
-    }
-
-    // RAMDISK SETUP
-    unsafe {
-        let address = allocate_page_zeroed(boot_services, MemoryType::LOADER_DATA);
-        let pointer = address.0 as *mut u8;
-        let boot_sector = FATBootSector {
-            jump_instruction:      [0xEB, 0x3C, 0x90],
-            oem_name:              [0x4E, 0x6F, 0x62, 0x6C, 0x65, 0x4F, 0x53, 0x20],
-            bytes_per_sector:      BytesPerSector::bps_4096,
-            sectors_per_cluster:   SectorsPerCluster::spc_1,
-            reserved_sector_count: 0x10,
-            fat_number:            0x01,
-            root_entry_count:      0x0800,
-            total_sectors_16:      0x0040,
-            media:                 MediaType::FIXED_DISK,
-            sectors_per_fat:       0x0020,
-            sectors_per_track:     0x0000,
-            heads_number:          0x0000,
-            hidden_sectors:        0x00000000,
-            total_sectors_32:      0x00000000,
-            drive_number:          0x80,
-            volume_id:             0x00000000,
-            volume_label:          [0x4E, 0x6F, 0x62, 0x6C, 0x65, 0x4F, 0x53, 0x20, 0x52, 0x41, 0x4D],
-            file_system_type:      [0x46, 0x41, 0x54, 0x20, 0x20, 0x20, 0x20, 0x20],
-            bootstrap_code:        [0xCC; 448],
-        };
-        write_volatile(pointer as *mut [u8;512], <[u8;512]>::try_from(boot_sector).unwrap());
-        pml3_ramdisk.map_pages_offset_4kib(address, 0, PAGE_SIZE_4KIB, false, false, true);
     }
 
     // IDT SETUP
@@ -374,7 +350,6 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
 
     // PREBOOT SEQUENCE
     writeln!(printer, "\n=== PREBOOT ===\n");
-    
     let entry_point_virtual = oct4_to_pointer(KERNEL_OCT).unwrap() as u64 + kernel.header.entry_point;
     let stack_point_virtual = oct4_to_pointer(KERNEL_OCT).unwrap() as u64 + PAGE_SIZE_512G as u64 - 1024;
     let pml4_point_physical = pml4.physical.0;
@@ -435,6 +410,66 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
     unsafe {
         write_volatile(0x1000 as *mut u8, 0xCD);
         write_volatile(0x1001 as *mut u8, 0x02);
+    }
+
+    // RAMDISK SETUP
+    writeln!(printer, "\n=== RAMDISK SETUP ===\n");
+    unsafe {
+        //Volume
+        let volume_pointer = allocate_memory(boot_services, MemoryType::LOADER_DATA, 8 * MIB, PAGE_SIZE_4KIB);
+        let address = PhysicalAddress(volume_pointer as usize);
+        let volume = MemoryVolume {
+            offset: address.0,
+            size: 8 * MIB,
+        };
+        //Page Map
+        pml3_ramdisk.map_pages_offset_4kib(address, 0, 8 * MIB, false, false, true);
+        //Boot Sector
+        let boot_sector = FATBootSector {
+            jump_instruction:      [0xEB, 0x3C, 0x90],
+            oem_name:              [0x4E, 0x6F, 0x62, 0x6C, 0x65, 0x4F, 0x53, 0x20],
+            bytes_per_sector:      BytesPerSector::bps_4096,
+            sectors_per_cluster:   SectorsPerCluster::spc_1,
+            reserved_sector_count: 0x10,
+            fat_number:            0x01,
+            root_entry_count:      0x0800,
+            total_sectors_16:      0x0800,
+            media:                 MediaType::FIXED_DISK,
+            sectors_per_fat:       0x0020,
+            sectors_per_track:     0x0000,
+            heads_number:          0x0000,
+            hidden_sectors:        0x00000000,
+            total_sectors_32:      0x00000000,
+            drive_number:          0x80,
+            volume_id:             0x00000000,
+            volume_label:          [0x4E, 0x6F, 0x62, 0x6C, 0x65, 0x4F, 0x53, 0x20, 0x52, 0x41, 0x4D],
+            file_system_type:      [0x46, 0x41, 0x54, 0x20, 0x20, 0x20, 0x20, 0x20],
+            bootstrap_code:        [0xCC; 448],
+        };
+        volume.write(0, &<[u8;512]>::try_from(boot_sector).unwrap()).unwrap();
+        //File System
+        let file_system = FATFileSystem::format_new(&volume, boot_sector).unwrap();
+        writeln!(printer, "test");
+        writeln!(printer, "{:?}", file_system.fat.read_entry(0x0002));
+        //Create File
+        file_system.fat.write_entry(0x0002, FATTableEntry::Used(0x0003));
+        file_system.fat.write_entry(0x0003, FATTableEntry::Used(0x0004));
+        file_system.fat.write_entry(0x0004, FATTableEntry::End);
+        file_system.root_directory.write_entry(0, FATDirectoryEntry{
+            file_name:          [0x41;11],
+            file_attributes:    FATFileAttributes::new_file(false, false, false),
+            start_cluster_high: 0x0000,
+            start_cluster_low:  0x0002,
+            creation_time_ss:   0,
+            creation_time:      0,
+            creation_date:      0,
+            file_size:          12 * KIB as u32,
+        });
+        let test_file = FATFile::new_from_start_cluster(&file_system, boot_sector.root_location(), 0x0002, 10 * KIB as u32).unwrap();
+        for i in 0u8..10 {
+            write!(printer, "{} ", i);
+            test_file.write(i as usize*KIB, &[i+1;KIB]).unwrap();
+        }
     }
 
     // COMMAND LINE
