@@ -1,4 +1,5 @@
 // GLUON: PROGRAMMABLE INTERVAL TIMER
+// Consts, Functions, and Enums related to the handling of the 8253 and 8254 Programmable Interval Timer
 
 
 // HEADER

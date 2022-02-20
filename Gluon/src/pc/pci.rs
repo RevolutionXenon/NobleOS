@@ -1,4 +1,4 @@
-// GLUON: x86-64 PCI
+// GLUON: PERSONAL COMPUTER PERIPHERAL COMPONENT INTERCONNECT
 // Structs and objects related to the handling of the PCI bus
 
 

@@ -1,4 +1,5 @@
 // GLUON: x86-64 MODEL SPECIFIC REGISTER
+// Structs and objects handling Model Specific Registers
 
 
 // HEADER

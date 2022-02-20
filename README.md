@@ -12,46 +12,50 @@
 
 A UEFI stub which handles:
 
-* Memory and control register diagnostics
-* Virtual memory initialization
-* Kernel entry
-* (PLANNED) Kernel space binary loading
+* Memory and Control Register Diagnostics
+* Virtual Memory Initialization
+* Kernel Entry
+* (PLANNED) Kernel Space Binary Loading
 
 ## Helium Kernel
 
 An ELF binary which handles:
 
-* Code execution
-* Interrupt handling
-* CPU time sharing
-* (PLANNED) System call handling
-* (PLANNED) Thread management
-* (PLANNED) Program loading
-* (PLANNED) Inter-process communication handling
+* Code Execution
+* Interrupt Handling
+* CPU Time Sharing
+* (PLANNED) System Call Handling
+* (PLANNED) Thread Management
+* (PLANNED) Program Loading
+* (PLANNED) Inter-Process Communication Handling
 
 ## Photon Graphics Library
 
 A Rust Library which handles:
 
-* Drawing text to a frame buffer
+* Drawing Text
 
 ## Gluon Architecture Library
 
 A Rust Library which handles:
 
-* The x86-64 CPU Architecture:
-  * Long mode page tables
-  * Segmentation data structures
-  * The syscall instruction
-  * The PCI bus
-  * The Programmable Interrupt Controller
+* The x86-64 Instruction Set Architecture:
+  * Intrinsic Instructions
   * The Local Advanced Programmable Interrupt Controller
+  * Model Specific Registers
+  * Long Mode Page Tables
+  * Segmentation Data Structures
+  * System Calls
 * The PC Defacto Standard System Architecture
-  * The PC's standard io-space layout
-  * The File Allocation Table (FAT) file system
-  * The PS/2 controller and devices
+  * The File Allocation Table (FAT) File System
+  * The PC's Standard I/O-space Layout
+  * The PCI Bus
+  * The 8259 Programmable Interrupt Controller
+  * The 8253 and 8254 Programmable Interval Timer
+  * The 8042 PS/2 Controller and Devices
 * The System V OS Architecture:
-  * System V object files (ELF files)
+  * System V Object Files (ELF Files)
 * The Noble OS Architecture:
-  * The Noble address space layout
-  * User keyboard, mouse, and controller inputs
+  * The Noble Address Space Layout
+  * User Keyboard, Mouse, and Controller Inputs
+  * Noble File System Handles

@@ -4,32 +4,27 @@
 
 // HEADER
 //Imports
-use core::{arch::x86_64::__cpuid, ptr::{read_volatile, write_volatile}};
-use ::x86_64::registers::model_specific::Msr;
-
-//Consts
-const APIC_CPUID: u32 = 1<<9;
-const APIC_ENABLE: u64 = 1<<11;
+use crate::x86_64::instructions::cpuid;
+use crate::x86_64::msr;
+use core::ptr::{read_volatile, write_volatile};
 
 
 // LOCAL ADVANCED PROGRAMMABLE INTERRUPT CONTROLLER
-static mut LAPIC_BASE_MSR: Msr = Msr::new(0x001B);
 pub static mut LAPIC_ADDRESS: *mut u8 = 0xFEE00000 as *mut u8;
 
 //CPUID Operations
 pub unsafe fn apic_check() -> bool {
-    let r = __cpuid(0x0001);
-    r.edx & APIC_CPUID > 0
+    cpuid(0x0001, 0).3 & (1<<9) > 0
 }
 
 //Model Specific Register Operations
 pub unsafe fn set_base(base: u64) -> Result<(), &'static str> {
     if base % (1<<12) != 0 {return Err("APIC Set Base: Base not aligned on 4KiB Boundary.")}
-    LAPIC_BASE_MSR.write(base | APIC_ENABLE);
+    msr::IA32_APIC_BASE.write(base | (1<<11));
     Ok(())
 }
 pub unsafe fn get_base() -> u64 {
-    LAPIC_BASE_MSR.read() & 0xFFFF_FFFF_FFFF_F000
+    msr::IA32_APIC_BASE.read() & 0xFFFF_FFFF_FFFF_F000
 }
 
 //General LAPIC Register Operations
