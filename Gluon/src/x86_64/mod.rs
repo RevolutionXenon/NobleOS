@@ -10,9 +10,12 @@
 
 // HEADER
 //Modules
+pub mod instructions;
 pub mod lapic;
+pub mod msr;
 pub mod paging;
 pub mod pci;
 pub mod pic;
+pub mod pit;
 pub mod segmentation;
 pub mod syscall;

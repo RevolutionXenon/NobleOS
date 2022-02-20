@@ -52,7 +52,7 @@ use ::x86_64::instructions::hlt as halt;
 use ::x86_64::registers::control::*;
 
 //Constants
-const HYDROGEN_VERSION: &str = "vDEV-2022-02-10"; //CURRENT VERSION OF BOOTLOADER
+const HYDROGEN_VERSION: &str = "vDEV-2022-02-13"; //CURRENT VERSION OF BOOTLOADER
 
 
 // MACROS
@@ -470,6 +470,7 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
             write!(printer, "{} ", i);
             test_file.write(i as usize*KIB, &[i+1;KIB]).unwrap();
         }
+        test_file.set_name("test.raw").unwrap();
     }
 
     // COMMAND LINE

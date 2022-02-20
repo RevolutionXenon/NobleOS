@@ -25,7 +25,39 @@ impl<'a, T: 'a + VolumeWrite> VolumeWrite for &'a T {
         (**self).write(offset, buffer)
     }
 }
-//File Handle Read
+
+//File System Read Handle
+pub trait FileSystemRead  {
+    //Associated Types
+    type File: FileRead;
+    type Directory: DirectoryRead;
+    //Find File/Directory
+    fn retrieve_file      (&self, path: &str, delimiter: char) -> Result<Self::File, &'static str>;
+    fn retrieve_directory (&self, path: &str, delimiter: char) -> Result<Self::Directory, &'static str>;
+}
+//File System Write Handle
+pub trait FileSystemWrite {
+    //Associated Types
+    type File: FileWrite;
+    type Directory: DirectoryWrite;
+    //New File/Directory
+    fn create_file      (&self, size: usize, path: &str, delimiter: char) -> Result<Self::File, &'static str>;
+    fn create_directory (&self, path: &str, delimiter: char) -> Result<Self::Directory, &'static str>;
+    //Delete File/Directory
+    fn delete_file      (&self, path: &str, delimiter: char) -> Result<(), &'static str>;
+    fn delete_directory (&self, path: &str, delimiter: char) -> Result<(), &'static str>;
+}
+
+//Directory Read Handle
+pub trait DirectoryRead  {
+    //Get List of Files (iterator?)
+}
+//Directory Write Handle
+pub trait DirectoryWrite {
+    //???
+}
+
+//File Read Handle
 pub trait FileRead    {
     fn get_name<'f>  (&self, buffer: &'f mut [u8]) -> Result<&'f str,  &'static str>;
     fn get_size      (&self)                       -> Result<usize,    &'static str>;
@@ -33,7 +65,7 @@ pub trait FileRead    {
     fn get_write     (&self)                       -> Result<bool,     &'static str>;
     fn get_hidden    (&self)                       -> Result<bool,     &'static str>;
 }
-//File Handle Write
+//File Write Handle
 pub trait FileWrite   {
     fn set_name      (&self, name: &str)           -> Result<(),       &'static str>;
     fn set_size      (&self, size: usize)          -> Result<(),       &'static str>;

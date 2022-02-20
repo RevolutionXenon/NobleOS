@@ -489,9 +489,9 @@ impl From<FATFileAttributes> for [u8;2] {
 
 // FILE HANDLE
 //FAT File
-pub struct FATFile<'s, RW: 's> {
-    volume:              &'s RW,
-    fat:                 &'s FATTable<'s, RW>,
+pub struct FATFile<'s, V: 's> {
+    volume:              &'s V,
+    fat:                 &'s FATTable<'s, V>,
     directory_entry_pointer: u32,
     data_area_offset:        u32,
     start_cluster:           u32,
@@ -708,7 +708,7 @@ impl <'s, RW: 's+VolumeRead+VolumeWrite> FileWrite   for FATFile<'s, RW> {
         if name_bytes.len() > 12 {return Err("FAT16 File: Set name provided a name string which is too long.")}
         //Find delimiter between name and extension
         let mut delimiter_index: Option<usize> = None;
-        for i in 0..12 {
+        for i in 0..name_in.len() {
             if name_bytes[i] == 0x2E {delimiter_index = Some(i)}
         }
         //Determine name and extension from array
@@ -725,8 +725,8 @@ impl <'s, RW: 's+VolumeRead+VolumeWrite> FileWrite   for FATFile<'s, RW> {
         if ext_array.len()  > 3 {return Err("FAT16 File: Set name provided an extension which is too long.")}
         //Create name array
         let mut name_final = [0x20u8; 11];
-        name_final[0..8].clone_from_slice(name_array);
-        name_final[8..11].clone_from_slice(ext_array);
+        name_final[0..name_array.len()].clone_from_slice(name_array);
+        name_final[8..8+ext_array.len()].clone_from_slice(ext_array);
         //Load directory entry
         let mut directory_buffer: [u8; 0x20] = [0u8; 0x20];
         self.volume.read(self.directory_entry_pointer as usize, &mut directory_buffer)?;

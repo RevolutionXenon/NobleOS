@@ -1,4 +1,4 @@
-// GLUON: x86-64 TIMERS
+// GLUON: x86-64 LAPIC
 // Functions and objects related to the handling of the Local Advanced Programmable Interrupt Controller
 
 

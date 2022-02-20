@@ -33,10 +33,13 @@ use gluon::noble::input_events::*;
 use gluon::pc::fat::*;
 use gluon::pc::ports::*;
 use gluon::pc::ps2;
+use gluon::x86_64::instructions::*;
 use gluon::x86_64::lapic;
-use gluon::x86_64::pic;
+use gluon::x86_64::msr;
 use gluon::x86_64::paging::*;
 use gluon::x86_64::pci::*;
+use gluon::x86_64::pic;
+use gluon::x86_64::pit;
 use gluon::x86_64::segmentation::*;
 use core::arch::asm;
 use core::convert::TryFrom;
@@ -44,14 +47,11 @@ use core::fmt::Write;
 use core::panic::PanicInfo;
 use core::ptr::read_volatile;
 use core::ptr::write_volatile;
-use ::x86_64::instructions::hlt as halt;
-use ::x86_64::instructions::interrupts::disable as cli;
-use ::x86_64::instructions::interrupts::enable as sti;
 use ::x86_64::registers::control::Cr2;
 use ::x86_64::registers::control::Cr3;
 
 //Constants
-const HELIUM_VERSION: &str = "vDEV-2022-02-10"; //CURRENT VERSION OF KERNEL
+const HELIUM_VERSION: &str = "vDEV-2022-02-20"; //CURRENT VERSION OF KERNEL
 static WHITESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
 static _BLACKSPACE: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
 static _BLUESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE,  background: COLOR_BGRX_BLACK};
@@ -78,7 +78,7 @@ macro_rules!interrupt_halt_noe {
                 ss.descriptor_table_index, ss.requested_privilege_level as u8,
                 rflags, Cr2::read_raw());
             }
-            loop {halt();};
+            loop {hlt();};
         }
         handler as unsafe extern "x86-interrupt" fn(InterruptStackFrame) as usize as u64
     }}
@@ -103,7 +103,7 @@ macro_rules!interrupt_halt_err {
                 ss.descriptor_table_index, ss.requested_privilege_level as u8,
                 rflags, error_code, Cr2::read_raw());
             }
-            loop {halt();};
+            loop {hlt();};
         }
         handler as unsafe extern "x86-interrupt" fn(InterruptStackFrame, u64) as usize as u64
     }}
@@ -292,13 +292,24 @@ pub extern "sysv64" fn _start() -> ! {
         //Immediate returns to all non-exception interrupts
         let int_user = InterruptDescriptor {
             offset: interrupt_immediate_return as unsafe extern "x86-interrupt" fn() as u64,
-            segment_selector: gdt::USER_CODE,
+            segment_selector: gdt::SUPERVISOR_CODE,
             segment_present: true,
             privilege_level: PrivilegeLevel::Supervisor,
             interrupt_stack_table: 2,
             descriptor_type: DescriptorType::InterruptGate,
         };
-        for position in 32..256 {idt.write_entry(&int_user, position);}
+        for position in 0x20..0xFF {idt.write_entry(&int_user, position);}
+        //INT 20h
+        //IRQ 0: Programmable Interval Timer
+        let int_pit: InterruptDescriptor = InterruptDescriptor {
+            offset: interrupt_irq_00 as unsafe extern "x86-interrupt" fn() as u64,
+            segment_selector: gdt::SUPERVISOR_CODE,
+            segment_present: true,
+            privilege_level: PrivilegeLevel::Supervisor,
+            interrupt_stack_table: 2,
+            descriptor_type: DescriptorType::InterruptGate,
+        };
+        idt.write_entry(&int_pit, 0x20);
         //INT 21h
         //IRQ 1: Keyboard Handler
         let int_keyboard: InterruptDescriptor = InterruptDescriptor {
@@ -359,9 +370,38 @@ pub extern "sysv64" fn _start() -> ! {
         //Remap PIC
         pic::remap(0x20, 0x28).unwrap();
         //Enable IRQ 1
-        pic::enable_irq(0x01).unwrap();
+        pic::enable_irq(0x1).unwrap();
         //Test ability to read PIC inputs
         writeln!(printer, "{:08b} {:08b}", PORT_PIC1_DATA.read(), PORT_PIC2_DATA.read());
+    }
+
+    // PIT BUS SPEED MEASUREMENT
+    writeln!(printer, "\n=== PROGRAMMABLE INTERVAL TIMER ===\n");
+    let cpu_hz: u64;
+    unsafe {
+        //Enable IRQ 0
+        pic::enable_irq(0x0);
+        //Set PIT channel 0 to one shot mode
+        pit::send_command(pit::Channel::C1, pit::AccessMode::Full, pit::OperatingMode::OneShot, pit::BinaryMode::Binary);
+        //Set PIT to Interrupt in 1/41 of a second
+        pit::set_reload_full(pit::Channel::C1, 0x71AE);
+        //Get cpu clock cycle before
+        let start = rdtsc();
+        //Wait for PIT
+        sti();
+        hlt();
+        cli();
+        //Disable IRQ 0
+        pic::disable_irq(0x0);
+        //Get cpu clock cycle after
+        let end = rdtsc();
+        //Calculate Hz
+        cpu_hz = (end - start) * 41;
+        writeln!(printer, "START: {:16X}", start);
+        writeln!(printer, "END:   {:16X}", end);
+        writeln!(printer, "MHZ:   {:16}", cpu_hz / 1_000_000);
+        writeln!(printer, "APERF: {:16X}", msr::IA32_APERF.read());
+        writeln!(printer, "EFER:  {:16X}", msr::IA32_EFER.read());
     }
 
     // PS/2 Bus
@@ -469,7 +509,7 @@ pub extern "sysv64" fn _start() -> ! {
         writeln!(printer, "APIC 0xF0: 0x{:08X}", lapic::read_register(0xF0).unwrap());
         //Set Timer Mode
         lapic::timer(0x30, false, lapic::TimerMode::Periodic);
-        lapic::divide_config(lapic::Divide::Divide_128);
+        lapic::divide_config(lapic::Divide::Divide_1);
         //Enable LAPIC
         lapic::enable();
     }
@@ -479,7 +519,7 @@ pub extern "sysv64" fn _start() -> ! {
     unsafe {
         let bytes: [u8;0x200] = read_volatile(oct4_to_pointer(RAMDISK_OCT).unwrap() as *const [u8;0x200]);
         let boot_sector_r = FATBootSector::try_from(bytes);
-        writeln!(printer, "{:?}", boot_sector_r);
+        //writeln!(printer, "{:?}", boot_sector_r);
         match boot_sector_r {
             Ok(boot_sector) => {
                 writeln!(printer, "Total Sectors:     {:16X}", boot_sector.total_sectors());
@@ -496,11 +536,11 @@ pub extern "sysv64" fn _start() -> ! {
     writeln!(printer, "\n=== STARTUP COMPLETE ===\n");
     unsafe {
         //Start LAPIC timer
-        lapic::initial_count(100_000);
+        lapic::initial_count((cpu_hz / 1000) as u32);
         //Enable Interrupts
         sti();
         //Halt init thread
-        loop{halt();}
+        loop{hlt();}
     }
 }
 
@@ -651,9 +691,10 @@ unsafe fn ps2_keyboard() {
 
 // INTERRUPT FUNCTIONS
 //INT 20h-FFh: Immediate Return Interrupt
-#[naked] unsafe extern "x86-interrupt" fn interrupt_immediate_return() {
-    asm!("IRETQ", options(noreturn))
-}
+unsafe extern "x86-interrupt" fn interrupt_immediate_return() {}
+
+//INT 20h: PIT IRQ
+unsafe extern "x86-interrupt" fn interrupt_irq_00() {pic::end_irq(0x0);}
 
 //INT 21h: PS/2 Keyboard IRQ
 static mut PS2_SCANCODES: [u8;9] = [0u8;9];
@@ -789,9 +830,7 @@ unsafe extern "x86-interrupt" fn interrupt_irq_01() {
 }
 
 //INT FFh: LAPIC Spurious Interrupt
-extern "x86-interrupt" fn interrupt_spurious() {unsafe {
-    lapic::end_int()
-}}
+extern "x86-interrupt" fn interrupt_spurious() {unsafe {lapic::end_int()}}
 
 //Unused: Generic Interrupt
 #[naked] unsafe extern "x86-interrupt" fn _interrupt_gen<const FP: u64>() {
@@ -863,7 +902,7 @@ unsafe extern "sysv64" fn panic_handler(panic_info: &PanicInfo) -> ! {
             writeln!(printer, "Column: {}", panic_location.column()); //Print the source column
         }
     }
-    loop {halt();};                                                   //Halt the processor
+    loop {hlt();};                                                   //Halt the processor
 }
 
 

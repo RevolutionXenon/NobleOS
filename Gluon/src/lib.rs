@@ -41,7 +41,7 @@ pub mod sysv;
 pub mod x86_64;
 
 //Constants
-pub const GLUON_VERSION: &str = "vDEV-2022-02-10"; //CURRENT VERSION OF LIBRARY
+pub const GLUON_VERSION: &str = "vDEV-2022-02-20"; //CURRENT VERSION OF LIBRARY
 
 
 // MACROS
