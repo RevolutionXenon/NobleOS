@@ -40,6 +40,7 @@ use gluon::x86_64::instructions::*;
 use gluon::x86_64::lapic;
 use gluon::x86_64::msr;
 use gluon::x86_64::paging::*;
+use gluon::x86_64::port::*;
 use gluon::x86_64::segmentation::*;
 use core::arch::asm;
 use core::convert::TryFrom;
@@ -210,7 +211,7 @@ pub extern "sysv64" fn _start() -> ! {
     }
 
     // USB TESTING
-    unsafe {if let Some(mut pci_uhci) = pci_uhci_option {
+    unsafe {if let Some(pci_uhci) = pci_uhci_option {
         writeln!(printer, "\n=== UHCI USB ===\n");
         //PCI diagnostic
         for i in 0..0x0F {
@@ -246,10 +247,7 @@ pub extern "sysv64" fn _start() -> ! {
         //Load GDTR
         gdt.write_gdtr(gdt::SUPERVISOR_CODE, gdt::SUPERVISOR_DATA, gdt::SUPERVISOR_DATA);
         //Load Task Register
-        asm!(
-            "LTR {tsss:x}",
-            tsss = in(reg) u16::from(gdt::TASK_STATE_SEGMENT_SELECTOR),
-        );
+        load_task_register(gdt::TASK_STATE_SEGMENT);
     }
 
     // IDT SETUP
@@ -372,7 +370,7 @@ pub extern "sysv64" fn _start() -> ! {
         //Enable IRQ 1
         pic::enable_irq(0x1).unwrap();
         //Test ability to read PIC inputs
-        writeln!(printer, "{:08b} {:08b}", PORT_PIC1_DATA.read(), PORT_PIC2_DATA.read());
+        writeln!(printer, "{:08b} {:08b}", PIC1_DATA.read(), PIC2_DATA.read());
     }
 
     // PIT BUS SPEED MEASUREMENT

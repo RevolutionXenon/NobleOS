@@ -7,9 +7,12 @@
 #![allow(asm_sub_register)]
 
 //Imports
+use crate::*;
+use crate::x86_64::instructions::lidt;
+use crate::x86_64::instructions::ltr;
+use crate::x86_64::paging::LinearAddress;
 use core::arch::asm;
 use core::ptr::write_volatile;
-use crate::{*, x86_64::paging::LinearAddress};
 
 
 // GLOBAL DESCRIPTOR TABLE
@@ -49,25 +52,25 @@ impl GlobalDescriptorTable {
     //This function is unsafe because doing it wrong will cause a #GP fault either immediately or during future instructions
     pub unsafe fn write_gdtr(&self, code_selector: SegmentSelector, data_selector: SegmentSelector, stack_selector: SegmentSelector) {
         //Create byte array to load
-        let mut gdt_bytes: [u8;10] = [0u8;10];
+        let mut gdtr: [u8;10] = [0u8;10];
         //Place limit value into array
         let limit_bytes: [u8;2] = ((self.limit + 1) * 8 - 1).to_le_bytes();
-        gdt_bytes[0x0] = limit_bytes[0x0];
-        gdt_bytes[0x1] = limit_bytes[0x1];
+        gdtr[0x0] = limit_bytes[0x0];
+        gdtr[0x1] = limit_bytes[0x1];
         //Place address value into array
         let address_bytes: [u8;8] = self.address.0.to_le_bytes();
-        gdt_bytes[0x2] = address_bytes[0x0];
-        gdt_bytes[0x3] = address_bytes[0x1];
-        gdt_bytes[0x4] = address_bytes[0x2];
-        gdt_bytes[0x5] = address_bytes[0x3];
-        gdt_bytes[0x6] = address_bytes[0x4];
-        gdt_bytes[0x7] = address_bytes[0x5];
-        gdt_bytes[0x8] = address_bytes[0x6];
-        gdt_bytes[0x9] = address_bytes[0x7];
+        gdtr[0x2] = address_bytes[0x0];
+        gdtr[0x3] = address_bytes[0x1];
+        gdtr[0x4] = address_bytes[0x2];
+        gdtr[0x5] = address_bytes[0x3];
+        gdtr[0x6] = address_bytes[0x4];
+        gdtr[0x7] = address_bytes[0x5];
+        gdtr[0x8] = address_bytes[0x6];
+        gdtr[0x9] = address_bytes[0x7];
         //Load GDT and Segment Registers
         //This black magic is the way it is because interrupts will cause a #GP when they hit IRETQ without it
         asm!(
-            "LGDT [{gdt}]",      //Load into GDT register from address of gdt_bytes
+            "LGDT [{gdt}]",      //Load into GDT register from address of gdtr
             "PUSH {cs}",         //Push CS value to stack
             "LEA RAX, [RIP+1f]", //Load relative address of 1: into RAX
             "PUSH RAX",          //Push RAX to stack
@@ -75,7 +78,7 @@ impl GlobalDescriptorTable {
             "1:",                //Jump here after return
             "MOV SS, {ss}",      //Change Stack Segment register
             "MOV DS, {ds}",      //Change Data Segment register
-            gdt = in(reg) &gdt_bytes,
+            gdt = in(reg) &gdtr,
             cs  = in(reg) u16::from(code_selector),
             ds  = in(reg) u16::from(data_selector),
             ss  = in(reg) u16::from(stack_selector),
@@ -243,6 +246,11 @@ pub struct TaskStateSegment {
     pub iomba: u16,
 }
 
+//Load Task Register
+pub fn load_task_register(selector: SegmentSelector) {
+    ltr(u16::from(selector))
+}
+
 
 // INTERRUPT DESCRIPTOR TABLE
 //IDT
@@ -272,23 +280,23 @@ impl InterruptDescriptorTable {
     }
 
     pub unsafe fn write_idtr(&self) {
-        let mut bytes: [u8;10] = [0u8;10];
+        let mut idtr: [u8;10] = [0u8;10];
         //Limit
         let limit_bytes: [u8;2] = ((self.limit+1) * 16 - 1).to_le_bytes();
-        bytes[0x0] = limit_bytes[0x0];
-        bytes[0x1] = limit_bytes[0x1];
+        idtr[0x0] = limit_bytes[0x0];
+        idtr[0x1] = limit_bytes[0x1];
         //Address
         let address_bytes: [u8;8] = self.address.0.to_le_bytes();
-        bytes[0x2] = address_bytes[0x0];
-        bytes[0x3] = address_bytes[0x1];
-        bytes[0x4] = address_bytes[0x2];
-        bytes[0x5] = address_bytes[0x3];
-        bytes[0x6] = address_bytes[0x4];
-        bytes[0x7] = address_bytes[0x5];
-        bytes[0x8] = address_bytes[0x6];
-        bytes[0x9] = address_bytes[0x7];
+        idtr[0x2] = address_bytes[0x0];
+        idtr[0x3] = address_bytes[0x1];
+        idtr[0x4] = address_bytes[0x2];
+        idtr[0x5] = address_bytes[0x3];
+        idtr[0x6] = address_bytes[0x4];
+        idtr[0x7] = address_bytes[0x5];
+        idtr[0x8] = address_bytes[0x6];
+        idtr[0x9] = address_bytes[0x7];
         //Load
-        asm!("LIDT [{}]", in(reg) &bytes, options(nostack));
+        lidt(&idtr);
     }
 }
 

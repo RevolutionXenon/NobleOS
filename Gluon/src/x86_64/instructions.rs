@@ -85,6 +85,35 @@ pub fn in_d(port: u16) -> u32 {
     result
 }
 
+//LGDT: Load Global Descriptor Table Register
+#[inline]
+pub fn lgdt(gdtr: &[u8;10]) {
+    unsafe {asm!(
+        "LGDT [{}]",
+        in(reg) gdtr,
+        options(nostack)
+    )}
+}
+
+//LIDT: Load Interrupt Descriptor Table Register
+#[inline]
+pub fn lidt(idtr: &[u8;10]) {
+    unsafe {asm!(
+        "LIDT [{}]",
+        in(reg) idtr,
+        options(nostack)
+    )}
+}
+
+//LTR: Load Task Register
+#[inline]
+pub fn ltr(selector: u16) {
+    unsafe {asm!(
+        "LTR {tsss:x}",
+        tsss = in(reg) selector,
+    )}
+}
+
 //OUT: Output to Port (Byte)
 #[inline]
 pub fn out_b(port: u16, byte: u8) {
@@ -109,7 +138,7 @@ pub fn out_w(port: u16, word: u16) {
 
 //OUT: Output to Port (Double Word)
 #[inline]
-pub fn out_d(port: u16, double_word: u16) {
+pub fn out_d(port: u16, double_word: u32) {
     unsafe {asm!(
         "OUT DX, EAX",
         in("dx") port,

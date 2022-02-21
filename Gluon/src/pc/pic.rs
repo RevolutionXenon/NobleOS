@@ -5,10 +5,11 @@
 // HEADER
 //Imports
 use crate::pc::ports::io_wait;
-use crate::pc::ports::PORT_PIC1_COMMAND as COMMAND_PORT_1;
-use crate::pc::ports::PORT_PIC2_COMMAND as COMMAND_PORT_2;
-use crate::pc::ports::PORT_PIC1_DATA as DATA_PORT_1;
-use crate::pc::ports::PORT_PIC2_DATA as DATA_PORT_2;
+use crate::pc::ports::PIC1_COMMAND as COMMAND_PORT_1;
+use crate::pc::ports::PIC2_COMMAND as COMMAND_PORT_2;
+use crate::pc::ports::PIC1_DATA as DATA_PORT_1;
+use crate::pc::ports::PIC2_DATA as DATA_PORT_2;
+use crate::x86_64::port::*;
 
 
 // PROGRAMMABLE INTERRUPT CONTROLLER

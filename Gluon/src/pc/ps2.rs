@@ -5,9 +5,10 @@
 // HEADER
 //Imports
 use crate::noble::input_events::*;
-use crate::pc::ports::PORT_PS2_COMMAND as COMMAND_PORT;
-use crate::pc::ports::PORT_PS2_DATA as DATA_PORT;
-use crate::pc::ports::PORT_PS2_STATUS as STATUS_PORT;
+use crate::pc::ports::PS2_COMMAND as COMMAND_PORT;
+use crate::pc::ports::PS2_DATA as DATA_PORT;
+use crate::pc::ports::PS2_STATUS as STATUS_PORT;
+use crate::x86_64::port::*;
 
 
 // PS/2 CONTROLLER

@@ -44,6 +44,7 @@ A Rust Library which handles:
   * The Local Advanced Programmable Interrupt Controller
   * Model Specific Registers
   * Long Mode Page Tables
+  * I/O Ports
   * Segmentation Data Structures
   * System Calls
 * The PC Defacto Standard System Architecture

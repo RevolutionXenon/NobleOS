@@ -4,9 +4,9 @@
 
 // HEADER
 //Imports
-use crate::pc::ports::PORT_PCI_INDEX as INDEX_PORT;
-use crate::pc::ports::PORT_PCI_DATA as DATA_PORT;
-use ::x86_64::instructions::port::*;
+use crate::pc::ports::PCI_INDEX as INDEX_PORT;
+use crate::pc::ports::PCI_DATA as DATA_PORT;
+use crate::x86_64::port::*;
 
 
 // PCI DEVICES
@@ -61,14 +61,14 @@ impl PciEndpoint {
 //UHCI Endpoint
 pub struct PciUhci {
     pub pci:        PciEndpoint,
-    pub command:    PortGeneric<u16, ReadWriteAccess>,
-    pub status:     PortGeneric<u16, ReadWriteAccess>,
-    pub interrupt:  PortGeneric<u16, ReadWriteAccess>,
-    pub frame_num:  PortGeneric<u16, ReadWriteAccess>,
-    pub frame_base: PortGeneric<u32, ReadWriteAccess>,
-    pub frame_mod:  PortGeneric<u8,  ReadWriteAccess>,
-    pub sc_1:       PortGeneric<u16, ReadWriteAccess>,
-    pub sc_2:       PortGeneric<u16, ReadWriteAccess>
+    pub command:    PortW,
+    pub status:     PortW,
+    pub interrupt:  PortW,
+    pub frame_num:  PortW,
+    pub frame_base: PortD,
+    pub frame_mod:  PortB,
+    pub sc_1:       PortW,
+    pub sc_2:       PortW,
 }
 impl PciUhci {
     pub unsafe fn new(pci: PciEndpoint) -> Result<Self, &'static str> {
@@ -77,14 +77,14 @@ impl PciUhci {
         let baseport = if reg > 0xFFFF {return Err("PCI UHCI: Base port out of bounds.")} else {reg as u16};
         Ok(Self {
             pci,
-            command:    PortGeneric::<u16, ReadWriteAccess>::new(baseport       ),
-            status:     PortGeneric::<u16, ReadWriteAccess>::new(baseport + 0x02),
-            interrupt:  PortGeneric::<u16, ReadWriteAccess>::new(baseport + 0x04),
-            frame_num:  PortGeneric::<u16, ReadWriteAccess>::new(baseport + 0x06),
-            frame_base: PortGeneric::<u32, ReadWriteAccess>::new(baseport + 0x08),
-            frame_mod:  PortGeneric::<u8,  ReadWriteAccess>::new(baseport + 0x0C),
-            sc_1:       PortGeneric::<u16, ReadWriteAccess>::new(baseport + 0x10),
-            sc_2:       PortGeneric::<u16, ReadWriteAccess>::new(baseport + 0x12),
+            command:    PortW(baseport       ),
+            status:     PortW(baseport + 0x02),
+            interrupt:  PortW(baseport + 0x04),
+            frame_num:  PortW(baseport + 0x06),
+            frame_base: PortD(baseport + 0x08),
+            frame_mod:  PortB(baseport + 0x0C),
+            sc_1:       PortW(baseport + 0x10),
+            sc_2:       PortW(baseport + 0x12),
         })
     }
 }

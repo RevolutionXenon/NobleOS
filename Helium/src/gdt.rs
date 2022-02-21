@@ -20,7 +20,7 @@ pub static mut TASK_STATE_SEGMENT_ENTRY: SystemSegmentDescriptor = SystemSegment
     granularity:     Granularity::ByteLevel,
 };
 
-pub const TASK_STATE_SEGMENT_SELECTOR: SegmentSelector = SegmentSelector {
+pub const TASK_STATE_SEGMENT: SegmentSelector = SegmentSelector {
     descriptor_table_index: TASK_STATE_SEGMENT_POSITION,
     table_indicator: TableIndicator::GDT,
     requested_privilege_level: PrivilegeLevel::Supervisor

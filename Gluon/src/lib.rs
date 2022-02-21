@@ -2,20 +2,21 @@
 // Gluon is the Noble architecture library:
 // Instruction Set Architectures:
 //  Modules handling the x86-64 instruction set architecture:
-//    instructions: Functions that shortcut intrinsic instructions from the x86-64 instruction set architecture
-//    lapic:        Functions and objects related to the handling of the Local Advanced Programmable Interrupt Controller
-//    msr:          Structs and objects handling Model Specific Registers
-//    paging:       Structs, enums, and traits related to the contents and handling of x86-64 page tables
-//    segmentation: Structs and enums related to the contents and handling of x86-64 GDT, IDT, and other segmentation structures
-//    syscall:      Functions and Structs related to the handling of system calls on x86-64
+//    instructions:  Functions that shortcut intrinsic instructions from the x86-64 instruction set architecture
+//    lapic:         Functions and objects related to the handling of the Local Advanced Programmable Interrupt Controller
+//    msr:           Structs and objects handling Model Specific Registers
+//    paging:        Structs, enums, and traits related to the contents and handling of x86-64 page tables
+//    port:          Structs, functions, and traits related to the handling of ports
+//    segmentation:  Structs and enums related to the contents and handling of x86-64 GDT, IDT, and other segmentation structures
+//    syscall:       Functions and Structs related to the handling of system calls on x86-64
 // System Architectures:
 //  Modules handling the PC de-facto standard system architecture:
-//    fat:   Structs and enums related to the contents and handling of the FAT16 file system
-//    ports: Functions and objects related to the handling of the PC architecture's standard port-space layout
-//    pci:   Structs and objects related to the handling of the PCI bus
-//    pic:   Functions related to the handling of the Programmable Interrupt Controller
-//    pit:   Consts, Functions, and Enums related to the handling of the 8253 and 8254 Programmable Interval Timer
-//    ps2:   Functions and objects related to the handling of the PS/2 controller and devices
+//    fat:           Structs and enums related to the contents and handling of the FAT16 file system
+//    ports:         Functions and objects related to the handling of the PC architecture's standard port-space layout
+//    pci:           Structs and objects related to the handling of the PCI bus
+//    pic:           Functions related to the handling of the Programmable Interrupt Controller
+//    pit:           Consts, Functions, and Enums related to the handling of the 8253 and 8254 Programmable Interval Timer
+//    ps2:           Functions and objects related to the handling of the PS/2 controller and devices
 // Operating System Architectures:
 //  Modules handling the Unix System V operating system architecture:
 //    executable:    Structs and enums related to the contents and handling of System V object files (ELF files)

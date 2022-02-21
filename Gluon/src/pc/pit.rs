@@ -4,10 +4,11 @@
 
 // HEADER
 //Imports
-use crate::pc::ports::PORT_PIT_CHANNEL_1 as CHANNEL_1;
-use crate::pc::ports::PORT_PIT_CHANNEL_2 as CHANNEL_2;
-use crate::pc::ports::PORT_PIT_CHANNEL_3 as CHANNEL_3;
-use crate::pc::ports::PORT_PIT_COMMAND as COMMAND;
+use crate::pc::ports::PIT_CHANNEL_1 as CHANNEL_1;
+use crate::pc::ports::PIT_CHANNEL_2 as CHANNEL_2;
+use crate::pc::ports::PIT_CHANNEL_3 as CHANNEL_3;
+use crate::pc::ports::PIT_COMMAND as COMMAND;
+use crate::x86_64::port::*;
 
 //Constants
 pub const PIT_FREQUENCY: usize = 1193182;
