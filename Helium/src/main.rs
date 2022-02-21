@@ -38,7 +38,6 @@ use gluon::pc::pit;
 use gluon::pc::ps2;
 use gluon::x86_64::instructions::*;
 use gluon::x86_64::lapic;
-use gluon::x86_64::msr;
 use gluon::x86_64::paging::*;
 use gluon::x86_64::port::*;
 use gluon::x86_64::segmentation::*;
@@ -52,7 +51,7 @@ use ::x86_64::registers::control::Cr2;
 use ::x86_64::registers::control::Cr3;
 
 //Constants
-const HELIUM_VERSION: &str = "vDEV-2022-02-20"; //CURRENT VERSION OF KERNEL
+const HELIUM_VERSION: &str = "vDEV-2022-02-21"; //CURRENT VERSION OF KERNEL
 static WHITESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
 static _BLACKSPACE: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
 static _BLUESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE,  background: COLOR_BGRX_BLACK};
@@ -379,27 +378,42 @@ pub extern "sysv64" fn _start() -> ! {
     unsafe {
         //Enable IRQ 0
         pic::enable_irq(0x0);
-        //Set PIT channel 0 to one shot mode
-        pit::send_command(pit::Channel::C1, pit::AccessMode::Full, pit::OperatingMode::OneShot, pit::BinaryMode::Binary);
-        //Set PIT to Interrupt in 1/41 of a second
-        pit::set_reload_full(pit::Channel::C1, 0x71AE);
-        //Get cpu clock cycle before
-        let start = rdtsc();
-        //Wait for PIT
         sti();
+        //Set PIT channel 0 to one shot mode
+        pit::send_command(pit::Channel::C1, pit::AccessMode::Full, pit::OperatingMode::RateGenerator, pit::BinaryMode::Binary);
+        //Set PIT to Interrupt in 1/41 of a second
+        pit::set_reload_full(pit::Channel::C1, (pit::PIT_FREQUENCY / 41) as u16);
+        //Get interval 1
         hlt();
-        cli();
+        let interval_1: u64 = rdtsc();
+        //Get interval 2
+        hlt();
+        let interval_2: u64 = rdtsc();
+        //Get interval 3
+        hlt();
+        let interval_3: u64 = rdtsc();
+        //Get interval 4
+        hlt();
+        let interval_4: u64 = rdtsc();
+        //Get interval 5
+        hlt();
+        let interval_5: u64 = rdtsc();
         //Disable IRQ 0
         pic::disable_irq(0x0);
-        //Get cpu clock cycle after
-        let end = rdtsc();
+        cli();
         //Calculate Hz
-        cpu_hz = (end - start) * 41;
-        writeln!(printer, "START: {:16X}", start);
-        writeln!(printer, "END:   {:16X}", end);
-        writeln!(printer, "MHZ:   {:16}", cpu_hz / 1_000_000);
-        writeln!(printer, "APERF: {:16X}", msr::IA32_APERF.read());
-        writeln!(printer, "EFER:  {:16X}", msr::IA32_EFER.read());
+        let hz_2 = (interval_2 - interval_1) * 41;
+        let hz_3 = (interval_3 - interval_2) * 41;
+        let hz_4 = (interval_4 - interval_3) * 41;
+        let hz_5 = (interval_5 - interval_4) * 41;
+        cpu_hz = (hz_2 + hz_3 + hz_4 + hz_5) / 4;
+        //Diagnostic
+        writeln!(printer, "Interval 1:  {:16X}", interval_1);
+        writeln!(printer, "Interval 2:  {:16X} ({:5}MHz)", interval_2, hz_2 / 1_000_000);
+        writeln!(printer, "Interval 3:  {:16X} ({:5}MHz)", interval_3, hz_3 / 1_000_000);
+        writeln!(printer, "Interval 4:  {:16X} ({:5}MHz)", interval_4, hz_4 / 1_000_000);
+        writeln!(printer, "Interval 5:  {:16X} ({:5}MHz)", interval_5, hz_5 / 1_000_000);
+        writeln!(printer, "Average MHz: {:16}", cpu_hz / 1_000_000);
     }
 
     // PS/2 Bus
