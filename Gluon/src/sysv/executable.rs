@@ -6,6 +6,7 @@
 //Imports
 use crate::numeric_enum;
 use crate::noble::file_system::VolumeRead;
+use crate::noble::return_code::ReturnCode;
 use core::convert::{TryFrom, TryInto};
 use core::intrinsics::copy_nonoverlapping;
 use core::ptr::write_volatile;
@@ -14,19 +15,19 @@ use core::ptr::write_volatile;
 // ELF FILES
 //Full ELF File Handling Routines
 #[derive(Debug)]
-pub struct ELFFile<'a, LR: 'a+VolumeRead> {
-    pub file: &'a LR,
+pub struct ELFFile<'a, RO: 'a+VolumeRead> {
+    pub file: &'a RO,
     pub header:   Header,
 }
-impl<'a, LR: 'a+VolumeRead> ELFFile<'a, LR> {
+impl<'a, RO: 'a+VolumeRead> ELFFile<'a, RO> {
     // CONSTRUCTOR
-    pub fn new(file: &'a LR) -> Result<ELFFile<'a, LR>, &'static str> {
+    pub fn new(file: &'a RO) -> Result<ELFFile<'a, RO>, ReturnCode> {
         //Load File Header
         let header = Header::new(&{
-            let mut buffer:[u8; 0x40] = [0u8; 0x40]; 
-            file.read(0x00, &mut buffer)?;
-            buffer}
-        )?;
+            let mut buffer:[u8; 0x40] = [0u8; 0x40];
+            file.read_all(0x00, &mut buffer)?;
+            buffer
+        })?;
         //Return
         Ok(ELFFile {
             file,
@@ -35,11 +36,11 @@ impl<'a, LR: 'a+VolumeRead> ELFFile<'a, LR> {
     }
 
     // ITERATORS
-    pub fn programs(&self) -> ProgramIterator<LR> {
+    pub fn programs(&self) -> ProgramIterator<RO> {
         ProgramIterator::new(self.file, &self.header)
     }
 
-    pub fn sections(&self) -> SectionIterator<LR> {
+    pub fn sections(&self) -> SectionIterator<RO> {
         SectionIterator::new(self.file, &self.header)
     }
 
@@ -70,7 +71,7 @@ impl<'a, LR: 'a+VolumeRead> ELFFile<'a, LR> {
     }
 
     //Load File Into Memory (Very Important to Allocate Memory First)
-    pub unsafe fn load(&mut self, location: *mut u8) -> Result<(), &'static str> {
+    pub unsafe fn load(&mut self, location: *mut u8) -> Result<(), ReturnCode> {
         for position in 0..self.program_memory_size() as usize {
             write_volatile(location.add(position), 0x00);
         }
@@ -81,15 +82,15 @@ impl<'a, LR: 'a+VolumeRead> ELFFile<'a, LR> {
         for program in program_iterator {
             const BUFFER_SIZE: usize = 512;
             let mut buffer: [u8; BUFFER_SIZE] = [0u8; BUFFER_SIZE];
-            let count = program.file_size as usize/BUFFER_SIZE;
+            let count: u64 = program.file_size as u64/BUFFER_SIZE as u64;
             for file_positon in 0..count {
-                self.file.read(program.file_offset as usize+file_positon*BUFFER_SIZE, &mut buffer)?;
-                copy_nonoverlapping(buffer.as_ptr(), location.add(program.virtual_address as usize + file_positon*BUFFER_SIZE as usize), BUFFER_SIZE);
+                self.file.read_all(program.file_offset as u64 +file_positon*BUFFER_SIZE as u64, &mut buffer)?;
+                copy_nonoverlapping(buffer.as_ptr(), location.add(program.virtual_address as usize + file_positon as usize * BUFFER_SIZE), BUFFER_SIZE);
             }
             let leftover: usize = program.file_size as usize %BUFFER_SIZE;
             if leftover != 0 {
-                self.file.read(program.file_offset as usize + count*BUFFER_SIZE, &mut buffer[0..leftover])?;
-                copy_nonoverlapping(buffer.as_ptr(), location.add(program.virtual_address as usize + count*BUFFER_SIZE as usize), leftover);
+                self.file.read_all(program.file_offset as u64 + count*BUFFER_SIZE as u64, &mut buffer[0..leftover])?;
+                copy_nonoverlapping(buffer.as_ptr(), location.add(program.virtual_address as usize + count as usize * BUFFER_SIZE), leftover);
             }
         }
         //Return
@@ -97,9 +98,9 @@ impl<'a, LR: 'a+VolumeRead> ELFFile<'a, LR> {
     }
 
     //Do Relocation (Very Important to Load First) **NOT FINISHED**
-    pub unsafe fn relocate(&mut self, loaded_location: *mut u8, reloc_location: *mut u8) -> Result<(), &'static str> {
+    pub unsafe fn relocate(&mut self, loaded_location: *mut u8, reloc_location: *mut u8) -> Result<(), ReturnCode> {
         //Ensure correct object type
-        if self.header.object_type != ObjectType::Shared {return Err("ELF File: Relocation not yet supported for this object type.")}
+        if self.header.object_type != ObjectType::Shared {return Err(ReturnCode::UnsupportedFeature)}
         //Find relocation entries
         let explicit_relocation_sections = self.sections()
                 .filter(|result| result.is_ok())
@@ -117,7 +118,7 @@ impl<'a, LR: 'a+VolumeRead> ELFFile<'a, LR> {
                         match entry.relocation_entry_type {
                             RelocationEntryTypeX86_64::R_X86_64_NONE      => {},
                             RelocationEntryTypeX86_64::R_X86_64_RELATIVE  => {*((loaded_location as u64 + entry.offset) as *mut u64) = (reloc_location as u64) + entry.addend.unwrap_or(0);},
-                            _ => {return Err("ELF File: Relocation entry type found which is not supported.")},
+                            _ => {return Err(ReturnCode::UnsupportedFeature)},
                         }
                     }
                 }
@@ -125,7 +126,7 @@ impl<'a, LR: 'a+VolumeRead> ELFFile<'a, LR> {
                 Ok(())
             },
             //Return Error
-            _ => Err("ELF File: Relocation not supported for this file's Instruction Set Architecture.")
+            _ => Err(ReturnCode::UnsupportedFeature)
         }
     }
 }
@@ -157,37 +158,37 @@ pub struct Header {
 }
 impl Header {
     // CONSTRUCTOR
-    pub fn new(bytes: &[u8]) -> Result<Header, &'static str> {
-        if bytes.len()       <  0x10                             {return Err("ELF File Header: Length of data given to parse from not large enough to contain ident.")}
-        if bytes[0x00..0x04] != [0x7Fu8, 0x45u8, 0x4cu8, 0x46u8] {return Err("ELF File Header: Invalid Magic Number (ei_magic).");}
-        if bytes[0x04]       != 0x02                             {return Err("ELF File Header: Handling of Bit Width (ei_class) value of 32 bits (0x01) not yet handled.")}
-        if bytes.len()       <  0x40                             {return Err("ELF File Header: Length of data given to parse from not large enough to contain header.")}
-        if bytes[0x09..0x10] != [0x00u8; 7]                      {return Err("ELF File Header: Invalid Padding (ei_pad).")}
-        let endianness:Endianness = Endianness::try_from(bytes[0x05]).map_err(|_| "ELF File Header: Invalid Endianness (ei_data).")?;
+    pub fn new(bytes: &[u8]) -> Result<Header, ReturnCode> {
+        if bytes.len()       <  0x10                             {return Err(ReturnCode::BufferTooSmall)}
+        if bytes[0x00..0x04] != [0x7Fu8, 0x45u8, 0x4cu8, 0x46u8] {return Err(ReturnCode::InvalidIdentifier)}
+        if bytes[0x04]       != 0x02                             {return Err(ReturnCode::UnsupportedFeature)}
+        if bytes.len()       <  0x40                             {return Err(ReturnCode::BufferTooSmall)}
+        if bytes[0x09..0x10] != [0x00u8; 7]                      {return Err(ReturnCode::InvalidData)}
+        let endianness:Endianness = Endianness::try_from(bytes[0x05]).map_err(|_| ReturnCode::InvalidData)?;
         let (u16_fb, u32_fb, u64_fb): (fn([u8;2])->u16, fn([u8;4])->u32, fn([u8;8])->u64) = match endianness {
             Endianness::Little => (u16::from_le_bytes, u32::from_le_bytes, u64::from_le_bytes),
             Endianness::Big    => (u16::from_be_bytes, u32::from_be_bytes, u64::from_be_bytes),
         };
         Result::Ok(Header {
-            bit_width:                                   BitWidth::try_from(       bytes[0x04]                           ).map_err(|_| "ELF File Header: Invalid Bit Width (ei_class).")?,
+            bit_width:                                   BitWidth::try_from(       bytes[0x04]                                                            ).map_err(|_| ReturnCode::InvalidData)?,
             endianness,
-            ident_version:                           IdentVersion::try_from(       bytes[0x06]                           ).map_err(|_| "ELF File Header: Invalid Ident Version (ei_version).")?,
-            binary_interface:          ApplicationBinaryInterface::try_from(       bytes[0x07]                           ).map_err(|_| "ELF File Header: Invalid Application Binary Interface (ei_osabi).")?,
+            ident_version:                           IdentVersion::try_from(       bytes[0x06]                                                            ).map_err(|_| ReturnCode::InvalidData)?,
+            binary_interface:          ApplicationBinaryInterface::try_from(       bytes[0x07]                                                            ).map_err(|_| ReturnCode::InvalidData)?,
             binary_interface_version:                                              bytes[0x08],
-            object_type:                               ObjectType::try_from(u16_fb(bytes[0x10..0x12].try_into().unwrap())).map_err(|_| "ELF File Header: Invalid Object Type (e_type).")?,
-            architecture:              InstructionSetArchitecture::try_from(u16_fb(bytes[0x12..0x14].try_into().unwrap())).map_err(|_| "ELF File Header: Invalid Instruction Set Architecture (e_machine).")?,
-            version:                                      Version::try_from(u32_fb(bytes[0x14..0x18].try_into().unwrap())).map_err(|_| "ELF File Header: Invalid ELF Version (e_version).")?,
-            entry_point:                                                    u64_fb(bytes[0x18..0x20].try_into().unwrap()),
-            program_header_offset:                                    match u64_fb(bytes[0x20..0x28].try_into().unwrap()) {0x40 => 0x40, _ => return Err("ELF File Header: Invalid Program Header Offset (e_phoff).")},
-            section_header_offset:                                          u64_fb(bytes[0x28..0x30].try_into().unwrap()),
-            flags:                                                                 bytes[0x30..0x34].try_into().unwrap(),
-            header_size:                                              match u16_fb(bytes[0x34..0x36].try_into().unwrap()) {0x40 => 0x40, _ => return Err("ELF File Header: Invalid ELF Header Size (e_ehsize).")},
-            program_header_entry_size:                                match u16_fb(bytes[0x36..0x38].try_into().unwrap()) {0x38 => 0x38, _ => return Err("ELF File Header: Invalid Program Header Entry Size (e_phentsize).")},
-            program_header_number:                                          u16_fb(bytes[0x38..0x3A].try_into().unwrap()),
-            section_header_entry_size:                                match u16_fb(bytes[0x3A..0x3C].try_into().unwrap()) {0x40 => 0x40, _ => return Err("ELF File Header: Invalid Section Header Entry Size (e_shentsize).")},
-            section_header_number:                                          u16_fb(bytes[0x3C..0x3E].try_into().unwrap()),
-            string_section_index:                             {let a: u16 = u16_fb(bytes[0x3E..0x40].try_into().unwrap()); 
-                                                                     if a < u16_fb(bytes[0x3C..0x3E].try_into().unwrap()) {a} else {return Err("ELF File Header: Invalid String Section Index (e_shstrndx) according to Section Header Number (e_shnum).")}},
+            object_type:                               ObjectType::try_from(u16_fb(bytes[0x10..0x12].try_into().map_err(|_| ReturnCode::SlicingError)?)).map_err(|_| ReturnCode::InvalidData)?,
+            architecture:              InstructionSetArchitecture::try_from(u16_fb(bytes[0x12..0x14].try_into().map_err(|_| ReturnCode::SlicingError)?)).map_err(|_| ReturnCode::InvalidData)?,
+            version:                                      Version::try_from(u32_fb(bytes[0x14..0x18].try_into().map_err(|_| ReturnCode::SlicingError)?)).map_err(|_| ReturnCode::InvalidData)?,
+            entry_point:                                                    u64_fb(bytes[0x18..0x20].try_into().map_err(|_| ReturnCode::SlicingError)?),
+            program_header_offset:                                    match u64_fb(bytes[0x20..0x28].try_into().map_err(|_| ReturnCode::SlicingError)?) {0x40 => 0x40, _ => return Err(ReturnCode::InvalidData)},
+            section_header_offset:                                          u64_fb(bytes[0x28..0x30].try_into().map_err(|_| ReturnCode::SlicingError)?),
+            flags:                                                                 bytes[0x30..0x34].try_into().map_err(|_| ReturnCode::SlicingError)?,
+            header_size:                                              match u16_fb(bytes[0x34..0x36].try_into().map_err(|_| ReturnCode::SlicingError)?) {0x40 => 0x40, _ => return Err(ReturnCode::InvalidData)},
+            program_header_entry_size:                                match u16_fb(bytes[0x36..0x38].try_into().map_err(|_| ReturnCode::SlicingError)?) {0x38 => 0x38, _ => return Err(ReturnCode::InvalidData)},
+            program_header_number:                                          u16_fb(bytes[0x38..0x3A].try_into().map_err(|_| ReturnCode::SlicingError)?),
+            section_header_entry_size:                                match u16_fb(bytes[0x3A..0x3C].try_into().map_err(|_| ReturnCode::SlicingError)?) {0x40 => 0x40, _ => return Err(ReturnCode::InvalidData)},
+            section_header_number:                                          u16_fb(bytes[0x3C..0x3E].try_into().map_err(|_| ReturnCode::SlicingError)?),
+            string_section_index:                             {let a: u16 = u16_fb(bytes[0x3E..0x40].try_into().map_err(|_| ReturnCode::SlicingError)?);
+                                                                     if a < u16_fb(bytes[0x3C..0x3E].try_into().map_err(|_| ReturnCode::SlicingError)?) {a} else {return Err(ReturnCode::InvalidData)}},
         })
     }
 }
@@ -352,40 +353,40 @@ pub struct Program {
 impl Program {
     // CONSTRUCTOR
     //New
-    pub fn new(data: &[u8], bit_width: BitWidth, endianness: Endianness) -> Result<Self, &'static str> {
+    pub fn new(data: &[u8], bit_width: BitWidth, endianness: Endianness) -> Result<Self, ReturnCode> {
         let (_u16_fb, u32_fb, u64_fb): (fn([u8;2]) -> u16, fn([u8;4]) -> u32, fn([u8;8]) -> u64) = match endianness {
             Endianness::Little => (u16::from_le_bytes, u32::from_le_bytes, u64::from_le_bytes),
             Endianness::Big    => (u16::from_be_bytes, u32::from_be_bytes, u64::from_be_bytes),
         };
         match bit_width {
             BitWidth::W32 => {
-                if data.len() != 0x20 {return Err("Program: Incorrect data length for 32-bit program.")}
+                if data.len() != 0x20 {return Err(ReturnCode::IncorrectBufferLength)}
                 Ok(Self {
                     program_type:     ProgramType::try_from(
-                                      u32_fb(data[0x00..0x04].try_into().map_err( |_| "ELF Program Header: Error slicing program type."    )?))
-                                                                        .map_err( |_| "ELF Program Header: Invalid program type."          )?,
-                    file_offset:      u64_fb(data[0x04..0x08].try_into().map_err( |_| "ELF Program Header: Error slicing file offset."     )?),
-                    virtual_address:  u64_fb(data[0x08..0x0C].try_into().map_err( |_| "ELF Program Header: Error slicing virtual address." )?),
-                    physical_address: u64_fb(data[0x0C..0x10].try_into().map_err( |_| "ELF Program Header: Error slicing physical address.")?),
-                    file_size:        u64_fb(data[0x20..0x28].try_into().map_err( |_| "ELF Program Header: Error slicing file size."       )?),
-                    memory_size:      u64_fb(data[0x28..0x30].try_into().map_err( |_| "ELF Program Header: Error slicing memory size."     )?),
-                    flags:            u32_fb(data[0x04..0x08].try_into().map_err( |_| "ELF Program Header: Error slicing flags."           )?),
-                    alignment:        u64_fb(data[0x30..0x38].try_into().map_err( |_| "ELF Program Header: Error slicing alignment."       )?),
+                                      u32_fb(data[0x00..0x04].try_into().map_err( |_| ReturnCode::SlicingError)?))
+                                                                        .map_err( |_| ReturnCode::InvalidData)?,
+                    file_offset:      u64_fb(data[0x04..0x08].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    virtual_address:  u64_fb(data[0x08..0x0C].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    physical_address: u64_fb(data[0x0C..0x10].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    file_size:        u64_fb(data[0x20..0x28].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    memory_size:      u64_fb(data[0x28..0x30].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    flags:            u32_fb(data[0x04..0x08].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    alignment:        u64_fb(data[0x30..0x38].try_into().map_err( |_| ReturnCode::SlicingError)?),
                 })
             },
             BitWidth::W64 => {
-                if data.len() != 0x38 {return Err("Program: Incorrect data length for 64-bit program.")};
+                if data.len() != 0x38 {return Err(ReturnCode::IncorrectBufferLength)};
                 Ok(Self {
                     program_type:     ProgramType::try_from(
-                                      u32_fb(data[0x00..0x04].try_into().map_err( |_| "ELF Program Header: Error slicing program type."    )?))
-                                                                        .map_err( |_| "ELF Program Header: Invalid program type."          )?,
-                    flags:            u32_fb(data[0x04..0x08].try_into().map_err( |_| "ELF Program Header: Error slicing flags."           )?),
-                    file_offset:      u64_fb(data[0x08..0x10].try_into().map_err( |_| "ELF Program Header: Error slicing file offset."     )?),
-                    virtual_address:  u64_fb(data[0x10..0x18].try_into().map_err( |_| "ELF Program Header: Error slicing virtual address." )?),
-                    physical_address: u64_fb(data[0x18..0x20].try_into().map_err( |_| "ELF Program Header: Error slicing physical address.")?),
-                    file_size:        u64_fb(data[0x20..0x28].try_into().map_err( |_| "ELF Program Header: Error slicing file size."       )?),
-                    memory_size:      u64_fb(data[0x28..0x30].try_into().map_err( |_| "ELF Program Header: Error slicing memory size."     )?),
-                    alignment:        u64_fb(data[0x30..0x38].try_into().map_err( |_| "ELF Program Header: Error slicing alignment."       )?),
+                                      u32_fb(data[0x00..0x04].try_into().map_err( |_| ReturnCode::SlicingError)?))
+                                                                        .map_err( |_| ReturnCode::InvalidData)?,
+                    flags:            u32_fb(data[0x04..0x08].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    file_offset:      u64_fb(data[0x08..0x10].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    virtual_address:  u64_fb(data[0x10..0x18].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    physical_address: u64_fb(data[0x18..0x20].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    file_size:        u64_fb(data[0x20..0x28].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    memory_size:      u64_fb(data[0x28..0x30].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    alignment:        u64_fb(data[0x30..0x38].try_into().map_err( |_| ReturnCode::SlicingError)?),
                 })
             }, 
         }
@@ -393,18 +394,18 @@ impl Program {
 }
 
 //Program Header Iterator
-pub struct ProgramIterator<'a, LR: 'a+VolumeRead> {
-    file:       &'a LR,
+pub struct ProgramIterator<'a, RO: 'a+VolumeRead> {
+    file:       &'a RO,
     bit_width:      BitWidth,
     endianness:     Endianness,
     base_offset:    u64,
     entry_position: usize,
     entry_count:    usize,
 }
-impl<'a, LR: 'a+VolumeRead> ProgramIterator<'a, LR> {
+impl<'a, RO: 'a+VolumeRead> ProgramIterator<'a, RO> {
     // FUNCTIONS
     //Constructor
-    pub fn new(file: &'a LR, file_header: &Header) -> Self{
+    pub fn new(file: &'a RO, file_header: &Header) -> Self{
         Self {
             file,
             bit_width:      file_header.bit_width,
@@ -416,23 +417,23 @@ impl<'a, LR: 'a+VolumeRead> ProgramIterator<'a, LR> {
     }
     
     //Get Entry
-    fn entry(&mut self) -> Result<Program, &'static str> {
-        return match self.bit_width {
+    fn entry(&mut self) -> Result<Program, ReturnCode> {
+        match self.bit_width {
             BitWidth::W32 => {
                 let mut buffer: [u8; 0x20] = [0u8; 0x20];
-                self.file.read(self.base_offset as usize + 0x20*self.entry_position as usize, &mut buffer)?;
+                self.file.read_all(self.base_offset as u64 + 0x20*self.entry_position as u64, &mut buffer)?;
                 Program::new(&buffer, self.bit_width, self.endianness)
             },
             BitWidth::W64 => {
                 let mut buffer: [u8; 0x38] = [0u8; 0x38];
-                self.file.read(self.base_offset as usize + 0x38*self.entry_position as usize, &mut buffer)?;
+                self.file.read_all(self.base_offset as u64 + 0x38*self.entry_position as u64, &mut buffer)?;
                 Program::new(&buffer, self.bit_width, self.endianness)
             },
         }
     }
 }
-impl<'a, LR: 'a+VolumeRead> Iterator for ProgramIterator<'a, LR> {
-    type Item = Result<Program, &'static str>;
+impl<'a, RO: 'a+VolumeRead> Iterator for ProgramIterator<'a, RO> {
+    type Item = Result<Program, ReturnCode>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.entry_position >= self.entry_count {
             None
@@ -465,18 +466,18 @@ numeric_enum! {
 
 // ELF SECTION HEADER
 //Section Header Iterator
-pub struct SectionIterator<'a, LR: 'a+VolumeRead> {
-    file:   &'a     LR,
+pub struct SectionIterator<'a, RO: 'a+VolumeRead> {
+    file:   &'a     RO,
     bit_width:      BitWidth,
     endianness:     Endianness,
     base_offset:    u64,
     entry_position: usize,
     entry_count:    usize,
 }
-impl<'a, LR: 'a+VolumeRead> SectionIterator<'a, LR> {
+impl<'a, RO: 'a+VolumeRead> SectionIterator<'a, RO> {
     // FUNCTIONS
     //Constructor
-    pub fn new(file: &'a LR, file_header: &Header) -> Self{
+    pub fn new(file: &'a RO, file_header: &Header) -> Self{
         Self {
             file,
             bit_width:      file_header.bit_width,
@@ -488,23 +489,23 @@ impl<'a, LR: 'a+VolumeRead> SectionIterator<'a, LR> {
     }
     
     //Get Entry
-    fn entry(&mut self) -> Result<Section, &'static str> {
-        return match self.bit_width {
+    fn entry(&mut self) -> Result<Section, ReturnCode> {
+        match self.bit_width {
             BitWidth::W32 => {
                 let mut buffer: [u8; 0x28] = [0u8; 0x28];
-                self.file.read(self.base_offset as usize + 0x28*self.entry_position as usize, &mut buffer)?;
+                self.file.read_all(self.base_offset as u64 + 0x28*self.entry_position as u64, &mut buffer)?;
                 Section::new(&buffer, self.bit_width, self.endianness)
             },
             BitWidth::W64 => {
                 let mut buffer: [u8; 0x40] = [0u8; 0x40];
-                self.file.read(self.base_offset as usize + 0x40*self.entry_position as usize, &mut buffer)?;
+                self.file.read_all(self.base_offset as u64 + 0x40*self.entry_position as u64, &mut buffer)?;
                 Section::new(&buffer, self.bit_width, self.endianness)
             },
         }
     }
 }
-impl<'a, LR: 'a+VolumeRead> Iterator for SectionIterator<'a, LR> {
-    type Item = Result<Section, &'static str>;
+impl<'a, RO: 'a+VolumeRead> Iterator for SectionIterator<'a, RO> {
+    type Item = Result<Section, ReturnCode>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.entry_position >= self.entry_count {
             None
@@ -535,44 +536,44 @@ pub struct Section {
 impl Section {
     // CONSTRUCTOR
     //New
-    pub fn new(data: &[u8], bit_width: BitWidth, endianness: Endianness) -> Result<Self, &'static str> {
+    pub fn new(data: &[u8], bit_width: BitWidth, endianness: Endianness) -> Result<Self, ReturnCode> {
         let (_u16_fb, u32_fb, u64_fb): (fn([u8;2]) -> u16, fn([u8;4]) -> u32, fn([u8;8]) -> u64) = match endianness {
             Endianness::Little => (u16::from_le_bytes, u32::from_le_bytes, u64::from_le_bytes),
             Endianness::Big    => (u16::from_be_bytes, u32::from_be_bytes, u64::from_be_bytes),
         };
         match bit_width {
             BitWidth::W32 => {
-                if data.len() != 0x28 {return Err("Section: Incorrect data length for 32-bit section.")};
+                if data.len() != 0x28 {return Err(ReturnCode::IncorrectBufferLength)};
                 Ok(Self {
-                    name:            u32_fb(data[0x00..0x04].try_into().map_err( |_| "Section: Error slicing name."           )?),
+                    name:            u32_fb(data[0x00..0x04].try_into().map_err( |_| ReturnCode::SlicingError)?),
                     section_type: SectionType::try_from(
-                                     u32_fb(data[0x04..0x08].try_into().map_err( |_| "Section: Error slicing section type."   )?))
-                                                                       .map_err( |_| "Section: Invalid section type."         )?,
-                    flags:           u32_fb(data[0x08..0x0C].try_into().map_err( |_| "Section: Error slicing flags."          )?) as u64,
-                    virtual_address: u32_fb(data[0x0C..0x10].try_into().map_err( |_| "Section: Error slicing virtual address.")?) as u64,
-                    file_offset:     u32_fb(data[0x10..0x14].try_into().map_err( |_| "Section: Error slicing file offset."    )?) as u64,
-                    file_size:       u32_fb(data[0x14..0x18].try_into().map_err( |_| "Section: Error slicing file size."      )?) as u64,
-                    link:            u32_fb(data[0x18..0x1C].try_into().map_err( |_| "Section: Error slicing link."           )?),
-                    info:            u32_fb(data[0x1C..0x20].try_into().map_err( |_| "Section: Error slicing info."           )?),
-                    alignment:       u32_fb(data[0x20..0x24].try_into().map_err( |_| "Section: Error slicing alignment."      )?) as u64,
-                    entry_size:      u32_fb(data[0x24..0x28].try_into().map_err( |_| "Section: Error slicing entry size."     )?) as u64,
+                                     u32_fb(data[0x04..0x08].try_into().map_err( |_| ReturnCode::SlicingError)?))
+                                                                       .map_err( |_| ReturnCode::InvalidData)?,
+                    flags:           u32_fb(data[0x08..0x0C].try_into().map_err( |_| ReturnCode::SlicingError)?) as u64,
+                    virtual_address: u32_fb(data[0x0C..0x10].try_into().map_err( |_| ReturnCode::SlicingError)?) as u64,
+                    file_offset:     u32_fb(data[0x10..0x14].try_into().map_err( |_| ReturnCode::SlicingError)?) as u64,
+                    file_size:       u32_fb(data[0x14..0x18].try_into().map_err( |_| ReturnCode::SlicingError)?) as u64,
+                    link:            u32_fb(data[0x18..0x1C].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    info:            u32_fb(data[0x1C..0x20].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    alignment:       u32_fb(data[0x20..0x24].try_into().map_err( |_| ReturnCode::SlicingError)?) as u64,
+                    entry_size:      u32_fb(data[0x24..0x28].try_into().map_err( |_| ReturnCode::SlicingError)?) as u64,
                 })
             },
             BitWidth::W64 => {
-                if data.len() != 0x40 {return Err("Section: Incorrect data length for 64-bit section.")};
+                if data.len() != 0x40 {return Err(ReturnCode::IncorrectBufferLength)};
                 Ok(Self {
-                    name:            u32_fb(data[0x00..0x04].try_into().map_err( |_| "Section: Error slicing name."           )?),
+                    name:            u32_fb(data[0x00..0x04].try_into().map_err( |_| ReturnCode::SlicingError)?),
                     section_type: SectionType::try_from(
-                                     u32_fb(data[0x04..0x08].try_into().map_err( |_| "Section: Error slicing section type."   )?))
-                                                                       .map_err( |_| "Section: Invalid section type."         )?,
-                    flags:           u64_fb(data[0x08..0x10].try_into().map_err( |_| "Section: Error slicing flags."          )?),
-                    virtual_address: u64_fb(data[0x10..0x18].try_into().map_err( |_| "Section: Error slicing virtual address.")?),
-                    file_offset:     u64_fb(data[0x18..0x20].try_into().map_err( |_| "Section: Error slicing file offset."    )?),
-                    file_size:       u64_fb(data[0x20..0x28].try_into().map_err( |_| "Section: Error slicing file size."      )?),
-                    link:            u32_fb(data[0x28..0x2C].try_into().map_err( |_| "Section: Error slicing link."           )?),
-                    info:            u32_fb(data[0x2C..0x30].try_into().map_err( |_| "Section: Error slicing info."           )?),
-                    alignment:       u64_fb(data[0x30..0x38].try_into().map_err( |_| "Section: Error slicing alignment."      )?),
-                    entry_size:      u64_fb(data[0x38..0x40].try_into().map_err( |_| "Section: Error slicing entry size."     )?),
+                                     u32_fb(data[0x04..0x08].try_into().map_err( |_| ReturnCode::SlicingError)?))
+                                                                       .map_err( |_| ReturnCode::InvalidData)?,
+                    flags:           u64_fb(data[0x08..0x10].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    virtual_address: u64_fb(data[0x10..0x18].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    file_offset:     u64_fb(data[0x18..0x20].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    file_size:       u64_fb(data[0x20..0x28].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    link:            u32_fb(data[0x28..0x2C].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    info:            u32_fb(data[0x2C..0x30].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    alignment:       u64_fb(data[0x30..0x38].try_into().map_err( |_| ReturnCode::SlicingError)?),
+                    entry_size:      u64_fb(data[0x38..0x40].try_into().map_err( |_| ReturnCode::SlicingError)?),
                 })
             },
         }
@@ -638,28 +639,28 @@ pub struct ProgramDynamicEntry {
     pub value:      u64,
 }
 impl ProgramDynamicEntry {
-    pub fn new(data: &[u8], bit_width: BitWidth, endianness: Endianness) -> Result<Self, &'static str> {
+    pub fn new(data: &[u8], bit_width: BitWidth, endianness: Endianness) -> Result<Self, ReturnCode> {
         let (_u16_fb, u32_fb, u64_fb): (fn([u8;2]) -> u16, fn([u8;4]) -> u32, fn([u8;8]) -> u64) = match endianness {
             Endianness::Little => (u16::from_le_bytes, u32::from_le_bytes, u64::from_le_bytes),
             Endianness::Big    => (u16::from_be_bytes, u32::from_be_bytes, u64::from_be_bytes),
         };
         match bit_width {
             BitWidth::W32 => {
-                if data.len() != 8 {return Err("Program Dynamic: Incorrect data length for 32-bit program dynamic entry.")};
+                if data.len() != 8 {return Err(ReturnCode::IncorrectBufferLength)};
                 Ok(Self {
                     entry_type: ProgramDynamicEntryType::try_from(
-                           u32_fb(data[0x00..0x04].try_into().map_err( |_| "Dynamic Entry: Error slicing entry type.")?) as u64)
-                                                             .map_err( |_| "Dynamic Entry: Invalid entry type."      )?,
-                    value: u32_fb(data[0x04..0x08].try_into().map_err( |_| "Dynamic Entry: Error slicing value."     )?) as u64,
+                           u32_fb(data[0x00..0x04].try_into().map_err( |_| ReturnCode::SlicingError)?) as u64)
+                                                             .map_err( |_| ReturnCode::InvalidData)?,
+                    value: u32_fb(data[0x04..0x08].try_into().map_err( |_| ReturnCode::SlicingError)?) as u64,
                 })
             },
             BitWidth::W64 => {
-                if data.len() != 16 {return Err("Dynamic Entry: Incorrect data length.")};
+                if data.len() != 16 {return Err(ReturnCode::IncorrectBufferLength)};
                 Ok(Self {
                     entry_type: ProgramDynamicEntryType::try_from(
-                           u64_fb(data[0x00..0x08].try_into().map_err( |_| "Dynamic Entry: Error slicing entry type.")?) as u64)
-                                                             .map_err( |_| "Dynamic Entry: Invalid entry type."      )?,
-                    value: u64_fb(data[0x08..0x10].try_into().map_err( |_| "Dynamic Entry: Error slicing value."     )?) as u64,
+                           u64_fb(data[0x00..0x08].try_into().map_err( |_| ReturnCode::SlicingError)?) as u64)
+                                                             .map_err( |_| ReturnCode::InvalidData)?,
+                    value: u64_fb(data[0x08..0x10].try_into().map_err( |_| ReturnCode::SlicingError)?) as u64,
                 })
             },
         }
@@ -667,18 +668,18 @@ impl ProgramDynamicEntry {
 }
 
 //Dynamic Table Iterator
-pub struct ProgramDynamicEntryIterator<'a, LR: 'a+VolumeRead> {
-    file:       &'a LR,
+pub struct ProgramDynamicEntryIterator<'a, RO: 'a+VolumeRead> {
+    file:       &'a RO,
     bit_width:      BitWidth,
     endianness:     Endianness,
     base_offset:    u64,
     entry_position: u64,
     entry_count:    u64,
 }
-impl<'a, LR: 'a+VolumeRead> ProgramDynamicEntryIterator<'a, LR> {
+impl<'a, RO: 'a+VolumeRead> ProgramDynamicEntryIterator<'a, RO> {
     // FUNCTIONS
     //Constructor
-    pub fn new(file: &'a LR, file_header: &Header, program_header: &Program) -> Self{
+    pub fn new(file: &'a RO, file_header: &Header, program_header: &Program) -> Self{
         ProgramDynamicEntryIterator {
             file,
             bit_width:      file_header.bit_width,
@@ -689,23 +690,23 @@ impl<'a, LR: 'a+VolumeRead> ProgramDynamicEntryIterator<'a, LR> {
         }
     }
     //Get Entry
-    fn entry(&mut self) -> Result<ProgramDynamicEntry, &'static str> {
-        return match self.bit_width {
+    fn entry(&mut self) -> Result<ProgramDynamicEntry, ReturnCode> {
+        match self.bit_width {
             BitWidth::W32 => {
                 let mut buffer: [u8; 8] = [0u8; 8];
-                self.file.read(self.base_offset as usize + 8*self.entry_position as usize, &mut buffer)?;
+                self.file.read_all(self.base_offset as u64 + 8*self.entry_position as u64, &mut buffer)?;
                 ProgramDynamicEntry::new(&buffer, self.bit_width, self.endianness)
             },
             BitWidth::W64 => {
                 let mut buffer: [u8; 16] = [0u8; 16];
-                self.file.read(self.base_offset as usize + 16*self.entry_position as usize, &mut buffer)?;
+                self.file.read_all(self.base_offset as u64 + 16*self.entry_position as u64, &mut buffer)?;
                 ProgramDynamicEntry::new(&buffer, self.bit_width, self.endianness)
             },
         }
     }
 }
-impl<'a, R: 'a+VolumeRead> Iterator for ProgramDynamicEntryIterator<'a, R> {
-    type Item = Result<ProgramDynamicEntry, &'static str>;
+impl<'a, RO: 'a+VolumeRead> Iterator for ProgramDynamicEntryIterator<'a, RO> {
+    type Item = Result<ProgramDynamicEntry, ReturnCode>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.entry_position >= self.entry_count {
             None
@@ -767,50 +768,50 @@ pub struct RelocationEntry {
 }
 impl RelocationEntry {
     // CONSTRUCTOR
-    pub fn new(data: &[u8], bit_width: BitWidth, endianness: Endianness, relocation_type: RelocationType) -> Result<Self, &'static str> {
+    pub fn new(data: &[u8], bit_width: BitWidth, endianness: Endianness, relocation_type: RelocationType) -> Result<Self, ReturnCode> {
         let (_u16_fb, u32_fb, u64_fb): (fn([u8;2]) -> u16, fn([u8;4]) -> u32, fn([u8;8]) -> u64) = match endianness {
             Endianness::Little => (u16::from_le_bytes, u32::from_le_bytes, u64::from_le_bytes),
             Endianness::Big    => (u16::from_be_bytes, u32::from_be_bytes, u64::from_be_bytes),
         };
         match (bit_width, relocation_type) {
             (BitWidth::W32, RelocationType::Implicit) => {
-                if data.len() != 0x08 {return Err("Relocation Entry: Length of data provided incorrect for 32-bit entry with implicit addends.");}
-                let info: u32 = u32_fb(data[0x04..0x08].try_into().map_err( |_| "Relocation Entry: Error slicing info.")?);
+                if data.len() != 0x08 {return Err(ReturnCode::IncorrectBufferLength);}
+                let info: u32 = u32_fb(data[0x04..0x08].try_into().map_err( |_| ReturnCode::SlicingError)?);
                 Ok(Self {
-                    offset: u32_fb(data[0x00..0x04].try_into().map_err( |_| "Relocation Entry: Error slicing offset.")?) as u64,
+                    offset: u32_fb(data[0x00..0x04].try_into().map_err( |_| ReturnCode::SlicingError)?) as u64,
                     symbol: info >> 8,
-                    relocation_entry_type: RelocationEntryTypeX86_64::try_from(info & 0xFF).map_err( |_| "Relocation Entry: Invalid relocation entry type.")?,
+                    relocation_entry_type: RelocationEntryTypeX86_64::try_from(info & 0xFF).map_err( |_| ReturnCode::InvalidData)?,
                     addend: None,
                 })
             },
             (BitWidth::W32, RelocationType::Explicit) => {
-                if data.len() != 0x0C {return Err("Relocation Entry: Length of data provided incorrect for 32-bit entry with explicit addends.");}
-                let info: u32 = u32_fb(data[0x04..0x08].try_into().map_err( |_| "Relocation Entry: Error slicing info.")?);
+                if data.len() != 0x0C {return Err(ReturnCode::IncorrectBufferLength);}
+                let info: u32 = u32_fb(data[0x04..0x08].try_into().map_err( |_| ReturnCode::SlicingError)?);
                 Ok(Self {
-                    offset: u32_fb(data[0x00..0x04].try_into().map_err( |_| "Relocation Entry: Error slicing offset.")?) as u64,
+                    offset: u32_fb(data[0x00..0x04].try_into().map_err( |_| ReturnCode::SlicingError)?) as u64,
                     symbol: info >> 8,
-                    relocation_entry_type: RelocationEntryTypeX86_64::try_from(info & 0xFF).map_err( |_| "Relocation Entry: Invalid relocation entry type.")?,
-                    addend: Some(u32_fb(data[0x08..0x0C].try_into().map_err( |_| "Relocation Entry: Error slicing addend.")?) as u64),
+                    relocation_entry_type: RelocationEntryTypeX86_64::try_from(info & 0xFF).map_err( |_| ReturnCode::InvalidData)?,
+                    addend: Some(u32_fb(data[0x08..0x0C].try_into().map_err( |_| ReturnCode::SlicingError)?) as u64),
                 })
             },
             (BitWidth::W64, RelocationType::Implicit) => {
-                if data.len() != 0x10 {return Err("Relocation Entry: Length of data provided incorrect for 64-bit entry with implicit addends.");}
-                let info: u64 = u64_fb(data[0x08..0x10].try_into().map_err( |_| "Relocation Entry: Error slicing info.")?);
+                if data.len() != 0x10 {return Err(ReturnCode::IncorrectBufferLength);}
+                let info: u64 = u64_fb(data[0x08..0x10].try_into().map_err( |_| ReturnCode::SlicingError)?);
                 Ok(Self {
-                    offset: u64_fb(data[0x00..0x08].try_into().map_err( |_| "Relocation Entry: Error slicing offset.")?),
+                    offset: u64_fb(data[0x00..0x08].try_into().map_err( |_| ReturnCode::SlicingError)?),
                     symbol: (info>>32) as u32,
-                    relocation_entry_type: RelocationEntryTypeX86_64::try_from((info & 0xFFFFFFFF) as u32).map_err( |_| "Relocation Entry: Invalid relocation Entry Type.")?,
+                    relocation_entry_type: RelocationEntryTypeX86_64::try_from((info & 0xFFFFFFFF) as u32).map_err( |_| ReturnCode::InvalidData)?,
                     addend: None,
                 })
             },
             (BitWidth::W64, RelocationType::Explicit) => {
-                if data.len() != 0x18 {return Err("Relocation Entry: Length of data provided incorrect for 64-bit entry with implicit addends.");}
-                let info: u64 = u64_fb(data[0x08..0x10].try_into().map_err( |_| "Relocation Entry: Error slicing info.")?);
+                if data.len() != 0x18 {return Err(ReturnCode::IncorrectBufferLength);}
+                let info: u64 = u64_fb(data[0x08..0x10].try_into().map_err( |_| ReturnCode::SlicingError)?);
                 Ok(Self {
-                    offset: u64_fb(data[0x00..0x08].try_into().map_err( |_| "Relocation Entry: Error slicing offset.")?),
+                    offset: u64_fb(data[0x00..0x08].try_into().map_err( |_| ReturnCode::SlicingError)?),
                     symbol: (info>>32) as u32,
-                    relocation_entry_type: RelocationEntryTypeX86_64::try_from((info & 0xFFFFFFFF) as u32).map_err( |_| "Relocation Entry: Invalid relocation Entry Type.")?,
-                    addend: Some(u64_fb(data[0x10..0x18].try_into().map_err( |_| "Relocation Entry: Error slicing info.")?)),
+                    relocation_entry_type: RelocationEntryTypeX86_64::try_from((info & 0xFFFFFFFF) as u32).map_err( |_| ReturnCode::InvalidData)?,
+                    addend: Some(u64_fb(data[0x10..0x18].try_into().map_err( |_| ReturnCode::SlicingError)?)),
                 })
             },
         }
@@ -818,8 +819,8 @@ impl RelocationEntry {
 }
 
 //Relocation Entry Iterator
-pub struct RelocationEntryIterator <'a, LR: 'a+VolumeRead> {
-    file:  &'a       LR,
+pub struct RelocationEntryIterator <'a, RO: 'a+VolumeRead> {
+    file:  &'a       RO,
     bit_width:       BitWidth,
     endianness:      Endianness,
     relocation_type: RelocationType,
@@ -827,9 +828,9 @@ pub struct RelocationEntryIterator <'a, LR: 'a+VolumeRead> {
     entry_position:  u64,
     entry_count:     u64,
 }
-impl<'a, LR: 'a+VolumeRead> RelocationEntryIterator<'a, LR> {
+impl<'a, RO: 'a+VolumeRead> RelocationEntryIterator<'a, RO> {
     // CONSTRUCTOR
-    pub fn new(file: &'a LR, bit_width: BitWidth, endianness: Endianness, relocation_type: RelocationType, file_size: u64, file_offset: u64) -> Self {
+    pub fn new(file: &'a RO, bit_width: BitWidth, endianness: Endianness, relocation_type: RelocationType, file_size: u64, file_offset: u64) -> Self {
         Self {
             file,
             bit_width,
@@ -843,33 +844,33 @@ impl<'a, LR: 'a+VolumeRead> RelocationEntryIterator<'a, LR> {
         }
     }
     // ENTRY
-    pub fn entry(&mut self) -> Result<RelocationEntry, &'static str> {
+    pub fn entry(&mut self) -> Result<RelocationEntry, ReturnCode> {
         match (self.bit_width, self.relocation_type) {
             (BitWidth::W32, RelocationType::Implicit) => {
                 let mut buffer: [u8; 0x08] = [0u8; 0x08];
-                self.file.read(self.file_offset as usize + 0x08*self.entry_position as usize, &mut buffer)?;
+                self.file.read_all(self.file_offset as u64 + 0x08*self.entry_position as u64, &mut buffer)?;
                 RelocationEntry::new(&buffer, self.bit_width, self.endianness, self.relocation_type)
             },
             (BitWidth::W32, RelocationType::Explicit) => {
                 let mut buffer: [u8; 0x0C] = [0u8; 0x0C];
-                self.file.read(self.file_offset as usize + 0x0C*self.entry_position as usize, &mut buffer)?;
+                self.file.read_all(self.file_offset as u64 + 0x0C*self.entry_position as u64, &mut buffer)?;
                 RelocationEntry::new(&buffer, self.bit_width, self.endianness, self.relocation_type)
             }, 
             (BitWidth::W64, RelocationType::Implicit) => {
                 let mut buffer: [u8; 0x10] = [0u8; 0x10];
-                self.file.read(self.file_offset as usize + 0x10*self.entry_position as usize, &mut buffer)?;
+                self.file.read_all(self.file_offset as u64 + 0x10*self.entry_position as u64, &mut buffer)?;
                 RelocationEntry::new(&buffer, self.bit_width, self.endianness, self.relocation_type)
             }, 
             (BitWidth::W64, RelocationType::Explicit) => {
                 let mut buffer: [u8; 0x18] = [0u8; 0x18];
-                self.file.read(self.file_offset as usize + 0x18*self.entry_position as usize, &mut buffer)?;
+                self.file.read_all(self.file_offset as u64 + 0x18*self.entry_position as u64, &mut buffer)?;
                 RelocationEntry::new(&buffer, self.bit_width, self.endianness, self.relocation_type)
             },
         }
     }
 }
-impl<'a, LR: 'a+VolumeRead> Iterator for RelocationEntryIterator<'a, LR> {
-    type Item = Result<RelocationEntry, &'static str>;
+impl<'a, RO: 'a+VolumeRead> Iterator for RelocationEntryIterator<'a, RO> {
+    type Item = Result<RelocationEntry, ReturnCode>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.entry_position >= self.entry_count {
             None

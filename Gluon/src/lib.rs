@@ -37,6 +37,7 @@
 #![feature(arbitrary_enum_discriminant)]
 #![feature(asm_sym)]
 #![feature(naked_functions)]
+#![feature(try_trait_v2)]
 
 //Imports
 use core::convert::TryFrom;

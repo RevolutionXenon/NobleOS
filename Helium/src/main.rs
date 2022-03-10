@@ -29,6 +29,7 @@ use photon::*;
 use photon::formats::f2::*;
 use gluon::GLUON_VERSION;
 use gluon::noble::address_space::*;
+use gluon::noble::file_system::*;
 use gluon::noble::input_events::*;
 use gluon::pc::fat::*;
 use gluon::pc::ports::*;
@@ -529,9 +530,10 @@ pub extern "sysv64" fn _start() -> ! {
     // RAMDISK TESTING
     writeln!(printer, "\n=== RAMDISK TEST ===\n");
     unsafe {
-        let bytes: [u8;0x200] = read_volatile(oct4_to_pointer(RAMDISK_OCT).unwrap() as *const [u8;0x200]);
+        /*let bytes: [u8;0x200] = read_volatile(oct4_to_pointer(RAMDISK_OCT).unwrap() as *const [u8;0x200]);
         let boot_sector_r = FATBootSector::try_from(bytes);
-        //writeln!(printer, "{:?}", boot_sector_r);
+        writeln!(printer, "{:?}", boot_sector_r);
+        writeln!(printer, "{:016X}", oct4_to_usize(RAMDISK_OCT).unwrap());
         match boot_sector_r {
             Ok(boot_sector) => {
                 writeln!(printer, "Total Sectors:     {:16X}", boot_sector.total_sectors());
@@ -541,6 +543,26 @@ pub extern "sysv64" fn _start() -> ! {
                 writeln!(printer, "First Data Sector: {:16X}", boot_sector.first_data_sector());
             },
             Err(_) => {writeln!(printer, "Boot sector invalid.");},
+        }*/
+        let volume = MemoryVolume{offset: oct4_to_usize(RAMDISK_OCT).unwrap(), size: 8 * MIB};
+        let file_system = FATFileSystem::from_existing_volume(&volume).unwrap();
+        let root_directory_id = file_system.root().unwrap();
+        writeln!(printer, "Root Directory ID:          {:?}", root_directory_id);
+        let root_directory_open = file_system.open(root_directory_id).unwrap();
+        writeln!(printer, "Open Root Directory ID:     {:?}", root_directory_open);
+        let root_directory_first = file_system.dir_first(root_directory_open).unwrap().unwrap();
+        writeln!(printer, "Root Directory First Index: {}", root_directory_first);
+        let test_file_id = file_system.get_id(root_directory_open, root_directory_first).unwrap();
+        writeln!(printer, "Test File ID:               {:?}", test_file_id);
+        let test_file_open = file_system.open(test_file_id).unwrap();
+        writeln!(printer, "Open Test File ID:          {:?}", test_file_open).unwrap();
+        let test_file = FileShortcut{ fs: &file_system, id: test_file_open };
+        for i in 1..12 {
+            writeln!(printer, "{:?}", {
+                let mut buffer = [0u8;16];
+                test_file.read((i*KIB) as u64 - 8, &mut buffer).unwrap();
+                buffer
+            });
         }
     }
 

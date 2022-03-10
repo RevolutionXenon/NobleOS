@@ -28,6 +28,7 @@ use photon::formats::f2::*;
 use gluon::*;
 use gluon::noble::address_space::*;
 use gluon::noble::file_system::*;
+use gluon::noble::return_code::*;
 use gluon::pc::fat::*;
 use gluon::sysv::executable::*;
 use gluon::x86_64::paging::*;
@@ -124,7 +125,7 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
     //Graphics Output Initialization
     let graphics_output_protocol = unsafe{&mut *match boot_services.locate_protocol::<GraphicsOutput>() {
         Ok(completion) => completion, 
-        Err(error) => panic!("Graphics Output Initialization: Failed due to {}", uefi_error_readout(error.status()))}
+        Err(error) => panic!("Graphics Output Initialization: Failed due to {:?}", uefi_error_readout(error.status()))}
     .expect("Graphics Output Initialization: Failed due to Unsafe Cell expect.").get()};
     //Screen Variables
     let graphics_frame_pointer: *mut u8 = graphics_output_protocol.frame_buffer().as_mut_ptr();
@@ -146,12 +147,12 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
     //Simple File System Initialization
     let simple_file_system = unsafe{&mut *match boot_services.locate_protocol::<SimpleFileSystem>() {
         Ok(completion) => completion, 
-        Err(error) => panic!("Simple File System Initialization: Failed due to {}", uefi_error_readout(error.status()))}
+        Err(error) => panic!("Simple File System Initialization: Failed due to {:?}", uefi_error_readout(error.status()))}
     .expect("Simple File System Initialization: Failed due to Unsafe Cell expect.").get()};
     //Input Initialization
     let input = unsafe{&mut *match boot_services.locate_protocol::<Input>() {
         Ok(completion) => completion, 
-        Err(error) => panic!("Input Initialization: Failed due to {}", uefi_error_readout(error.status()))}
+        Err(error) => panic!("Input Initialization: Failed due to {:?}", uefi_error_readout(error.status()))}
     .expect("Input Initialization: Failed due to Unsafe Cell expect.").get()};
 
     // GRAPHICS SETUP
@@ -186,7 +187,7 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
     let sfs_kernel_wrap = LocationalReadWrapper{ref_cell: RefCell::new(&mut sfs_kernel)};
     let mut kernel = match ELFFile::new(&sfs_kernel_wrap) {
         Ok(elffile) =>  elffile,
-        Err(error) => panic!("{}", error),
+        Err(error) => panic!("{:?}", error),
     };
     //Check ELF header validity
     if kernel.header.binary_interface         != ApplicationBinaryInterface::None     {writeln!(printer, "Kernel load: Incorrect Application Binary Interface (ei_osabi). Should be SystemV/None (0x00)."); panic!();}
@@ -206,10 +207,10 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
                 writeln!(printer, "Kernel stack located at:          0x{:16X}", stack_location as usize);
                 match kernel.relocate(kernel_location, oct4_to_pointer(KERNEL_OCT).unwrap()) {
                     Ok(()) => {writeln!(printer, "Kernel successfully relocated to: 0x{:16X}", oct4_to_pointer(KERNEL_OCT).unwrap() as usize);},
-                    Err(error) => {writeln!(printer, "{}", error);},
+                    Err(error) => {writeln!(printer, "{:?}", error);},
                 }
             }
-            Err(error) => {writeln!(printer, "{}", error);}
+            Err(error) => {writeln!(printer, "{:?}", error);}
         }
     }
     //Print ELF header info
@@ -380,7 +381,7 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
         let mut buffer = [0u8; 0x4000];
         let (_k, description_iterator) = match boot_services.memory_map(&mut buffer) {
             Ok(value) => value.unwrap(),
-            Err(error) => {panic!("{}", uefi_error_readout(error.status()))}
+            Err(error) => {panic!("{:?}", uefi_error_readout(error.status()))}
         };
         //Iterate over memory map
         let mut running_total: u64 = 0;
@@ -452,7 +453,7 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
         writeln!(printer, "test");
         writeln!(printer, "{:?}", file_system.fat.read_entry(0x0002));
         //Create File
-        file_system.fat.write_entry(0x0002, FATTableEntry::Used(0x0003));
+        /*file_system.fat.write_entry(0x0002, FATTableEntry::Used(0x0003));
         file_system.fat.write_entry(0x0003, FATTableEntry::Used(0x0004));
         file_system.fat.write_entry(0x0004, FATTableEntry::End);
         file_system.root_directory.write_entry(0, FATDirectoryEntry{
@@ -465,12 +466,25 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
             creation_date:      0,
             file_size:          12 * KIB as u32,
         });
-        let test_file = FATFile::new_from_start_cluster(&file_system, boot_sector.root_location(), 0x0002, 10 * KIB as u32).unwrap();
-        for i in 0u8..10 {
-            write!(printer, "{} ", i);
-            test_file.write(i as usize*KIB, &[i+1;KIB]).unwrap();
+        let test_file = FATFile::new_from_start_cluster(&file_system, 0x0002, 10 * KIB as u32).unwrap();
+        */
+        //Create File
+        let root_directory = file_system.open(file_system.root().unwrap()).unwrap();
+        let test_file_id = file_system.create(root_directory, "test.raw", (12 * KIB) as u64, false).unwrap();
+        let test_file = FileShortcut{ fs: &file_system, id: test_file_id };
+        //Test
+        writeln!(printer, "{:016X}", test_file_id.0);
+        writeln!(printer, "{:?}", file_system.fat.read_entry(2));
+        let mut dir_buffer = [0u8;32];
+        volume.read(test_file_id.0, &mut dir_buffer).unwrap();
+        let dir_entry_test = FATShortDirectoryEntry::try_from(dir_buffer).unwrap();
+        writeln!(printer, "{:?}", dir_entry_test);
+        //Write to file
+        for i in 0u8..12 {
+            writeln!(printer, "{} ", i);
+            test_file.write((i as usize * KIB) as u64, &[i+1;KIB]).unwrap();
         }
-        test_file.set_name("test.raw").unwrap();
+        //test_file.set_name("test.raw").unwrap();
     }
 
     // COMMAND LINE
@@ -595,50 +609,50 @@ fn panic_handler(panic_info: &PanicInfo) -> ! {
 
 // UEFI FUNCTIONS
 //Read a UEFI error status as a string
-fn uefi_error_readout(error: Status) -> &'static str {
+fn uefi_error_readout(error: Status) -> ReturnCode {
     match error {
-        Status::SUCCESS               => "UEFI Success.",
-        Status::WARN_UNKNOWN_GLYPH    => "UEFI Warning: Unknown Glyph.",
-        Status::WARN_DELETE_FAILURE   => "UEFI Warning: File Delete Failure.",
-        Status::WARN_WRITE_FAILURE    => "UEFI Warning: Handle Write Failure.",
-        Status::WARN_BUFFER_TOO_SMALL => "UEFI Warning: Buffer Too Small, Data Truncated.",
-        Status::WARN_STALE_DATA       => "UEFI Warning: Stale Data",
-        Status::WARN_FILE_SYSTEM      => "UEFI Warning: Buffer Contains File System.",
-        Status::WARN_RESET_REQUIRED   => "UEFI Warning: Reset Required.",
-        Status::LOAD_ERROR            => "UEFI Error: Image Load Error.",
-        Status::INVALID_PARAMETER     => "UEFI Error: Invalid Parameter Provided.",
-        Status::UNSUPPORTED           => "UEFI Error: Unsupported Operation.",
-        Status::BAD_BUFFER_SIZE       => "UEFI Error: Bad Buffer Size.",
-        Status::BUFFER_TOO_SMALL      => "UEFI Error: Buffer Too Small.",
-        Status::NOT_READY             => "UEFI Error: Not Ready.",
-        Status::DEVICE_ERROR          => "UEFI Error: Physical Device Error",
-        Status::WRITE_PROTECTED       => "UEFI Error: Device Write Protected.",
-        Status::OUT_OF_RESOURCES      => "UEFI Error: Out of Resources.",
-        Status::VOLUME_CORRUPTED      => "UEFI Error: Volume Corrupted.",
-        Status::VOLUME_FULL           => "UEFI Error: Volume Full.",
-        Status::NO_MEDIA              => "UEFI Error: Media Missing.",
-        Status::MEDIA_CHANGED         => "UEFI Error: Media Changed.",
-        Status::NOT_FOUND             => "UEFI Error: Item Not Found.",
-        Status::ACCESS_DENIED         => "UEFI Error: Access Denied.",
-        Status::NO_RESPONSE           => "UEFI Error: No Response.",
-        Status::NO_MAPPING            => "UEFI Error: No Mapping.",
-        Status::TIMEOUT               => "UEFI Error: Timeout.",
-        Status::NOT_STARTED           => "UEFI Error: Protocol Not Started.",
-        Status::ALREADY_STARTED       => "UEFI Error: Protocol Already Started.",
-        Status::ABORTED               => "UEFI Error: Operation Aborted.",
-        Status::ICMP_ERROR            => "UEFI Error: Network ICMP Error.",
-        Status::TFTP_ERROR            => "UEFI Error: Network TFTP Error.",
-        Status::PROTOCOL_ERROR        => "UEFI Error: Network Protocol Error.",
-        Status::INCOMPATIBLE_VERSION  => "UEFI Error: Incompatible Version.",
-        Status::SECURITY_VIOLATION    => "UEFI Error: Security Violation.",
-        Status::CRC_ERROR             => "UEFI Error: Cyclic Redundancy Check Error.",
-        Status::END_OF_MEDIA          => "UEFI Error: End of Media Reached.",
-        Status::END_OF_FILE           => "UEFI Error: End of File Reached.",
-        Status::INVALID_LANGUAGE      => "UEFI Error: Invalid Language.",
-        Status::COMPROMISED_DATA      => "UEFI Error: Compromised Data.",
-        Status::IP_ADDRESS_CONFLICT   => "UEFI Error: Network IP Address Conflict.",
-        Status::HTTP_ERROR            => "UEFI Error: Network HTTP Error.",
-        _                             => "UEFI Error: Error Unrecognized.",
+        Status::SUCCESS               => ReturnCode::NoError,
+        Status::WARN_UNKNOWN_GLYPH    => ReturnCode::UnknownGlyph,
+        Status::WARN_DELETE_FAILURE   => ReturnCode::FileDeleteFailure,
+        Status::WARN_WRITE_FAILURE    => ReturnCode::WriteFailure,
+        Status::WARN_BUFFER_TOO_SMALL => ReturnCode::BufferTooSmall,
+        Status::WARN_STALE_DATA       => ReturnCode::StaleData,
+        Status::WARN_FILE_SYSTEM      => ReturnCode::FileSystemDump,
+        Status::WARN_RESET_REQUIRED   => ReturnCode::ResetRequested,
+        Status::LOAD_ERROR            => ReturnCode::ReadError,
+        Status::INVALID_PARAMETER     => ReturnCode::InvalidData,
+        Status::UNSUPPORTED           => ReturnCode::UnsupportedFeature,
+        Status::BAD_BUFFER_SIZE       => ReturnCode::IncorrectBufferLength,
+        Status::BUFFER_TOO_SMALL      => ReturnCode::BufferTooSmall,
+        Status::NOT_READY             => ReturnCode::NotReady,
+        Status::DEVICE_ERROR          => ReturnCode::DeviceError,
+        Status::WRITE_PROTECTED       => ReturnCode::WriteProtected,
+        Status::OUT_OF_RESOURCES      => ReturnCode::OutOfResources,
+        Status::VOLUME_CORRUPTED      => ReturnCode::VolumeCorrupted,
+        Status::VOLUME_FULL           => ReturnCode::VolumeFull,
+        Status::NO_MEDIA              => ReturnCode::MediaMissing,
+        Status::MEDIA_CHANGED         => ReturnCode::MediaChanged,
+        Status::NOT_FOUND             => ReturnCode::NotFound,
+        Status::ACCESS_DENIED         => ReturnCode::AccessDenied,
+        Status::NO_RESPONSE           => ReturnCode::NoResponse,
+        Status::NO_MAPPING            => ReturnCode::NoMapping,
+        Status::TIMEOUT               => ReturnCode::TimeOut,
+        Status::NOT_STARTED           => ReturnCode::NotStarted,
+        Status::ALREADY_STARTED       => ReturnCode::AlreadyStarted,
+        Status::ABORTED               => ReturnCode::Aborted,
+        Status::ICMP_ERROR            => ReturnCode::IcmpError,
+        Status::TFTP_ERROR            => ReturnCode::TftpError,
+        Status::PROTOCOL_ERROR        => ReturnCode::ProtocolError,
+        Status::INCOMPATIBLE_VERSION  => ReturnCode::IncompatibleVersion,
+        Status::SECURITY_VIOLATION    => ReturnCode::SecurityViolation,
+        Status::CRC_ERROR             => ReturnCode::CrcError,
+        Status::END_OF_MEDIA          => ReturnCode::EndOfVolume,
+        Status::END_OF_FILE           => ReturnCode::EndOfVolume,
+        Status::INVALID_LANGUAGE      => ReturnCode::InvalidLanguage,
+        Status::COMPROMISED_DATA      => ReturnCode::CompromisedData,
+        Status::IP_ADDRESS_CONFLICT   => ReturnCode::AddressConflict,
+        Status::HTTP_ERROR            => ReturnCode::HttpError,
+        _                             => ReturnCode::UnknownError,
     }
 }
 
@@ -653,7 +667,7 @@ fn uefi_set_graphics_mode(gop: &mut GraphicsOutput) {
 }
 
 //Total size of free conventional memory
-fn uefi_free_memory_page_count(boot_services: &BootServices, memory_types: &[MemoryType]) -> Result<usize, &'static str> {
+fn uefi_free_memory_page_count(boot_services: &BootServices, memory_types: &[MemoryType]) -> Result<usize, ReturnCode> {
     //Build a buffer big enough to handle the memory map
     let mut buffer = [0u8; 0x4000];
     //Read memory map into buffer
@@ -710,7 +724,7 @@ fn command_time(printer: &mut dyn Write, runtime_services: &RuntimeServices, arg
     let t = runtime_services.get_time();
     match t {
         Ok(t) => {let t = t.log(); writeln!(printer, "{}-{:02}-{:02} {:02}:{:02}:{:02} UTC", t.year(), t.month(), t.day(), t.hour(), t.minute(), t.second());},
-        Err(error) => {writeln!(printer, "Failed to retrieve time:\n{}", uefi_error_readout(error.status()));}
+        Err(error) => {writeln!(printer, "Failed to retrieve time:\n{:?}", uefi_error_readout(error.status()));}
     }
 }
 
@@ -729,7 +743,7 @@ fn command_memmap(printer: &mut dyn Write, boot_services: &BootServices, args: &
     //Read memory map into buffer
     let (_k, description_iterator) = match boot_services.memory_map(&mut buffer) {
         Ok(value) => value.unwrap(),
-        Err(error) => {writeln!(printer, "{}", uefi_error_readout(error.status())); return;}
+        Err(error) => {writeln!(printer, "{:?}", uefi_error_readout(error.status())); return;}
     };
     //Print memory map
     let mut i = 0;
@@ -997,7 +1011,7 @@ struct LocationalReadWrapper<'a> {
     ref_cell: RefCell<&'a mut RegularFile>,
 }
 impl<'a> VolumeRead for LocationalReadWrapper<'a> {
-    fn read(&self, offset: usize, buffer: &mut [u8]) -> Result<(), &'static str> {
+    fn read(&self, offset: u64, buffer: &mut [u8]) -> Result<u64, ReturnCode> {
         match self.ref_cell.try_borrow_mut() {
             Ok(mut file) => {
                 file.set_position(offset as u64);
@@ -1005,13 +1019,13 @@ impl<'a> VolumeRead for LocationalReadWrapper<'a> {
                     Ok(completion) => {
                         let size = completion.unwrap(); 
                         if size == buffer.len() {
-                            Ok(())
-                        } 
+                            Ok(buffer.len() as u64)
+                        }
                         else {
-                            Err("UEFI File Read: Buffer exceeds end of file.")
+                            Err(ReturnCode::VolumeOutOfBounds)
                         }
                     },
-                    Err(error) => Err(uefi_error_readout(error.status())),
+                    Err(_) => Err(ReturnCode::UefiError),
                 }
             },
             Err(error) => {panic!("{}", error)}
