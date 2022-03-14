@@ -16,15 +16,14 @@ use core::str;
 
 // FAT16 FILE SYSTEMS
 //Full FAT16 Handling Routines
-pub struct FATFileSystem<'s, V: 's> {
-    pub volume:     &'s V,
+pub struct FATFileSystem<'s> {
+    pub volume:     &'s dyn Volume,
     pub boot_sector:    FATBootSector,
-    pub fat:            FATTable<'s, V>,
-    pub root_directory: FATDirectory<VolumeFromVolume<'s, V>>,
+    pub fat:            FATTable<'s>,
 }
-impl<'s, WO: 's+VolumeWrite>                           FATFileSystem<'s, WO> {
+impl<'s>                FATFileSystem<'s> {
     // CONSTRUCTOR
-    pub fn format_new(volume: &'s WO, boot_sector: FATBootSector) -> Result<Self, ReturnCode> {
+    pub fn format_new(volume: &'s dyn Volume, boot_sector: FATBootSector) -> Result<Self, ReturnCode> {
         //Clear
         for i in 0..(boot_sector.data_start_sector() * boot_sector.bytes_per_sector as u32) as u64 / 0x200 {  
             volume.write_all(0x200*i, &[0u8; 0x200])?;
@@ -35,47 +34,28 @@ impl<'s, WO: 's+VolumeWrite>                           FATFileSystem<'s, WO> {
         let fat = FATTable::new(volume, boot_sector);
         fat.write_raw(0, 0xFFF0)?;
         fat.write_raw(1, 0xFFFF)?;
-        //Create Root Directory
-        let root_directory = FATDirectory {
-            directory: VolumeFromVolume {
-                volume,
-                offset: (boot_sector.root_start_sector() * boot_sector.bytes_per_sector as u32) as u64,
-                size: boot_sector.root_entry_count as u64 * 32,
-            },
-        };
         //Return
-        Ok(Self {volume, boot_sector, fat, root_directory})
+        Ok(Self {volume, boot_sector, fat})
     }
-}
-impl<'s, RO: 's+VolumeRead>                            FATFileSystem<'s, RO> {
-    // CONSTRUCTOR
-    pub fn from_existing_volume(volume: &'s RO) -> Result<Self, ReturnCode> {
+    pub fn from_existing_volume(volume: &'s dyn Volume) -> Result<Self, ReturnCode> {
         //Load Boot Sector
         let mut buffer: [u8; 0x200] = [0u8; 0x200];
         volume.read_all(0x00, &mut buffer)?;
         let boot_sector = FATBootSector::try_from(buffer)?;
         //Load FAT
         let fat = FATTable::new(volume, boot_sector);
-        //Load Root Directory
-        let root_directory = FATDirectory {
-            directory: VolumeFromVolume {
-                volume,
-                offset: (boot_sector.root_start_sector() * boot_sector.bytes_per_sector as u32) as u64,
-                size: boot_sector.root_entry_count as u64 * 32,
-            },
-        };
         //Return
-        Ok(Self {volume, boot_sector, fat, root_directory})
+        Ok(Self {volume, boot_sector, fat})
     }
 }
-impl<'s, RW: 's+VolumeRead+VolumeWrite> FileSystem for FATFileSystem<'s, RW> {
+impl<'s> FileSystem for FATFileSystem<'s> {
     //Read and write files
-    fn read      (&self, id: OpenFileID, offset: u64, buffer: &mut [u8])         -> Result<u64,         ReturnCode> {
+    fn read        (&self, id: OpenFileID, offset: u64, buffer: &mut [u8])             -> Result<u64,         ReturnCode> {
         if id.0 == 0 {
             let file = VolumeFromVolume {
                 volume: self.volume,
                 offset: self.boot_sector.root_location() as u64,
-                size: (self.boot_sector.root_entry_count * 32) as u64,
+                size: (self.boot_sector.root_entry_count as u64 * 32) as u64,
             };
             file.read(offset, buffer)
         }
@@ -84,7 +64,7 @@ impl<'s, RW: 's+VolumeRead+VolumeWrite> FileSystem for FATFileSystem<'s, RW> {
             file.read(offset, buffer)
         }
     }
-    fn write     (&self, id: OpenFileID, offset: u64, buffer: &[u8])             -> Result<u64,         ReturnCode> {
+    fn write       (&self, id: OpenFileID, offset: u64, buffer: &[u8])                 -> Result<u64,         ReturnCode> {
         if id.0 == 0 {
             let file = VolumeFromVolume {
                 volume: self.volume,
@@ -99,19 +79,19 @@ impl<'s, RW: 's+VolumeRead+VolumeWrite> FileSystem for FATFileSystem<'s, RW> {
         }
     }
     //Open and close files
-    fn open      (&self, id: FileID)                                             -> Result<OpenFileID,  ReturnCode> {
+    fn open        (&self, id: FileID)                                                 -> Result<OpenFileID,  ReturnCode> {
         if id.0 == 1 || id.0 >= self.boot_sector.fat_entry_count() as u64 {return Err(ReturnCode::InvalidIdentifier)}
         Ok(OpenFileID(id.0))
     }
-    fn close     (&self, _id: OpenFileID)                                        -> Result<(),          ReturnCode> {
+    fn close       (&self, _id: OpenFileID)                                            -> Result<(),          ReturnCode> {
         Ok(())
     }
     //Create and delete files
-    fn create    (&self, directory_id: OpenFileID, name: &str, size: u64, dir: bool) -> Result<OpenFileID,  ReturnCode> {
+    fn create      (&self, directory_id: OpenFileID, name: &str, size: u64, dir: bool) -> Result<OpenFileID,  ReturnCode> {
         //Checks
         let file_size: u32 = u32::try_from(size).map_err(|_| ReturnCode::VolumeOutOfBounds)?;
         //Objects
-        let directory: FATDirectory<&dyn VolumeReadWrite>;
+        let directory: FATDirectory;
         let root;
         let file;
         //Root Directory
@@ -157,105 +137,63 @@ impl<'s, RW: 's+VolumeRead+VolumeWrite> FileSystem for FATFileSystem<'s, RW> {
         //Finish
         Ok(OpenFileID(start_cluster as u64))
     }
-    fn delete    (&self, directory_id: OpenFileID, name: &str)                   -> Result<(),          ReturnCode> {
+    fn delete      (&self, directory_id: OpenFileID, name: &str)                       -> Result<(),          ReturnCode> {
         todo!()
     }
     //Traverse directories
-    fn root      (&self)                                                         -> Result<FileID,      ReturnCode> {
+    fn root        (&self)                                                             -> Result<FileID,      ReturnCode> {
         Ok(FileID(0))
     }
-    fn dir_first (&self, directory_id: OpenFileID)                               -> Result<Option<u64>, ReturnCode> {
-        //Objects
-        let directory: FATDirectory<&dyn VolumeReadWrite>;
-        let root;
-        let file;
-        //Root Directory
-        if directory_id.0 == 0 {
-            root = VolumeFromVolume {
-                volume: self.volume,
-                offset: self.boot_sector.root_location() as u64,
-                size: self.boot_sector.root_entry_count as u64 * 32,
-            };
-            directory = FATDirectory{ directory: &root};
-        }
-        //Other Directory
-        else {
-            file = FATFile::new_from_start_cluster(self, directory_id.0 as u32)?;
-            directory = FATDirectory{directory: &file};
-        }
-        //Read Directory
+    fn dir_first   (&self, directory_id: OpenFileID)                                   -> Result<Option<u64>, ReturnCode> {
+        let directory = FATDirectory{directory: &FileShortcut{fs: self, id: directory_id}};
         directory.find_shortname_entry(0).map(|o| o.map(|i| i as u64))
     }
-    fn dir_next  (&self, directory_id: OpenFileID, index: u64)                   -> Result<Option<u64>, ReturnCode> {
-        //Objects
-        let directory: FATDirectory<&dyn VolumeReadWrite>;
-        let root;
-        let file;
-        //Root Directory
-        if directory_id.0 == 0 {
-            root = VolumeFromVolume {
-                volume: self.volume,
-                offset: self.boot_sector.root_location() as u64,
-                size: self.boot_sector.root_entry_count as u64 * 32,
-            };
-            directory = FATDirectory{ directory: &root};
-        }
-        //Other Directory
-        else {
-            file = FATFile::new_from_start_cluster(self, directory_id.0 as u32)?;
-            directory = FATDirectory{directory: &file};
-        }
-        //Read Directory
-        directory.find_shortname_entry(0).map(|o| o.map(|i| i as u64))
+    fn dir_next    (&self, directory_id: OpenFileID, index: u64)                       -> Result<Option<u64>, ReturnCode> {
+        let directory = FATDirectory{directory: &FileShortcut{fs: self, id: directory_id}};
+        directory.find_shortname_entry((index + 1) as u32).map(|o| o.map(|i| i as u64))
     }
-    fn dir_name  (&self, directory_id: OpenFileID, name: &str)                   -> Result<Option<u64>, ReturnCode> {
+    fn dir_name    (&self, directory_id: OpenFileID, name: &str)                       -> Result<Option<u64>, ReturnCode> {
         todo!()
     }
     //File properties
-    fn get_id    (&self, directory_id: OpenFileID, index: u64)                   -> Result<FileID,      ReturnCode> {
-        //Objects
-        let directory: FATDirectory<&dyn VolumeReadWrite>;
-        let root;
-        let file;
-        //Root Directory
-        if directory_id.0 == 0 {
-            root = VolumeFromVolume {
-                volume: self.volume,
-                offset: self.boot_sector.root_location() as u64,
-                size: self.boot_sector.root_entry_count as u64 * 32,
-            };
-            directory = FATDirectory{ directory: &root};
+    fn get_id      (&self, directory_id: OpenFileID, index: u64)                       -> Result<FileID,      ReturnCode> {
+        let directory = FATDirectory{directory: &FileShortcut{fs: self, id: directory_id}};
+        let entry = directory.read_entry(index as u32)?;
+        if !entry.query_shortname() {return Err(ReturnCode::InvalidIdentifier)};
+        Ok(FileID(entry.start_cluster_32() as u64))
+    }
+    fn get_dir     (&self, directory_id: OpenFileID, index: u64)                       -> Result<bool,        ReturnCode> {
+        let directory = FATDirectory{directory: &FileShortcut{fs: self, id: directory_id}};
+        let entry = directory.read_entry(index as u32)?;
+        if !entry.query_shortname() {return Err(ReturnCode::InvalidIdentifier)};
+        Ok(entry.file_attributes.subdirectory)
+    }
+    fn get_size    (&self, directory_id: OpenFileID, index: u64)                       -> Result<u64,         ReturnCode> {
+        let directory = FATDirectory{directory: &FileShortcut{fs: self, id: directory_id}};
+        let entry = directory.read_entry(index as u32)?;
+        if !entry.query_shortname() {return Err(ReturnCode::InvalidIdentifier)};
+        Ok(entry.file_size as u64)
+    }
+    fn set_size    (&self, directory_id: OpenFileID, index: u64, size: u64)            -> Result<(),          ReturnCode> {
+        todo!()
+    }
+    fn get_name<'f>(&self, directory_id: OpenFileID, index: u64, buffer: &'f mut[u8])  -> Result<&'f str,     ReturnCode> {
+        let directory = FATDirectory{directory: &FileShortcut{fs: self, id: directory_id}};
+        let entry = directory.read_entry(index as u32)?;
+        if !entry.query_shortname() {return Err(ReturnCode::InvalidIdentifier)};
+        match entry.file_attributes.subdirectory {
+            true => retrieve_short_directory_name(entry.file_name, buffer),
+            false => retrieve_short_file_name(entry.file_name, buffer),
         }
-        //Other Directory
-        else {
-            file = FATFile::new_from_start_cluster(self, directory_id.0 as u32)?;
-            directory = FATDirectory{directory: &file};
-        }
-        //Check
-        if !directory.read_entry(index as u32)?.query_shortname() {return Err(ReturnCode::InvalidIdentifier)};
-        //Finish
-        Ok(FileID(directory.read_entry(index as u32)?.start_cluster_32() as u64))
     }
-    fn get_dir   (&self, directory_id: OpenFileID, index: u64)                   -> Result<bool,        ReturnCode> {
-        todo!()
-    }
-    fn get_size  (&self, directory_id: OpenFileID, index: u64)                   -> Result<u64,         ReturnCode> {
-        todo!()
-    }
-    fn set_size  (&self, directory_id: OpenFileID, index: u64, size: u64)        -> Result<(),          ReturnCode> {
-        todo!()
-    }
-    fn get_name  (&self, directory_id: OpenFileID, index: u64, buffer: &mut[u8]) -> Result<&str,        ReturnCode> {
-        todo!()
-    }
-    fn set_name  (&self, directory_id: OpenFileID, index: u64, name: &str)       -> Result<(),          ReturnCode> {
+    fn set_name    (&self, directory_id: OpenFileID, index: u64, name: &str)           -> Result<(),          ReturnCode> {
         todo!()
     }
 }
 
 
 // NAME CONVERSION
-fn format_short_file_name(name_in: &str) -> Result<[u8;11], ReturnCode> {
+fn format_short_file_name       (name_in: &str) -> Result<[u8;11], ReturnCode> {
     //Check name string is valid
     if !name_in.is_ascii() {return Err(ReturnCode::InvalidCharacter)}
     let name_bytes = name_in.as_bytes();
@@ -284,10 +222,10 @@ fn format_short_file_name(name_in: &str) -> Result<[u8;11], ReturnCode> {
     //Finish
     Ok(name_final)
 }
-fn format_short_directory_name(input_name: &str) -> Result<[u8;11], ReturnCode> {
+fn format_short_directory_name  (name_in: &str) -> Result<[u8;11], ReturnCode> {
     //Check name string is valid
-    if !input_name.is_ascii() {return Err(ReturnCode::InvalidCharacter)}
-    let input_bytes = input_name.as_bytes();
+    if !name_in.is_ascii() {return Err(ReturnCode::InvalidCharacter)}
+    let input_bytes = name_in.as_bytes();
     if input_bytes.len() > 11 {return Err(ReturnCode::DataTooLarge)}
     //Create name array
     let mut output_bytes = [0x20u8;11];
@@ -295,6 +233,47 @@ fn format_short_directory_name(input_name: &str) -> Result<[u8;11], ReturnCode> 
     //Finish
     Ok(output_bytes)
 
+}
+fn retrieve_short_file_name     (ascii_in: [u8;11], buffer: &mut[u8]) -> Result<&str, ReturnCode> {
+    if buffer.len() < 12 {return Err(ReturnCode::BufferTooSmall)}
+    //Get File Name
+    let mut buffer_index = 0;
+    for i in 0..8 {
+        let ascii_byte = ascii_in[i];
+        if ascii_byte == 0x20 {break}
+        buffer[buffer_index] = ascii_byte;
+        buffer_index += 1;
+    }
+    //Check for extension
+    if ascii_in[8] != 0x20 {
+        //Add delimiter
+        buffer[buffer_index] = 0x2E;
+        buffer_index += 1;
+        //Get extension
+        for i in 8..11 {
+            let ascii_byte = ascii_in[i];
+            if ascii_byte == 0x20 {break}
+            buffer[buffer_index] = ascii_byte;
+            buffer_index += 1;
+        }
+    }
+    //Finish
+    let ret_str = str::from_utf8(&buffer[0..buffer_index]).map_err(|_| ReturnCode::ConversionError)?;
+    Ok(ret_str)
+}
+fn retrieve_short_directory_name(ascii_in: [u8;11], buffer: &mut[u8]) -> Result<&str, ReturnCode> {
+    if buffer.len() < 11 {return Err(ReturnCode::BufferTooSmall)}
+    //Get Name
+    let mut buffer_index = 0;
+    for i in 0..11 {
+        let ascii_byte = ascii_in[i];
+        if ascii_byte == 0x20 {break}
+        buffer[buffer_index] = ascii_byte;
+        buffer_index += 1;
+    }
+    //Finish
+    let ret_str = str::from_utf8(&buffer[0..buffer_index]).map_err(|_| ReturnCode::ConversionError)?;
+    Ok(ret_str)
 }
 
 
@@ -457,16 +436,16 @@ numeric_enum! {
 
 // FAT STRUCTURE
 //File Allocation Table
-pub struct FATTable<'s, RW: 's> {
-    volume:     &'s RW,
+pub struct FATTable<'s> {
+    volume: &'s dyn Volume,
     start_location: u32,
     entry_count:    u32,
     fat_count:      u32,
     fat_size:       u32,
 }
-impl<'s, RW: 's>                        FATTable<'s, RW> {
+impl<'s> FATTable<'s> {
     // CONSTRUCTOR
-    pub fn new(volume: &'s RW, boot_sector: FATBootSector) -> Self {
+    pub fn new(volume: &'s dyn Volume, boot_sector: FATBootSector) -> Self {
         Self {
             volume,
             start_location: boot_sector.fat_location(),
@@ -475,8 +454,6 @@ impl<'s, RW: 's>                        FATTable<'s, RW> {
             fat_size:       boot_sector.fat_size()
         }
     }
-}
-impl<'s, RO: 's+VolumeRead>             FATTable<'s, RO> {
     // READ ONLY
     pub fn read_entry(&self, cluster: u16) -> Result<FATTableEntry, ReturnCode> {
         if cluster as u32 > self.entry_count {return Err(ReturnCode::IndexOutOfBounds)}
@@ -499,8 +476,6 @@ impl<'s, RO: 's+VolumeRead>             FATTable<'s, RO> {
         }
         Err(ReturnCode::VolumeFull)
     }
-}
-impl<'s, WO: 's+VolumeWrite>            FATTable<'s, WO> {
     // WRITE ONLY
     pub fn write_entry(&self, cluster: u16, entry: FATTableEntry) -> Result<(), ReturnCode> {
         if cluster as u32 > self.entry_count {return Err(ReturnCode::IndexOutOfBounds)}
@@ -526,9 +501,7 @@ impl<'s, WO: 's+VolumeWrite>            FATTable<'s, WO> {
         }
         Ok(())
     }
-}
-impl<'s, RW: 's+VolumeRead+VolumeWrite> FATTable<'s, RW> {
-    //Allocate
+    // ALLOCATE
     pub fn allocate_clusters(&self, cluster_count: u16) -> Result<u32, ReturnCode> {
         let mut free_cluster = 2;
         for _ in 0..cluster_count {
@@ -559,10 +532,10 @@ pub enum FATTableEntry {
 
 // FAT DIRECTORY
 //Directory
-pub struct FATDirectory<V> {
-    pub directory:     V,
+pub struct FATDirectory<'s> {
+    pub directory: &'s dyn Volume,
 }
-impl<RW: VolumeRead+VolumeWrite> FATDirectory<RW> {
+impl<'s> FATDirectory<'s> {
     // BASIC
     pub fn read_entry(&self, index: u32) -> Result<FATShortDirectoryEntry, ReturnCode> {
         //if position >= self.num_entries {return Err(ReturnCode::IndexOutOfBounds)}
@@ -747,16 +720,16 @@ impl From<FATFileAttributes> for u8 {
 
 // FILE HANDLE
 //FAT File
-pub struct FATFile<'s, V: 's> {
-    volume:              &'s V,
-    fat:                 &'s FATTable<'s, V>,
+pub struct FATFile<'s> {
+    volume:              &'s dyn Volume,
+    fat:                 &'s FATTable<'s>,
     data_area_offset:        u32,
     start_cluster:           u32,
     cluster_size:            u32,
 }
-impl <'s, V: 's>                                        FATFile<'s, V> {
+impl <'s>            FATFile<'s> {
     // CONSTRUCTOR
-    pub fn new_from_start_cluster(fs: &'s FATFileSystem<V>, start_cluster: u32) -> Result<Self, ReturnCode> {
+    pub fn new_from_start_cluster(fs: &'s FATFileSystem, start_cluster: u32) -> Result<Self, ReturnCode> {
         if start_cluster == 0 || start_cluster == 1 {return Err(ReturnCode::InvalidIdentifier)}
         let bs = fs.boot_sector;
         let fat = &fs.fat;
@@ -769,22 +742,7 @@ impl <'s, V: 's>                                        FATFile<'s, V> {
         })
     }
 }
-impl <'s, RO: 's+VolumeRead>                             FATFile<'s, RO> {
-    fn file_offset_to_volume_offset (&self, offset: u32) -> Result<u32, ReturnCode> {
-        //if offset > self.file_size {return Err(ReturnCode::VolumeOutOfBounds)}
-        let index = offset / self.cluster_size;
-        let final_offset = offset % self.cluster_size;
-        let mut current_cluster: u32 = self.start_cluster;
-        for _ in 0..index {
-            current_cluster = match self.fat.read_entry(current_cluster as u16)? {
-                FATTableEntry::Used(cluster) => cluster as u32,
-                _ => {return Err(ReturnCode::SeekError)}
-            };
-        }
-        Ok(self.data_area_offset + (current_cluster - 2) * self.cluster_size + final_offset)
-    }
-}
-impl <'s, RO: 's+VolumeRead>             VolumeRead  for FATFile<'s, RO> {
+impl <'s> Volume for FATFile<'s> {
     // READ ONLY
     fn read (&self, offset: u64, buffer: &mut [u8]) -> Result<u64, ReturnCode> {
         //Test bounds to ensure read won't fail
@@ -855,8 +813,6 @@ impl <'s, RO: 's+VolumeRead>             VolumeRead  for FATFile<'s, RO> {
         }
         Ok(buffer_offset as u64)
     }
-}
-impl <'s, RW: 's+VolumeRead+VolumeWrite> VolumeWrite for FATFile<'s, RW> {
     // WRITE
     fn write(&self, offset: u64, buffer: &[u8])     -> Result<u64, ReturnCode> {
         //Test bounds to ensure read won't fail
@@ -928,6 +884,21 @@ impl <'s, RW: 's+VolumeRead+VolumeWrite> VolumeWrite for FATFile<'s, RW> {
         Ok(buffer_offset as u64)
     }
 }
+/*impl <'s, RO: 's+Volume>                             FATFile<'s, RO> {
+    fn file_offset_to_volume_offset (&self, offset: u32) -> Result<u32, ReturnCode> {
+        //if offset > self.file_size {return Err(ReturnCode::VolumeOutOfBounds)}
+        let index = offset / self.cluster_size;
+        let final_offset = offset % self.cluster_size;
+        let mut current_cluster: u32 = self.start_cluster;
+        for _ in 0..index {
+            current_cluster = match self.fat.read_entry(current_cluster as u16)? {
+                FATTableEntry::Used(cluster) => cluster as u32,
+                _ => {return Err(ReturnCode::SeekError)}
+            };
+        }
+        Ok(self.data_area_offset + (current_cluster - 2) * self.cluster_size + final_offset)
+    }
+}*/
 /*impl <'s, RO: 's+VolumeRead>             FileRead    for FATFile<'s, RO> {
     // FILE READ ROUTINES
     fn get_name<'f>  (&self, buffer: &'f mut [u8]) -> Result<&'f str,  &'static str> {

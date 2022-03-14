@@ -556,7 +556,9 @@ pub extern "sysv64" fn _start() -> ! {
         writeln!(printer, "Test File ID:               {:?}", test_file_id);
         let test_file_open = file_system.open(test_file_id).unwrap();
         writeln!(printer, "Open Test File ID:          {:?}", test_file_open).unwrap();
-        let test_file = FileShortcut{ fs: &file_system, id: test_file_open };
+        let mut buffer = [0u8;12];
+        writeln!(printer, "File Name:                  {}", file_system.get_name(root_directory_open, root_directory_first, &mut buffer).unwrap());
+        let test_file = FileShortcut{fs: &file_system, id: test_file_open};
         for i in 1..12 {
             writeln!(printer, "{:?}", {
                 let mut buffer = [0u8;16];

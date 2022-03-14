@@ -184,7 +184,7 @@ fn boot_main(handle: Handle, mut system_table_boot: SystemTable<Boot>) -> Status
     let mut sfs_kernel = unsafe {RegularFile::new(sfs_kernel_handle)};
     writeln!(printer, "Found kernel on file system.");
     //Read kernel file
-    let sfs_kernel_wrap = LocationalReadWrapper{ref_cell: RefCell::new(&mut sfs_kernel)};
+    let sfs_kernel_wrap = UefiFileWrapper{ref_cell: RefCell::new(&mut sfs_kernel)};
     let mut kernel = match ELFFile::new(&sfs_kernel_wrap) {
         Ok(elffile) =>  elffile,
         Err(error) => panic!("{:?}", error),
@@ -1007,10 +1007,10 @@ unsafe fn allocate_page_zeroed(boot_services: &BootServices, memory_type: Memory
 
 // STRUCTS
 //File Read System
-struct LocationalReadWrapper<'a> {
+struct UefiFileWrapper<'a> {
     ref_cell: RefCell<&'a mut RegularFile>,
 }
-impl<'a> VolumeRead for LocationalReadWrapper<'a> {
+impl<'a> Volume for UefiFileWrapper<'a> {
     fn read(&self, offset: u64, buffer: &mut [u8]) -> Result<u64, ReturnCode> {
         match self.ref_cell.try_borrow_mut() {
             Ok(mut file) => {
@@ -1030,6 +1030,9 @@ impl<'a> VolumeRead for LocationalReadWrapper<'a> {
             },
             Err(error) => {panic!("{}", error)}
         }
+    }
+    fn write(&self, _offset: u64, _buffer: &[u8]) -> Result<u64, ReturnCode> {
+        Err(ReturnCode::UnsupportedFeature)
     }
 }
 

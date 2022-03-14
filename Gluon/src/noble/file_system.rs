@@ -21,8 +21,9 @@ macro_rules!return_if_partial {
 
 
 // TRAITS
-//Volume Read
-pub trait VolumeRead  {
+//Volume
+pub trait Volume  {
+    // READ
     fn read     (&self, offset: u64, buffer: &mut [u8]) -> Result<u64, ReturnCode>;
     fn read_all (&self, offset: u64, buffer: &mut [u8]) -> Result<(),  ReturnCode> {
         let mut i = 0;
@@ -37,15 +38,7 @@ pub trait VolumeRead  {
         if i == buffer.len() as u64 {Ok(None)}
         else {Ok(Some(i))}
     }
-}
-impl<'a, T: 'a+VolumeRead>  VolumeRead  for &'a T {
-    fn read  (&self, offset: u64, buffer: &mut [u8]) -> Result<u64, ReturnCode> {
-        (**self).read(offset, buffer)
-    }
-}
-
-//Volume Write
-pub trait VolumeWrite {
+    // WRITE
     fn write     (&self, offset: u64, buffer: &[u8]) -> Result<u64, ReturnCode>;
     fn write_all (&self, offset: u64, buffer: &[u8]) -> Result<(), ReturnCode> {
         let mut i = 0;
@@ -61,50 +54,38 @@ pub trait VolumeWrite {
         else {Ok(Some(i))}
     }
 }
-impl<'a, T: 'a+VolumeWrite> VolumeWrite for &'a T {
+impl<'a, T: 'a+Volume>  Volume  for &'a T {
+    fn read  (&self, offset: u64, buffer: &mut [u8]) -> Result<u64, ReturnCode> {
+        (**self).read(offset, buffer)
+    }
     fn write  (&self, offset: u64, buffer: &[u8])    -> Result<u64, ReturnCode> {
         (**self).write(offset, buffer)
     }
 }
 
-//Read+Write
-pub trait VolumeReadWrite: VolumeRead+VolumeWrite {}
-impl<T: VolumeRead+VolumeWrite> VolumeReadWrite for T {}
-impl<'a> VolumeRead  for &'a dyn VolumeReadWrite {
-    fn read     (&self, offset: u64, buffer: &mut [u8]) -> Result<u64, ReturnCode> {
-        (**self).read(offset, buffer)
-    }
-}
-impl<'a> VolumeWrite for &'a dyn VolumeReadWrite {
-    fn write    (&self, offset: u64, buffer: &[u8])     -> Result<u64, ReturnCode> {
-        (**self).write(offset, buffer)
-    }
-}
-
-
 //File System
 pub trait FileSystem  {
     //Read and write files
-    fn read      (&self, id: OpenFileID, offset: u64, buffer: &mut [u8])             -> Result<u64,         ReturnCode>;
-    fn write     (&self, id: OpenFileID, offset: u64, buffer: &[u8])                 -> Result<u64,         ReturnCode>;
+    fn read        (&self, id: OpenFileID, offset: u64, buffer: &mut [u8])             -> Result<u64,         ReturnCode>;
+    fn write       (&self, id: OpenFileID, offset: u64, buffer: &[u8])                 -> Result<u64,         ReturnCode>;
     //Open and close files
-    fn open      (&self, id: FileID)                                                 -> Result<OpenFileID,  ReturnCode>;
-    fn close     (&self, id: OpenFileID)                                             -> Result<(),          ReturnCode>;
+    fn open        (&self, id: FileID)                                                 -> Result<OpenFileID,  ReturnCode>;
+    fn close       (&self, id: OpenFileID)                                             -> Result<(),          ReturnCode>;
     //Create and delete files
-    fn create    (&self, directory_id: OpenFileID, name: &str, size: u64, dir: bool) -> Result<OpenFileID,  ReturnCode>;
-    fn delete    (&self, directory_id: OpenFileID, name: &str)                       -> Result<(),          ReturnCode>;
+    fn create      (&self, directory_id: OpenFileID, name: &str, size: u64, dir: bool) -> Result<OpenFileID,  ReturnCode>;
+    fn delete      (&self, directory_id: OpenFileID, name: &str)                       -> Result<(),          ReturnCode>;
     //Traverse directories
-    fn root      (&self)                                                             -> Result<FileID,      ReturnCode>;
-    fn dir_first (&self, directory_id: OpenFileID)                                   -> Result<Option<u64>, ReturnCode>;
-    fn dir_next  (&self, directory_id: OpenFileID, index: u64)                       -> Result<Option<u64>, ReturnCode>;
-    fn dir_name  (&self, directory_id: OpenFileID, name: &str)                       -> Result<Option<u64>, ReturnCode>;
+    fn root        (&self)                                                             -> Result<FileID,      ReturnCode>;
+    fn dir_first   (&self, directory_id: OpenFileID)                                   -> Result<Option<u64>, ReturnCode>;
+    fn dir_next    (&self, directory_id: OpenFileID, index: u64)                       -> Result<Option<u64>, ReturnCode>;
+    fn dir_name    (&self, directory_id: OpenFileID, name: &str)                       -> Result<Option<u64>, ReturnCode>;
     //File properties
-    fn get_id    (&self, directory_id: OpenFileID, index: u64)                       -> Result<FileID,      ReturnCode>;
-    fn get_dir   (&self, directory_id: OpenFileID, index: u64)                       -> Result<bool,        ReturnCode>;
-    fn get_size  (&self, directory_id: OpenFileID, index: u64)                       -> Result<u64,         ReturnCode>;
-    fn set_size  (&self, directory_id: OpenFileID, index: u64, size: u64)            -> Result<(),          ReturnCode>;
-    fn get_name  (&self, directory_id: OpenFileID, index: u64, buffer: &mut[u8])     -> Result<&str,        ReturnCode>;
-    fn set_name  (&self, directory_id: OpenFileID, index: u64, name: &str)           -> Result<(),          ReturnCode>;
+    fn get_id      (&self, directory_id: OpenFileID, index: u64)                       -> Result<FileID,      ReturnCode>;
+    fn get_dir     (&self, directory_id: OpenFileID, index: u64)                       -> Result<bool,        ReturnCode>;
+    fn get_size    (&self, directory_id: OpenFileID, index: u64)                       -> Result<u64,         ReturnCode>;
+    fn set_size    (&self, directory_id: OpenFileID, index: u64, size: u64)            -> Result<(),          ReturnCode>;
+    fn get_name<'f>(&self, directory_id: OpenFileID, index: u64, buffer: &'f mut[u8])  -> Result<&'f str,     ReturnCode>;
+    fn set_name    (&self, directory_id: OpenFileID, index: u64, name: &str)           -> Result<(),          ReturnCode>;
 }
 
 
@@ -117,12 +98,10 @@ pub struct FileShortcut<'s> {
     pub fs: &'s dyn FileSystem,
     pub id: OpenFileID,
 }
-impl<'s> VolumeRead for FileShortcut<'s> {
+impl<'s> Volume for FileShortcut<'s> {
     fn read(&self, offset: u64, buffer: &mut [u8]) -> Result<u64, ReturnCode> {
         self.fs.read(self.id, offset, buffer)
     }
-}
-impl<'s> VolumeWrite for FileShortcut<'s> {
     fn write(&self, offset: u64, buffer: &[u8]) -> Result<u64, ReturnCode> {
         self.fs.write(self.id, offset, buffer)
     }
@@ -138,7 +117,7 @@ pub struct MemoryVolume {
     pub offset: usize,
     pub size: usize,
 }
-impl VolumeRead for MemoryVolume {
+impl Volume for MemoryVolume {
     fn read  (&self, offset: u64, buffer: &mut [u8]) -> Result<u64, ReturnCode> {
         let offset: usize = offset.try_into().map_err(|_| ReturnCode::MemoryOutOfBounds)?;
         if offset + buffer.len() > self.size {return Err(ReturnCode::EndOfVolume)}
@@ -151,8 +130,6 @@ impl VolumeRead for MemoryVolume {
         );}}
         Ok(buffer.len() as u64)
     }
-}
-impl VolumeWrite for MemoryVolume {
     fn write (&self, offset: u64, buffer: &[u8])     -> Result<u64, ReturnCode> {
         let offset: usize = offset.try_into().map_err(|_| ReturnCode::MemoryOutOfBounds)?;
         if offset + buffer.len() > self.size {return Err(ReturnCode::EndOfVolume)}
@@ -168,18 +145,16 @@ impl VolumeWrite for MemoryVolume {
 }
 
 //Volume which reads at an offset from another volume
-pub struct VolumeFromVolume<'s, V:'s> {
-    pub volume: &'s V,
+pub struct VolumeFromVolume<'s> {
+    pub volume: &'s dyn Volume,
     pub offset: u64,
     pub size:   u64,
 }
-impl<'s, RO:'s + VolumeRead>  VolumeRead  for VolumeFromVolume<'s, RO> {
+impl<'s>  Volume  for VolumeFromVolume<'s> {
     fn read  (&self, offset: u64, buffer: &mut [u8]) -> Result<u64, ReturnCode> {
         if offset + buffer.len() as u64 > self.size {return Err(ReturnCode::EndOfVolume)}
         self.volume.read(self.offset + offset, buffer)
     }
-}
-impl<'s, WO:'s + VolumeWrite> VolumeWrite for VolumeFromVolume<'s, WO> {
     fn write (&self, offset: u64, buffer: &[u8])     -> Result<u64, ReturnCode> {
         if offset + buffer.len() as u64 > self.size {return Err(ReturnCode::EndOfVolume)}
         self.volume.write(self.offset + offset, buffer)

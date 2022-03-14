@@ -5,7 +5,7 @@
 // HEADER
 //Imports
 use crate::numeric_enum;
-use crate::noble::file_system::VolumeRead;
+use crate::noble::file_system::Volume;
 use crate::noble::return_code::ReturnCode;
 use core::convert::{TryFrom, TryInto};
 use core::intrinsics::copy_nonoverlapping;
@@ -15,11 +15,11 @@ use core::ptr::write_volatile;
 // ELF FILES
 //Full ELF File Handling Routines
 #[derive(Debug)]
-pub struct ELFFile<'a, RO: 'a+VolumeRead> {
+pub struct ELFFile<'a, RO: 'a+Volume> {
     pub file: &'a RO,
     pub header:   Header,
 }
-impl<'a, RO: 'a+VolumeRead> ELFFile<'a, RO> {
+impl<'a, RO: 'a+Volume> ELFFile<'a, RO> {
     // CONSTRUCTOR
     pub fn new(file: &'a RO) -> Result<ELFFile<'a, RO>, ReturnCode> {
         //Load File Header
@@ -394,7 +394,7 @@ impl Program {
 }
 
 //Program Header Iterator
-pub struct ProgramIterator<'a, RO: 'a+VolumeRead> {
+pub struct ProgramIterator<'a, RO: 'a+Volume> {
     file:       &'a RO,
     bit_width:      BitWidth,
     endianness:     Endianness,
@@ -402,7 +402,7 @@ pub struct ProgramIterator<'a, RO: 'a+VolumeRead> {
     entry_position: usize,
     entry_count:    usize,
 }
-impl<'a, RO: 'a+VolumeRead> ProgramIterator<'a, RO> {
+impl<'a, RO: 'a+Volume> ProgramIterator<'a, RO> {
     // FUNCTIONS
     //Constructor
     pub fn new(file: &'a RO, file_header: &Header) -> Self{
@@ -432,7 +432,7 @@ impl<'a, RO: 'a+VolumeRead> ProgramIterator<'a, RO> {
         }
     }
 }
-impl<'a, RO: 'a+VolumeRead> Iterator for ProgramIterator<'a, RO> {
+impl<'a, RO: 'a+Volume> Iterator for ProgramIterator<'a, RO> {
     type Item = Result<Program, ReturnCode>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.entry_position >= self.entry_count {
@@ -466,7 +466,7 @@ numeric_enum! {
 
 // ELF SECTION HEADER
 //Section Header Iterator
-pub struct SectionIterator<'a, RO: 'a+VolumeRead> {
+pub struct SectionIterator<'a, RO: 'a+Volume> {
     file:   &'a     RO,
     bit_width:      BitWidth,
     endianness:     Endianness,
@@ -474,7 +474,7 @@ pub struct SectionIterator<'a, RO: 'a+VolumeRead> {
     entry_position: usize,
     entry_count:    usize,
 }
-impl<'a, RO: 'a+VolumeRead> SectionIterator<'a, RO> {
+impl<'a, RO: 'a+Volume> SectionIterator<'a, RO> {
     // FUNCTIONS
     //Constructor
     pub fn new(file: &'a RO, file_header: &Header) -> Self{
@@ -504,7 +504,7 @@ impl<'a, RO: 'a+VolumeRead> SectionIterator<'a, RO> {
         }
     }
 }
-impl<'a, RO: 'a+VolumeRead> Iterator for SectionIterator<'a, RO> {
+impl<'a, RO: 'a+Volume> Iterator for SectionIterator<'a, RO> {
     type Item = Result<Section, ReturnCode>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.entry_position >= self.entry_count {
@@ -668,7 +668,7 @@ impl ProgramDynamicEntry {
 }
 
 //Dynamic Table Iterator
-pub struct ProgramDynamicEntryIterator<'a, RO: 'a+VolumeRead> {
+pub struct ProgramDynamicEntryIterator<'a, RO: 'a+Volume> {
     file:       &'a RO,
     bit_width:      BitWidth,
     endianness:     Endianness,
@@ -676,7 +676,7 @@ pub struct ProgramDynamicEntryIterator<'a, RO: 'a+VolumeRead> {
     entry_position: u64,
     entry_count:    u64,
 }
-impl<'a, RO: 'a+VolumeRead> ProgramDynamicEntryIterator<'a, RO> {
+impl<'a, RO: 'a+Volume> ProgramDynamicEntryIterator<'a, RO> {
     // FUNCTIONS
     //Constructor
     pub fn new(file: &'a RO, file_header: &Header, program_header: &Program) -> Self{
@@ -705,7 +705,7 @@ impl<'a, RO: 'a+VolumeRead> ProgramDynamicEntryIterator<'a, RO> {
         }
     }
 }
-impl<'a, RO: 'a+VolumeRead> Iterator for ProgramDynamicEntryIterator<'a, RO> {
+impl<'a, RO: 'a+Volume> Iterator for ProgramDynamicEntryIterator<'a, RO> {
     type Item = Result<ProgramDynamicEntry, ReturnCode>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.entry_position >= self.entry_count {
@@ -819,7 +819,7 @@ impl RelocationEntry {
 }
 
 //Relocation Entry Iterator
-pub struct RelocationEntryIterator <'a, RO: 'a+VolumeRead> {
+pub struct RelocationEntryIterator <'a, RO: 'a+Volume> {
     file:  &'a       RO,
     bit_width:       BitWidth,
     endianness:      Endianness,
@@ -828,7 +828,7 @@ pub struct RelocationEntryIterator <'a, RO: 'a+VolumeRead> {
     entry_position:  u64,
     entry_count:     u64,
 }
-impl<'a, RO: 'a+VolumeRead> RelocationEntryIterator<'a, RO> {
+impl<'a, RO: 'a+Volume> RelocationEntryIterator<'a, RO> {
     // CONSTRUCTOR
     pub fn new(file: &'a RO, bit_width: BitWidth, endianness: Endianness, relocation_type: RelocationType, file_size: u64, file_offset: u64) -> Self {
         Self {
@@ -869,7 +869,7 @@ impl<'a, RO: 'a+VolumeRead> RelocationEntryIterator<'a, RO> {
         }
     }
 }
-impl<'a, RO: 'a+VolumeRead> Iterator for RelocationEntryIterator<'a, RO> {
+impl<'a, RO: 'a+Volume> Iterator for RelocationEntryIterator<'a, RO> {
     type Item = Result<RelocationEntry, ReturnCode>;
     fn next(&mut self) -> Option<Self::Item> {
         if self.entry_position >= self.entry_count {
