@@ -33,7 +33,6 @@ version = "0.1.0"
 dependencies = [
  "gluon",
  "photon",
- "x86_64",
 ]
 
 [[package]]

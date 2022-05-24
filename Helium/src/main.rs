@@ -41,6 +41,7 @@ use gluon::x86_64::instructions::*;
 use gluon::x86_64::lapic;
 use gluon::x86_64::paging::*;
 use gluon::x86_64::port::*;
+use gluon::x86_64::registers::*;
 use gluon::x86_64::segmentation::*;
 use core::arch::asm;
 use core::convert::TryFrom;
@@ -48,8 +49,6 @@ use core::fmt::Write;
 use core::panic::PanicInfo;
 use core::ptr::read_volatile;
 use core::ptr::write_volatile;
-use ::x86_64::registers::control::Cr2;
-use ::x86_64::registers::control::Cr3;
 
 //Constants
 const HELIUM_VERSION: &str = "vDEV-2022-02-21"; //CURRENT VERSION OF KERNEL
@@ -77,7 +76,7 @@ macro_rules!interrupt_halt_noe {
                 $text, rip, rsp,
                 cs.descriptor_table_index, cs.requested_privilege_level as u8,
                 ss.descriptor_table_index, ss.requested_privilege_level as u8,
-                rflags, Cr2::read_raw());
+                rflags, read_cr2());
             }
             loop {hlt();};
         }
@@ -102,7 +101,7 @@ macro_rules!interrupt_halt_err {
                 $text, rip, rsp,
                 cs.descriptor_table_index, cs.requested_privilege_level as u8,
                 ss.descriptor_table_index, ss.requested_privilege_level as u8,
-                rflags, error_code, Cr2::read_raw());
+                rflags, error_code, read_cr2());
             }
             loop {hlt();};
         }
@@ -155,12 +154,13 @@ pub extern "sysv64" fn _start() -> ! {
     let pml4: PageMap;
     {
         //Go to PML4
-        let pml4_physical = PhysicalAddress(Cr3::read().0.start_address().as_u64() as usize);
+        let pml4_physical = read_cr3_address();
         pml4 = PageMap::new(pml4_physical, PageMapLevel::L4, &none_alloc).unwrap();
         //Diagnostics
+        writeln!(printer, "CR3: {:016X}", pml4_physical.0);
         writeln!(printer, "Physical Memory Area Present: {}", pml4.read_entry(PHYSICAL_OCT    ).unwrap().present);
         writeln!(printer, "Kernel Area Present:          {}", pml4.read_entry(KERNEL_OCT      ).unwrap().present);
-        writeln!(printer, "Programs Area Present:        {}", pml4.read_entry(RAMDISK_OCT    ).unwrap().present);
+        writeln!(printer, "Programs Area Present:        {}", pml4.read_entry(RAMDISK_OCT     ).unwrap().present);
         writeln!(printer, "Frame Buffer Area Present:    {}", pml4.read_entry(FRAME_BUFFER_OCT).unwrap().present);
         writeln!(printer, "Free Memory Area Present:     {}", pml4.read_entry(FREE_MEMORY_OCT ).unwrap().present);
         writeln!(printer, "Offset Identity Area Present: {}", pml4.read_entry(IDENTITY_OCT    ).unwrap().present);
@@ -177,12 +177,6 @@ pub extern "sysv64" fn _start() -> ! {
             base_offset: unsafe {(oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut u64).add(1)},
             identity_offset: oct4_to_usize(IDENTITY_OCT).unwrap(),
         };
-        //Test
-        let test1 = u_alloc.allocate_page().unwrap();
-        writeln!(printer, "{:016X}", test1.0);
-        u_alloc.deallocate_page(test1);
-        let test2 = u_alloc.allocate_page().unwrap();
-        writeln!(printer, "{:016X}", test2.0);
     }
 
     // PCI TESTING
@@ -552,6 +546,10 @@ pub extern "sysv64" fn _start() -> ! {
         writeln!(printer, "Open Root Directory ID:     {:?}", root_directory_open);
         let root_directory_first = file_system.dir_first(root_directory_open).unwrap().unwrap();
         writeln!(printer, "Root Directory First Index: {}", root_directory_first);
+        let root_directory_find = file_system.dir_name(root_directory_open, "test.raw");
+        writeln!(printer, "Root Directory Name Index:  {:?}", root_directory_find);
+        let root_directory_none = file_system.dir_name(root_directory_open, "test2.raw");
+        writeln!(printer, "Root Directory None Test:   {:?}", root_directory_none);
         let test_file_id = file_system.get_id(root_directory_open, root_directory_first).unwrap();
         writeln!(printer, "Test File ID:               {:?}", test_file_id);
         let test_file_open = file_system.open(test_file_id).unwrap();
@@ -610,7 +608,7 @@ unsafe fn create_task(thread_index: usize, allocator: &dyn PageAllocator, instru
 //Kernel Stack Allocation
 unsafe fn create_kernel_stack(thread_index: usize, allocator: &dyn PageAllocator) -> *mut u64 {
     //Page map
-    let pml4_physical = PhysicalAddress(Cr3::read().0.start_address().as_u64() as usize);
+    let pml4_physical = read_cr3_address();
     let pml4 = PageMap::new(pml4_physical, PageMapLevel::L4, allocator).unwrap();
     let pml3 = PageMap::new(pml4.read_entry(STACKS_OCT).unwrap().physical, PageMapLevel::L3, allocator).unwrap();
     //Allocate stack

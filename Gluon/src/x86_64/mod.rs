@@ -16,5 +16,6 @@ pub mod lapic;
 pub mod msr;
 pub mod paging;
 pub mod port;
+pub mod registers;
 pub mod segmentation;
 pub mod syscall;

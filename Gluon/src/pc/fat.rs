@@ -153,7 +153,19 @@ impl<'s> FileSystem for FATFileSystem<'s> {
         directory.find_shortname_entry((index + 1) as u32).map(|o| o.map(|i| i as u64))
     }
     fn dir_name    (&self, directory_id: OpenFileID, name: &str)                       -> Result<Option<u64>, ReturnCode> {
-        todo!()
+        let mut index = match self.dir_first(directory_id) {
+            Ok(Some(index)) => index,
+            finish => return finish,
+        };
+        loop {
+            let mut buffer = [0u8;12];
+            let entry_name = self.get_name(directory_id, index, &mut buffer)?;
+            if entry_name == name {return Ok(Some(index))}
+            index = match self.dir_next(directory_id, index) {
+                Ok(Some(index)) => index,
+                finish => return finish,
+            };
+        }
     }
     //File properties
     fn get_id      (&self, directory_id: OpenFileID, index: u64)                       -> Result<FileID,      ReturnCode> {
