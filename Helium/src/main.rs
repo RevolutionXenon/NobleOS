@@ -23,8 +23,13 @@
 #![feature(panic_info_message)]
 #![feature(start)]
 
-//Imports
+//Modules
 mod gdt;
+mod kstruct;
+mod pmm;
+
+//Imports
+use self::pmm::*;
 use photon::*;
 use photon::formats::f2::*;
 use gluon::GLUON_VERSION;
@@ -150,7 +155,7 @@ pub extern "sysv64" fn _start() -> ! {
     // PAGE MAP PARSING
     writeln!(printer, "\n=== PAGE MAP ===\n");
     let none_alloc = NoneAllocator{identity_offset: oct4_to_usize(IDENTITY_OCT).unwrap()};
-    let u_alloc: StackPageAllocator;
+    let u_alloc: StackAllocator;
     let pml4: PageMap;
     {
         //Go to PML4
@@ -172,13 +177,46 @@ pub extern "sysv64" fn _start() -> ! {
         //Determine amount of free memory
         let free_page_count: usize = unsafe {read_volatile(oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *const u64)} as usize;
         writeln!(printer, "Free memory found: {}Pg or {}MiB {}KiB", free_page_count, (free_page_count*PAGE_SIZE_4KIB)/MIB, ((free_page_count*PAGE_SIZE_4KIB) % MIB)/KIB);
-        u_alloc = StackPageAllocator {
+        u_alloc = StackAllocator {
             position: oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut usize,
             base_offset: unsafe {(oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut u64).add(1)},
             identity_offset: oct4_to_usize(IDENTITY_OCT).unwrap(),
         };
     }
 
+    // NEW MEMORY SYSTEM TESTING
+    writeln!(printer, "\n=== NEW MEMORY SYSTEM TEST===\n");
+    let translator: OffsetIdentity;
+    let allocator: MemoryStack;
+    let mut memmap: MapMemory;
+    let pml4_2: PageMap2;
+    unsafe {
+        translator = OffsetIdentity {
+            offset: oct4_to_usize(IDENTITY_OCT).unwrap(), 
+            limit: PAGE_SIZE_512G,
+        };
+        allocator = MemoryStack {
+            index: oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut usize,
+            stack: (oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut PhysicalAddress).add(1),
+            translator: &translator,
+        };
+        memmap = MapMemory {
+            allocator: &allocator,
+            translator: &translator,
+            write: true,
+            user: true,
+            execute_disable: true,
+            printer: &mut printer,
+        };
+        pml4_2 = PageMap2 {
+            linear: pml4.linear,
+            map_level: PageMapLevel::L4,
+        };
+        pml4_2.erase_entry(0);
+        let result = virtual_memory_editor(pml4_2, &mut memmap, LinearAddress(0), LinearAddress(PAGE_SIZE_4KIB * 513));
+        writeln!(printer, "{:?}", result);
+    }
+    
     // PCI TESTING
     writeln!(printer, "\n=== PERIPHERAL COMPONENT INTERCONNECT BUS ===\n");
     let mut pci_uhci_option = None;
@@ -940,53 +978,6 @@ unsafe extern "sysv64" fn panic_handler(panic_info: &PanicInfo) -> ! {
 }
 
 
-// MEMORY MANAGEMENT
-//Address translator which cannot allocate
-struct NoneAllocator {
-    pub identity_offset: usize
-}
-impl PageAllocator for NoneAllocator {
-    fn allocate_page     (&self)                            -> Result<PhysicalAddress, &'static str> {
-        Err("No Allocator: Allocate page called.")
-    }
-    fn deallocate_page   (&self, _physical: PhysicalAddress) -> Result<(),              &'static str> {
-        Err("No Allocator: De-allocate page called.")
-    }
-    fn physical_to_linear(&self, physical: PhysicalAddress) -> Result<LinearAddress,   &'static str> {
-        Ok(LinearAddress(physical.add(self.identity_offset).0))
-    }
-}
-
-//Stack allocator handed over from bootloader
-struct StackPageAllocator {
-    pub position:    *mut usize,
-    pub base_offset: *mut u64,
-    pub identity_offset:  usize,
-}
-impl PageAllocator for StackPageAllocator {
-    fn allocate_page     (&self)                            -> Result<PhysicalAddress, &'static str> { unsafe {
-        match read_volatile(self.position) {
-            0 => Err("Stack Page Allocator: Out of memory."),
-            position => Ok(PhysicalAddress({
-                write_volatile(self.position, position-1);
-                let address = read_volatile(self.base_offset.add(position-1)) as usize;
-                let clear_pointer = (address + self.identity_offset) as *mut u8;
-                for i in 0..PAGE_SIZE_4KIB {write_volatile(clear_pointer.add(i), 0);}
-                address
-            }))
-        }
-    }}
-
-    fn deallocate_page   (&self, physical: PhysicalAddress) -> Result<(),              &'static str> {unsafe {
-        write_volatile(self.base_offset.add(*self.position), physical.0 as u64);
-        *self.position += 1;
-        Ok(())
-    }}
-
-    fn physical_to_linear(&self, physical: PhysicalAddress) -> Result<LinearAddress,   &'static str> {
-        Ok(LinearAddress(physical.add(self.identity_offset).0))
-    }
-}
 
 
 // PIPING

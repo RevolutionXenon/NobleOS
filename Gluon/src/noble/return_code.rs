@@ -67,6 +67,8 @@ pub enum ReturnCode {
     DataTooLarge          = 0x35,
     DirectoryFull         = 0x36,
     NotPresent            = 0x37,
+    UnalignedAddress      = 0x38,
+    NonCanonicalAddress   = 0x39,
     Test00                = 0xFFFF_FFFF_FFFF_FF00,
     Test01                = 0xFFFF_FFFF_FFFF_FF01,
     Test02                = 0xFFFF_FFFF_FFFF_FF02,
