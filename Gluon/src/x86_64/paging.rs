@@ -674,6 +674,8 @@ pub enum PageMapEntryType {
 }
 
 // NEW SYSTEM
+#[derive(Clone, Copy)]
+#[derive(Debug)]
 pub struct PageMap2 {
     pub linear:     LinearAddress,
     pub map_level:  PageMapLevel,
@@ -743,13 +745,13 @@ impl PageMapEntry2 {
             entry_level,
             entry_type,
             physical: PhysicalAddress(match (entry_level, entry_type) {
-                (PageMapLevel::L5, PageMapEntryType::Table)  =>      data & 0o_000_777_777_777_777_777_0000_u64,
-                (PageMapLevel::L4, PageMapEntryType::Table)  =>      data & 0o_000_777_777_777_777_777_0000_u64,
-                (PageMapLevel::L3, PageMapEntryType::Table)  =>      data & 0o_000_777_777_777_777_777_0000_u64,
-                (PageMapLevel::L2, PageMapEntryType::Table)  =>      data & 0o_000_777_777_777_777_777_0000_u64,
-                (PageMapLevel::L3, PageMapEntryType::Memory) =>      data & 0o_000_777_777_777_000_000_0000_u64,
-                (PageMapLevel::L2, PageMapEntryType::Memory) =>      data & 0o_000_777_777_777_777_000_0000_u64,
-                (PageMapLevel::L1, PageMapEntryType::Memory) =>      data & 0o_000_777_777_777_777_777_0000_u64,
+                (PageMapLevel::L5, PageMapEntryType::Table)  =>      data & 0o_000_007_777_777_777_777_0000_u64,
+                (PageMapLevel::L4, PageMapEntryType::Table)  =>      data & 0o_000_007_777_777_777_777_0000_u64,
+                (PageMapLevel::L3, PageMapEntryType::Table)  =>      data & 0o_000_007_777_777_777_777_0000_u64,
+                (PageMapLevel::L2, PageMapEntryType::Table)  =>      data & 0o_000_007_777_777_777_777_0000_u64,
+                (PageMapLevel::L3, PageMapEntryType::Memory) =>      data & 0o_000_007_777_777_000_000_0000_u64,
+                (PageMapLevel::L2, PageMapEntryType::Memory) =>      data & 0o_000_007_777_777_777_000_0000_u64,
+                (PageMapLevel::L1, PageMapEntryType::Memory) =>      data & 0o_000_007_777_777_777_777_0000_u64,
                 _ => {return Err(ReturnCode::InvalidData)}
             } as usize),
             present:                                                 data & (1<<0o00) > 0,
@@ -781,13 +783,13 @@ impl PageMapEntry2 {
     pub fn to_u64(&self) -> Result<u64, ReturnCode> {
         let mut result: u64 = 0;
         result |= match (self.entry_level, self.entry_type) {
-            (PageMapLevel::L5, PageMapEntryType::Table)  => self.physical.0 as u64 & 0o_000_777_777_777_777_777_0000_u64,
-            (PageMapLevel::L4, PageMapEntryType::Table)  => self.physical.0 as u64 & 0o_000_777_777_777_777_777_0000_u64,
-            (PageMapLevel::L3, PageMapEntryType::Table)  => self.physical.0 as u64 & 0o_000_777_777_777_777_777_0000_u64,
-            (PageMapLevel::L2, PageMapEntryType::Table)  => self.physical.0 as u64 & 0o_000_777_777_777_777_777_0000_u64,
-            (PageMapLevel::L3, PageMapEntryType::Memory) => self.physical.0 as u64 & 0o_000_777_777_777_000_000_0000_u64,
-            (PageMapLevel::L2, PageMapEntryType::Memory) => self.physical.0 as u64 & 0o_000_777_777_777_777_000_0000_u64,
-            (PageMapLevel::L1, PageMapEntryType::Memory) => self.physical.0 as u64 & 0o_000_777_777_777_777_777_0000_u64,
+            (PageMapLevel::L5, PageMapEntryType::Table)  => self.physical.0 as u64 & 0o_000_007_777_777_777_777_0000_u64,
+            (PageMapLevel::L4, PageMapEntryType::Table)  => self.physical.0 as u64 & 0o_000_007_777_777_777_777_0000_u64,
+            (PageMapLevel::L3, PageMapEntryType::Table)  => self.physical.0 as u64 & 0o_000_007_777_777_777_777_0000_u64,
+            (PageMapLevel::L2, PageMapEntryType::Table)  => self.physical.0 as u64 & 0o_000_007_777_777_777_777_0000_u64,
+            (PageMapLevel::L3, PageMapEntryType::Memory) => self.physical.0 as u64 & 0o_000_007_777_777_000_000_0000_u64,
+            (PageMapLevel::L2, PageMapEntryType::Memory) => self.physical.0 as u64 & 0o_000_007_777_777_777_000_0000_u64,
+            (PageMapLevel::L1, PageMapEntryType::Memory) => self.physical.0 as u64 & 0o_000_007_777_777_777_777_0000_u64,
             _ => {return Err(ReturnCode::InvalidData)}
         };
         if self.present       {result |= 1<<0o00}
@@ -804,6 +806,7 @@ impl PageMapEntry2 {
             }
             else if self.entry_level == PageMapLevel::L1 && self.attribute_table.is_some() && self.attribute_table.unwrap() {result |= 1<<0o07}
         }
+        if self.in_use          {result |= 1<<0o64}
         if self.execute_disable {result |= 1<<0o77}
         Ok(result)
     }

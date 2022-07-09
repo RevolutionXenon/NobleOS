@@ -1,8 +1,15 @@
-// HELIUM: PHYSICAL MEMORY MANAGER
+// HELIUM: PHYSICAL MEMORY MANAGMENT
 
-use core::{ptr::{read_volatile, write_volatile}, fmt::Write, intrinsics::{copy_nonoverlapping, write_bytes}};
 
-use gluon::{x86_64::paging::{LinearAddress, PhysicalAddress, PageAllocator, PAGE_SIZE_4KIB, canonical_48, extract_index, page_size, PageMap2, PageMapEntry2, PageMapEntryType, PageMapLevel}, noble::return_code::ReturnCode};
+// HEADER
+//Imports
+use core::fmt::Write;
+use core::ptr::read_volatile;
+use core::ptr::write_volatile;
+use core::intrinsics::write_bytes;
+use gluon::x86_64::paging::*;
+use gluon::noble::return_code::*;
+
 
 // MEMORY MANAGEMENT
 //Address translator which cannot allocate
@@ -97,8 +104,8 @@ impl<'i> PhysicalAddressAllocator for MemoryStack<'i> {
         //CRITICAL SECTION
         {
             let old_index: usize = unsafe {read_volatile(self.index)};
+            let new_index: usize = old_index - pages.len();
             if old_index < pages.len() {return Err(ReturnCode::OutOfResources)}
-            let new_index = old_index - pages.len();
             unsafe {write_volatile(self.index, new_index)};
             unsafe {core::ptr::copy_nonoverlapping(self.stack.add(new_index), pages.as_mut_ptr(), pages.len())};
         }
@@ -111,7 +118,14 @@ impl<'i> PhysicalAddressAllocator for MemoryStack<'i> {
     }
 
     fn give(&self, pages: &[PhysicalAddress]) -> Result<(), ReturnCode> {
-        todo!()
+        //CRITICAL SECTION
+        {
+            let old_index: usize = unsafe {read_volatile(self.index)};
+            let new_index: usize = old_index + pages.len();
+            unsafe {core::ptr::copy_nonoverlapping(pages.as_ptr(), self.stack.add(old_index) as *mut PhysicalAddress, pages.len())};
+            unsafe {write_volatile(self.index, new_index)}
+        }
+        Ok(())
     }
 }
 
@@ -127,7 +141,6 @@ pub struct MapMemory<'s> {
     pub write: bool,
     pub user: bool,
     pub execute_disable: bool,
-    pub printer: &'s mut dyn Write,
 }
 impl<'i> PageOperation for MapMemory<'i> {
     fn op(&mut self, entry: PageMapEntry2, start: LinearAddress, end: LinearAddress) -> Result<PageMapEntry2, ReturnCode> {
@@ -137,14 +150,14 @@ impl<'i> PageOperation for MapMemory<'i> {
                 //use existing table and recurse
                 let map = PageMap2::new(self.translator.translate(entry.physical)?, entry.entry_level.sub()?)?;
                 virtual_memory_editor(map, self, start, end)?;
-                writeln!(self.printer, "tlb: {:?}", entry);
+                //writeln!(self.printer, "tlb: {:?}", entry);
                 Ok(entry)
             },
             (false, PageMapLevel::L1, _) => {
                 //allocate a single page as memory
                 let address = self.allocator.take_one()?;
                 let value = PageMapEntry2::new(PageMapLevel::L1, PageMapEntryType::Memory, address, true, self.write, self.user, self.execute_disable);
-                writeln!(self.printer, "nwm: {:?}", value);
+                //writeln!(self.printer, "nwm: {:?}", value);
                 value
             },
             (false, _, _) => {
@@ -154,9 +167,55 @@ impl<'i> PageOperation for MapMemory<'i> {
                 let map = PageMap2::new(linear, entry.entry_level.sub()?)?;
                 virtual_memory_editor(map, self, start, end)?;
                 let value = PageMapEntry2::new(entry.entry_level, PageMapEntryType::Table, physical, true, self.write, self.user, self.execute_disable);
-                writeln!(self.printer, "nwt: {:?}", value);
+                //writeln!(self.printer, "nwt: {:?}", value);
                 value
             },
+        }
+    }
+}
+
+//Unmap Memory
+pub struct UnmapMemory<'s> {
+    pub allocator: &'s dyn PhysicalAddressAllocator,
+    pub translator: &'s dyn AddressTranslator,
+}
+impl<'i> PageOperation for UnmapMemory<'i> {
+    fn op(&mut self, entry: PageMapEntry2, start: LinearAddress, end: LinearAddress) -> Result<PageMapEntry2, ReturnCode> {
+        match (entry.in_use, entry.entry_type, entry.entry_level) {
+            (false, _, _) => Err(ReturnCode::Test05), //throw error due to deallocating area not in use
+            (true, PageMapEntryType::Table, _) => {
+                //recurse through existing table
+                //writeln!(self.printer, "traverse: {:?}", entry.physical);
+                let map = PageMap2::new(self.translator.translate(entry.physical)?, entry.entry_level.sub()?)?;
+                virtual_memory_editor(map, self, start, end)?;
+                //test if map is empty
+                let mut map_empty: bool = true;
+                for position in 0usize..512 {
+                    let map_entry = map.read_entry(position)?;
+                    if map_entry.in_use {
+                        map_empty = false;
+                        break
+                    }
+                }
+                //finish
+                //return Ok(entry); // PROBLEM SOMEWHERE HERE
+                if map_empty {
+                    let physical = entry.physical;
+                    self.allocator.give(&[physical])?;
+                    PageMapEntry2::from_u64(0, entry.entry_level)
+                }
+                else {
+                    Ok(entry)
+                }
+            },
+            (true, PageMapEntryType::Memory, PageMapLevel::L1) => {
+                //deallocate 4KB memory block
+                let physical = entry.physical;
+                //writeln!(self.printer, "dealloc: {:?}", physical);
+                self.allocator.give(&[physical])?;
+                PageMapEntry2::from_u64(0, PageMapLevel::L1)
+            },
+            (true, PageMapEntryType::Memory, _) => Err(ReturnCode::Test04), //throw error due to deallocating non-4KB memory block
         }
     }
 }

@@ -30,8 +30,6 @@ mod pmm;
 
 //Imports
 use self::pmm::*;
-use photon::*;
-use photon::formats::f2::*;
 use gluon::GLUON_VERSION;
 use gluon::noble::address_space::*;
 use gluon::noble::file_system::*;
@@ -48,11 +46,12 @@ use gluon::x86_64::paging::*;
 use gluon::x86_64::port::*;
 use gluon::x86_64::registers::*;
 use gluon::x86_64::segmentation::*;
+use photon::*;
+use photon::formats::f2::*;
 use core::arch::asm;
 use core::convert::TryFrom;
 use core::fmt::Write;
 use core::panic::PanicInfo;
-use core::ptr::read_volatile;
 use core::ptr::write_volatile;
 
 //Constants
@@ -152,71 +151,50 @@ pub extern "sysv64" fn _start() -> ! {
         writeln!(printer, "Gluon Memory Library    {}", GLUON_VERSION);
     }
 
-    // PAGE MAP PARSING
-    writeln!(printer, "\n=== PAGE MAP ===\n");
-    let none_alloc = NoneAllocator{identity_offset: oct4_to_usize(IDENTITY_OCT).unwrap()};
-    let u_alloc: StackAllocator;
-    let pml4: PageMap;
-    {
-        //Go to PML4
-        let pml4_physical = read_cr3_address();
-        pml4 = PageMap::new(pml4_physical, PageMapLevel::L4, &none_alloc).unwrap();
-        //Diagnostics
-        writeln!(printer, "CR3: {:016X}", pml4_physical.0);
-        writeln!(printer, "Physical Memory Area Present: {}", pml4.read_entry(PHYSICAL_OCT    ).unwrap().present);
-        writeln!(printer, "Kernel Area Present:          {}", pml4.read_entry(KERNEL_OCT      ).unwrap().present);
-        writeln!(printer, "Programs Area Present:        {}", pml4.read_entry(RAMDISK_OCT     ).unwrap().present);
-        writeln!(printer, "Frame Buffer Area Present:    {}", pml4.read_entry(FRAME_BUFFER_OCT).unwrap().present);
-        writeln!(printer, "Free Memory Area Present:     {}", pml4.read_entry(FREE_MEMORY_OCT ).unwrap().present);
-        writeln!(printer, "Offset Identity Area Present: {}", pml4.read_entry(IDENTITY_OCT    ).unwrap().present);
-        writeln!(printer, "Page Map Area Present:        {}", pml4.read_entry(PAGE_MAP_OCT    ).unwrap().present);
-        //Remove physical memory area
-        let mut identity_not_present = pml4.read_entry(PHYSICAL_OCT).unwrap();
-        identity_not_present.present = false;
-        //pml4.write_entry(PHYSICAL_OCT, identity_not_present).unwrap();
-        //Determine amount of free memory
-        let free_page_count: usize = unsafe {read_volatile(oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *const u64)} as usize;
-        writeln!(printer, "Free memory found: {}Pg or {}MiB {}KiB", free_page_count, (free_page_count*PAGE_SIZE_4KIB)/MIB, ((free_page_count*PAGE_SIZE_4KIB) % MIB)/KIB);
-        u_alloc = StackAllocator {
-            position: oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut usize,
-            base_offset: unsafe {(oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut u64).add(1)},
-            identity_offset: oct4_to_usize(IDENTITY_OCT).unwrap(),
-        };
-    }
-
     // NEW MEMORY SYSTEM TESTING
-    writeln!(printer, "\n=== NEW MEMORY SYSTEM TEST===\n");
+    writeln!(printer, "\n=== PAGE MAP ===\n");
+    let pml4: PageMap2;
+    let pml3_kstack: PageMap2;
     let translator: OffsetIdentity;
     let allocator: MemoryStack;
     let mut memmap: MapMemory;
-    let pml4_2: PageMap2;
+    let mut memunmap: UnmapMemory;
     unsafe {
+        //Physical to linear address translator
         translator = OffsetIdentity {
             offset: oct4_to_usize(IDENTITY_OCT).unwrap(), 
             limit: PAGE_SIZE_512G,
         };
+        //Alloctor
         allocator = MemoryStack {
             index: oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut usize,
             stack: (oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut PhysicalAddress).add(1),
             translator: &translator,
         };
+        //Map and unmap operations
         memmap = MapMemory {
             allocator: &allocator,
             translator: &translator,
             write: true,
             user: true,
             execute_disable: true,
-            printer: &mut printer,
         };
-        pml4_2 = PageMap2 {
-            linear: pml4.linear,
-            map_level: PageMapLevel::L4,
+        memunmap = UnmapMemory {
+            allocator: &allocator,
+            translator: &translator,
         };
-        pml4_2.erase_entry(0);
-        let result = virtual_memory_editor(pml4_2, &mut memmap, LinearAddress(0), LinearAddress(PAGE_SIZE_4KIB * 513));
-        writeln!(printer, "{:?}", result);
+        //Page map
+        let pml4_physical = read_cr3_address();
+        pml4 = PageMap2::new(translator.translate(pml4_physical).unwrap(), PageMapLevel::L4).unwrap();
+        pml3_kstack = PageMap2::new(translator.translate(pml4.read_entry(STACKS_OCT).unwrap().physical).unwrap(), PageMapLevel::L3).unwrap();
+        //Testing
+        pml4.erase_entry(0);
+        let result1 = virtual_memory_editor(pml4, &mut memmap, LinearAddress(0), LinearAddress(PAGE_SIZE_4KIB * 512));
+        let result2 = virtual_memory_editor(pml4, &mut memunmap, LinearAddress(0), LinearAddress(PAGE_SIZE_4KIB * 512));
+        writeln!(printer, "{:?}", result1);
+        writeln!(printer, "{:?}", result2);
     }
-    
+
     // PCI TESTING
     writeln!(printer, "\n=== PERIPHERAL COMPONENT INTERCONNECT BUS ===\n");
     let mut pci_uhci_option = None;
@@ -265,7 +243,7 @@ pub extern "sysv64" fn _start() -> ! {
     writeln!(printer, "\n=== GLOBAL DESCRIPTOR TABLE ===\n");
     unsafe {
         //Allocate space for GDT
-        gdt = GlobalDescriptorTable{address: u_alloc.physical_to_linear(u_alloc.allocate_page().unwrap()).unwrap(), limit: 512};
+        gdt = GlobalDescriptorTable{address: translator.translate(allocator.take_one().unwrap()).unwrap(), limit: 512};
         writeln!(printer, "GDT Linear Address: 0x{:016X}", gdt.address.0);
         //Substitute symbol in TSS entry for actual TSS
         gdt::TASK_STATE_SEGMENT_ENTRY.base = &TASK_STATE_SEGMENT as *const TaskStateSegment as u64;
@@ -287,7 +265,7 @@ pub extern "sysv64" fn _start() -> ! {
     let idt: InterruptDescriptorTable;
     unsafe {
         //Allocate space for IDT
-        idt = InterruptDescriptorTable {address: u_alloc.physical_to_linear(u_alloc.allocate_page().unwrap()).unwrap(), limit: 255};
+        idt = InterruptDescriptorTable {address: translator.translate(allocator.take_one().unwrap()).unwrap(), limit: 255};
         //INT 00h - INT 19h
         //CPU exceptions
         let mut int_exception = InterruptDescriptor {
@@ -320,7 +298,7 @@ pub extern "sysv64" fn _start() -> ! {
         int_exception.offset = interrupt_halt_err!("INTERRUPT VECTOR 0x15 (#CP): Control Protection Fault");     idt.write_entry(&int_exception, 0x15);
         //INT 20h - INT FFh
         //Immediate returns to all non-exception interrupts
-        let int_user = InterruptDescriptor {
+        let int_user: InterruptDescriptor = InterruptDescriptor {
             offset: interrupt_immediate_return as unsafe extern "x86-interrupt" fn() as u64,
             segment_selector: gdt::SUPERVISOR_CODE,
             segment_present: true,
@@ -353,7 +331,7 @@ pub extern "sysv64" fn _start() -> ! {
         idt.write_entry(&int_keyboard, 0x21);
         //INT 30h
         //LAPIC Timer
-        let int_timer = InterruptDescriptor {
+        let int_timer: InterruptDescriptor = InterruptDescriptor {
             offset: interrupt_timer as unsafe extern "x86-interrupt" fn() as usize as u64,
             segment_selector: gdt::SUPERVISOR_CODE,
             segment_present: true,
@@ -364,7 +342,7 @@ pub extern "sysv64" fn _start() -> ! {
         idt.write_entry(&int_timer, 0x30);
         //INT 80h
         //User accessible yield interrupt
-        let int_yield = InterruptDescriptor {
+        let int_yield: InterruptDescriptor = InterruptDescriptor {
             offset: interrupt_yield as unsafe extern "x86-interrupt" fn() as usize as u64,
             segment_selector: gdt::SUPERVISOR_CODE,
             segment_present: true,
@@ -375,7 +353,7 @@ pub extern "sysv64" fn _start() -> ! {
         idt.write_entry(&int_yield, 0x80);
         //INT FFh
         //LAPIC Spurious Interrupt
-        let int_spurious = InterruptDescriptor {
+        let int_spurious: InterruptDescriptor = InterruptDescriptor {
             offset: interrupt_spurious as extern "x86-interrupt" fn() as usize as u64,
             segment_selector: gdt::SUPERVISOR_CODE,
             segment_present: true,
@@ -388,8 +366,13 @@ pub extern "sysv64" fn _start() -> ! {
         idt.write_idtr();
         //Diagnostic
         writeln!(printer, "IDT Linear Address: 0x{:016X}", idt.address.0);
+        writeln!(printer, "{:?}", pml3_kstack);
+        //Create kernel stack
+        let start: LinearAddress = LinearAddress(PAGE_SIZE_4KIB * 1);
+        let end: LinearAddress = LinearAddress(PAGE_SIZE_4KIB * 4);
+        virtual_memory_editor(pml3_kstack, &mut memmap, start, end);
+        let kernel_stack: u64 = oct_to_usize_4(STACKS_OCT, 0, 0, 4, 0).unwrap() as u64;
         //Update TSS
-        let kernel_stack = create_kernel_stack(0, &u_alloc) as u64;
         TASK_STATE_SEGMENT.ist1 = kernel_stack;
         TASK_STATE_SEGMENT.ist2 = kernel_stack;
     }
@@ -497,33 +480,23 @@ pub extern "sysv64" fn _start() -> ! {
     // CREATE THREADS
     writeln!(printer, "\n=== THREAD STACK TEST===\n");
     unsafe {
-        //Do allocation
-        const STACK_SIZE: usize = 0o377;
-        let mut group1: [PhysicalAddress;STACK_SIZE] = [PhysicalAddress(0);STACK_SIZE];
-        let mut group2: [PhysicalAddress;STACK_SIZE] = [PhysicalAddress(0);STACK_SIZE];
-        let mut group3: [PhysicalAddress;STACK_SIZE] = [PhysicalAddress(0);STACK_SIZE];
-        for i in 0..STACK_SIZE {
-            group1[i] = u_alloc.allocate_page().unwrap();
-            group2[i] = u_alloc.allocate_page().unwrap();
-            group3[i] = u_alloc.allocate_page().unwrap();
-        }
-        //Edit page maps
-        let pml3 = PageMap::new(pml4.read_entry(KERNEL_OCT).unwrap().physical, PageMapLevel::L3, &u_alloc).unwrap();
-        pml3.map_pages_group_4kib(&group1, 0o001_000_000, true, true, true).unwrap();
-        pml3.map_pages_group_4kib(&group2, 0o001_000_400, true, true, true).unwrap();
-        pml3.map_pages_group_4kib(&group3, 0o001_001_000, true, true, true).unwrap();
         //Stack pointers
-        let s1p = oct_to_usize_4(KERNEL_OCT, 1, 0, 0o377, 0).unwrap() as u64;
-        let s2p = oct_to_usize_4(KERNEL_OCT, 1, 0, 0o777, 0).unwrap() as u64;
-        let s3p = oct_to_usize_4(KERNEL_OCT, 1, 1, 0o377, 0).unwrap() as u64;
+        let s0p = oct_to_usize_4(0, 0, 0, 0, 0).unwrap();
+        let s1p = oct_to_usize_4(0, 0, 1, 0, 0).unwrap();
+        let s2p = oct_to_usize_4(0, 0, 2, 0, 0).unwrap();
+        let s3p = oct_to_usize_4(0, 0, 3, 0, 0).unwrap();
+        //Allocate stack space
+        virtual_memory_editor(pml4, &mut memmap, LinearAddress(s0p + PAGE_SIZE_4KIB), LinearAddress(s1p));
+        virtual_memory_editor(pml4, &mut memmap, LinearAddress(s1p + PAGE_SIZE_4KIB), LinearAddress(s2p));
+        virtual_memory_editor(pml4, &mut memmap, LinearAddress(s2p + PAGE_SIZE_4KIB), LinearAddress(s3p));
         //Instruction pointers
         let i1p = read_loop as fn() as usize as u64;
         let i2p = byte_loop as fn() as usize as u64;
         let i3p = ps2_keyboard as unsafe fn() as usize as u64;
         //Create tasks
-        create_task(1, &u_alloc, i1p, gdt::SUPERVISOR_CODE, 0x00000202, s1p, gdt::SUPERVISOR_DATA);
-        create_task(2, &u_alloc, i2p, gdt::USER_CODE, 0x00000202, s2p, gdt::USER_DATA);
-        create_task(3, &u_alloc, i3p, gdt::USER_CODE, 0x00000202, s3p, gdt::USER_DATA);
+        create_thread(1, pml3_kstack, &translator, &allocator, &mut memmap, i1p, gdt::SUPERVISOR_CODE, 0x00000202, s1p, gdt::SUPERVISOR_DATA);
+        create_thread(2, pml3_kstack, &translator, &allocator, &mut memmap, i2p, gdt::USER_CODE, 0x00000202, s2p, gdt::USER_DATA);
+        create_thread(3, pml3_kstack, &translator, &allocator, &mut memmap, i3p, gdt::USER_CODE, 0x00000202, s3p, gdt::USER_DATA);
         //Diagnostic
         writeln!(printer, "Thread 1 (PIPE READ AND PRINT):");
         writeln!(printer, "  Stack Pointer Before Init: 0x{:16X}", s1p);
@@ -625,13 +598,17 @@ static mut GLOBAL_INPUT_POINTER: Option<*mut InputWindow::<INPUT_LENGTH, INPUT_W
 static mut TASK_INDEX: usize = 0;
 static mut TASK_STACKS: [u64; 4] = [0;4];
 
-//Task Creation Function
-unsafe fn create_task(thread_index: usize, allocator: &dyn PageAllocator, instruction_pointer: u64, code_selector: SegmentSelector, eflags_image: u32, stack_pointer: u64, stack_selector: SegmentSelector) {
+//Thread Creation Function
+unsafe fn create_thread(thread_index: usize, map: PageMap2, translator: &dyn AddressTranslator, allocator: &dyn PhysicalAddressAllocator, mmap: &mut MapMemory, instruction_pointer: u64, code_selector: SegmentSelector, eflags_image: u32, stack_pointer: usize, stack_selector: SegmentSelector) {
     //Create stack
-    let rsp = create_kernel_stack(thread_index, allocator);
+    assert!(map.map_level == PageMapLevel::L3);
+    let start = LinearAddress(KIB * (16 * thread_index + 4));
+    let end = LinearAddress(KIB * 16 * (thread_index + 1));
+    virtual_memory_editor(map, mmap, start, end);
+    let rsp = oct4_to_pointer(STACKS_OCT).unwrap().add((thread_index + 1) * 16 * KIB) as *mut u64;
     //Write stack frame
     write_volatile(rsp.sub(1), u16::from(stack_selector) as u64);
-    write_volatile(rsp.sub(2), stack_pointer);
+    write_volatile(rsp.sub(2), stack_pointer as u64);
     write_volatile(rsp.sub(3), eflags_image as u64);
     write_volatile(rsp.sub(4), u16::from(code_selector) as u64);
     write_volatile(rsp.sub(5), instruction_pointer);
@@ -641,22 +618,6 @@ unsafe fn create_task(thread_index: usize, allocator: &dyn PageAllocator, instru
     }
     //Save stack pointer
     TASK_STACKS[thread_index] = rsp.sub(52) as u64;
-}
-
-//Kernel Stack Allocation
-unsafe fn create_kernel_stack(thread_index: usize, allocator: &dyn PageAllocator) -> *mut u64 {
-    //Page map
-    let pml4_physical = read_cr3_address();
-    let pml4 = PageMap::new(pml4_physical, PageMapLevel::L4, allocator).unwrap();
-    let pml3 = PageMap::new(pml4.read_entry(STACKS_OCT).unwrap().physical, PageMapLevel::L3, allocator).unwrap();
-    //Allocate stack
-    let mut group = [PhysicalAddress(0);3];
-    for address in &mut group {
-        *address = allocator.allocate_page().unwrap();
-    }
-    pml3.map_pages_group_4kib(&group, (thread_index * 4) + 1, true, true, true).unwrap();
-    //Initialize stack
-    oct4_to_pointer(STACKS_OCT).unwrap().add((thread_index + 1) * 16 * KIB) as *mut u64
 }
 
 //Scheduler
@@ -976,8 +937,6 @@ unsafe extern "sysv64" fn panic_handler(panic_info: &PanicInfo) -> ! {
     }
     loop {hlt();};                                                   //Halt the processor
 }
-
-
 
 
 // PIPING
