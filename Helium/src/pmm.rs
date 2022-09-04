@@ -155,7 +155,7 @@ impl<'i> PhysicalAddressAllocator for MemoryStack<'i> {
 // PAGE OPERATIONS
 //Page Operation Trait
 pub trait PageOperation {
-    fn op(&mut self, entry: PageMapEntry2, start: LinearAddress, end: LinearAddress) -> Result<PageMapEntry2, ReturnCode>;
+    fn op(&mut self, entry: PageMapEntry, start: LinearAddress, end: LinearAddress) -> Result<PageMapEntry, ReturnCode>;
 }
 
 //Map Memory
@@ -167,12 +167,12 @@ pub struct MapMemory<'s> {
     pub execute_disable: bool,
 }
 impl<'i> PageOperation for MapMemory<'i> {
-    fn op(&mut self, entry: PageMapEntry2, start: LinearAddress, end: LinearAddress) -> Result<PageMapEntry2, ReturnCode> {
+    fn op(&mut self, entry: PageMapEntry, start: LinearAddress, end: LinearAddress) -> Result<PageMapEntry, ReturnCode> {
         match (entry.in_use, entry.entry_level, entry.entry_type) {
             (true,  _, PageMapEntryType::Memory) => {Err(ReturnCode::Test03)}, //throw error due to previously allocated memory
             (true,  _, PageMapEntryType::Table)  => {
                 //use existing table and recurse
-                let map = PageMap2::new(self.translator.translate(entry.physical)?, entry.entry_level.sub()?)?;
+                let map = PageMap::new(self.translator.translate(entry.physical)?, entry.entry_level.sub()?)?;
                 virtual_memory_editor(map, self, start, end)?;
                 //writeln!(self.printer, "tlb: {:?}", entry);
                 Ok(entry)
@@ -180,7 +180,7 @@ impl<'i> PageOperation for MapMemory<'i> {
             (false, PageMapLevel::L1, _) => {
                 //allocate a single page as memory
                 let address = self.allocator.take_one()?;
-                let value = PageMapEntry2::new(PageMapLevel::L1, PageMapEntryType::Memory, address, true, self.write, self.user, self.execute_disable);
+                let value = PageMapEntry::new(PageMapLevel::L1, PageMapEntryType::Memory, address, true, self.write, self.user, self.execute_disable);
                 //writeln!(self.printer, "nwm: {:?}", value);
                 value
             },
@@ -188,9 +188,9 @@ impl<'i> PageOperation for MapMemory<'i> {
                 //allocate a single page as a table and recurse
                 let physical = self.allocator.take_one()?;
                 let linear = self.translator.translate(physical)?;
-                let map = PageMap2::new(linear, entry.entry_level.sub()?)?;
+                let map = PageMap::new(linear, entry.entry_level.sub()?)?;
                 virtual_memory_editor(map, self, start, end)?;
-                let value = PageMapEntry2::new(entry.entry_level, PageMapEntryType::Table, physical, true, self.write, self.user, self.execute_disable);
+                let value = PageMapEntry::new(entry.entry_level, PageMapEntryType::Table, physical, true, self.write, self.user, self.execute_disable);
                 //writeln!(self.printer, "nwt: {:?}", value);
                 value
             },
@@ -204,13 +204,13 @@ pub struct UnmapMemory<'s> {
     pub translator: &'s dyn AddressTranslator,
 }
 impl<'i> PageOperation for UnmapMemory<'i> {
-    fn op(&mut self, entry: PageMapEntry2, start: LinearAddress, end: LinearAddress) -> Result<PageMapEntry2, ReturnCode> {
+    fn op(&mut self, entry: PageMapEntry, start: LinearAddress, end: LinearAddress) -> Result<PageMapEntry, ReturnCode> {
         match (entry.in_use, entry.entry_type, entry.entry_level) {
             (false, _, _) => Err(ReturnCode::Test05), //throw error due to deallocating area not in use
             (true, PageMapEntryType::Table, _) => {
                 //recurse through existing table
                 //writeln!(self.printer, "traverse: {:?}", entry.physical);
-                let map = PageMap2::new(self.translator.translate(entry.physical)?, entry.entry_level.sub()?)?;
+                let map = PageMap::new(self.translator.translate(entry.physical)?, entry.entry_level.sub()?)?;
                 virtual_memory_editor(map, self, start, end)?;
                 //test if map is empty
                 let mut map_empty: bool = true;
@@ -226,7 +226,7 @@ impl<'i> PageOperation for UnmapMemory<'i> {
                 if map_empty {
                     let physical = entry.physical;
                     self.allocator.give(&[physical])?;
-                    PageMapEntry2::from_u64(0, entry.entry_level)
+                    PageMapEntry::from_u64(0, entry.entry_level)
                 }
                 else {
                     Ok(entry)
@@ -237,7 +237,7 @@ impl<'i> PageOperation for UnmapMemory<'i> {
                 let physical = entry.physical;
                 //writeln!(self.printer, "dealloc: {:?}", physical);
                 self.allocator.give(&[physical])?;
-                PageMapEntry2::from_u64(0, PageMapLevel::L1)
+                PageMapEntry::from_u64(0, PageMapLevel::L1)
             },
             (true, PageMapEntryType::Memory, _) => Err(ReturnCode::Test04), //throw error due to deallocating non-4KB memory block
         }
@@ -249,7 +249,7 @@ pub struct MarkInUse<'s> {
     pub translator: &'s dyn AddressTranslator,
 }
 impl<'i> PageOperation for MarkInUse<'i> {
-    fn op(&mut self, mut entry: PageMapEntry2, start: LinearAddress, end: LinearAddress) -> Result<PageMapEntry2, ReturnCode> {
+    fn op(&mut self, mut entry: PageMapEntry, start: LinearAddress, end: LinearAddress) -> Result<PageMapEntry, ReturnCode> {
         match (entry.in_use, entry.present, entry.entry_level) {
             (true,  _,     _) => {},
             (_,     false, _) => {},
@@ -257,7 +257,7 @@ impl<'i> PageOperation for MarkInUse<'i> {
                 entry.in_use = true;
             },
             (false, true, _) => {
-                let map = PageMap2::new(self.translator.translate(entry.physical)?, entry.entry_level.sub()?)?;
+                let map = PageMap::new(self.translator.translate(entry.physical)?, entry.entry_level.sub()?)?;
                 virtual_memory_editor(map, self, start, end)?;
                 entry.in_use = true;
             },
@@ -271,13 +271,13 @@ pub struct DePrivilege<'s> {
     pub translator: &'s dyn AddressTranslator,
 }
 impl<'i> PageOperation for DePrivilege<'i> {
-    fn op(&mut self, mut entry: PageMapEntry2, start: LinearAddress, end: LinearAddress) -> Result<PageMapEntry2, ReturnCode> {
+    fn op(&mut self, mut entry: PageMapEntry, start: LinearAddress, end: LinearAddress) -> Result<PageMapEntry, ReturnCode> {
         match (entry.in_use, entry.entry_level) {
             (true, PageMapLevel::L1) => {
                 entry.user = true;
             },
             (true, _) => {
-                let map = PageMap2::new(self.translator.translate(entry.physical)?, entry.entry_level.sub()?)?;
+                let map = PageMap::new(self.translator.translate(entry.physical)?, entry.entry_level.sub()?)?;
                 virtual_memory_editor(map, self, start, end)?;
                 entry.user = true;
             },
@@ -289,7 +289,7 @@ impl<'i> PageOperation for DePrivilege<'i> {
 
 // PAGE OPERATION
 //Virtual Memory Editor
-pub fn virtual_memory_editor(map: PageMap2, operation: &mut dyn PageOperation, start: LinearAddress, end: LinearAddress) -> Result<(), ReturnCode> {
+pub fn virtual_memory_editor(map: PageMap, operation: &mut dyn PageOperation, start: LinearAddress, end: LinearAddress) -> Result<(), ReturnCode> {
     //
     canonical_48(start)?; canonical_48(end)?;
     if end.0 <= start.0 {return Err(ReturnCode::Test01)}
@@ -305,8 +305,8 @@ pub fn virtual_memory_editor(map: PageMap2, operation: &mut dyn PageOperation, s
             if index_current == index_end {end}
             else {LinearAddress(((start_current.0 + p)/p) * p)};
         //
-        let entry_read: PageMapEntry2 = map.read_entry(index_current)?;
-        let entry_write: PageMapEntry2 = operation.op(entry_read, start_current, end_current)?;
+        let entry_read: PageMapEntry = map.read_entry(index_current)?;
+        let entry_write: PageMapEntry = operation.op(entry_read, start_current, end_current)?;
         map.write_entry(index_current, entry_write)?;
         //
         start_current = end_current;

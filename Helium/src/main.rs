@@ -167,7 +167,7 @@ pub extern "sysv64" fn _start() -> ! {
 
     // NEW MEMORY SYSTEM TESTING
     writeln!(printer, "\n=== PAGE MAP ===\n");
-    let pml4: PageMap2;
+    let pml4: PageMap;
     //let pml3_kstack: PageMap2 = PageMap2 { linear: LinearAddress(0), map_level: PageMapLevel::L3 };
     let translator: OffsetIdentity;
     let mut allocator: MemoryStack;
@@ -203,7 +203,7 @@ pub extern "sysv64" fn _start() -> ! {
         };
         //Page map
         let pml4_physical = read_cr3_address();
-        pml4 = PageMap2::new(translator.translate(pml4_physical).unwrap(), PageMapLevel::L4).unwrap();
+        pml4 = PageMap::new(translator.translate(pml4_physical).unwrap(), PageMapLevel::L4).unwrap();
         //Setup operations
         let mut markinuse = MarkInUse {translator: &translator};
         let mut deprivilege = DePrivilege {translator: &translator};
@@ -661,7 +661,7 @@ static mut TASK_INDEX: usize = 0;
 static mut TASK_STACKS: [u64; 4] = [0;4];
 
 //Thread Creation Function
-unsafe fn create_thread(thread_index: usize, map: PageMap2, translator: &dyn AddressTranslator, mmap: &mut MapMemory, instruction_pointer: u64, code_selector: SegmentSelector, eflags_image: u32, stack_pointer: usize, stack_selector: SegmentSelector) {
+unsafe fn create_thread(thread_index: usize, map: PageMap, translator: &dyn AddressTranslator, mmap: &mut MapMemory, instruction_pointer: u64, code_selector: SegmentSelector, eflags_image: u32, stack_pointer: usize, stack_selector: SegmentSelector) {
     //Create stack
     assert!(map.map_level == PageMapLevel::L4);
     let start = LinearAddress(LIM_KERSTK_PTR + PAGE_SIZE_4KIB * (thread_index * 4 + 1));

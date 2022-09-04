@@ -6,16 +6,9 @@
 
 **Noble is currently a work in progress in its earliest stages.**
 
+**Noble boots via the Limine Boot Protocol found [here](https://github.com/limine-bootloader/limine/blob/trunk/PROTOCOL.md).**
+
 # Components
-
-## Hydrogen Bootloader
-
-A UEFI stub which handles:
-
-* Memory and Control Register Diagnostics
-* Virtual Memory Initialization
-* Kernel Entry
-* (PLANNED) Kernel Space Binary Loading
 
 ## Helium Kernel
 
