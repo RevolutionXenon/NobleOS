@@ -196,7 +196,7 @@ impl Header {
 //ELF Ident Version
 numeric_enum! {
     #[repr(u8)]
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Eq)]
     #[derive(Clone, Copy)]
     #[derive(Debug)]
     pub enum IdentVersion {
@@ -207,7 +207,7 @@ numeric_enum! {
 //Application Binary Interface
 numeric_enum! {
     #[repr(u8)]
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Eq)]
     #[derive(Clone, Copy)]
     #[derive(Debug)]
     pub enum ApplicationBinaryInterface {
@@ -238,7 +238,7 @@ numeric_enum! {
 //Object Type
 numeric_enum! {
     #[repr(u16)]
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Eq)]
     #[derive(Clone, Copy)]
     #[derive(Debug)]
     pub enum ObjectType {
@@ -253,7 +253,7 @@ numeric_enum! {
 //Instruction Set Architecture
 numeric_enum! {
     #[repr(u16)]
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Eq)]
     #[derive(Clone, Copy)]
     #[derive(Debug)]
     pub enum InstructionSetArchitecture {
@@ -327,7 +327,7 @@ numeric_enum! {
 //ELF Version
 numeric_enum! {
     #[repr(u32)]
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Eq)]
     #[derive(Clone, Copy)]
     #[derive(Debug)]
     pub enum Version {
@@ -449,7 +449,7 @@ impl<'a, RO: 'a+Volume> Iterator for ProgramIterator<'a, RO> {
 //Program Type
 numeric_enum! {
     #[repr(u32)]
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Eq)]
     #[derive(Clone, Copy)]
     #[derive(Debug)]
     pub enum ProgramType {
@@ -583,7 +583,7 @@ impl Section {
 //Section Type
 numeric_enum! {
     #[repr(u32)]
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Eq)]
     #[derive(Clone, Copy)]
     #[derive(Debug)]
     pub enum SectionType {
@@ -610,7 +610,7 @@ numeric_enum! {
 //Section Flags
 numeric_enum! {
     #[repr(u64)]
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Eq)]
     #[derive(Clone, Copy)]
     #[derive(Debug)]
     pub enum SectionFlags {
@@ -723,7 +723,7 @@ impl<'a, RO: 'a+Volume> Iterator for ProgramDynamicEntryIterator<'a, RO> {
 //Dynamic Entry Type
 numeric_enum! {
     #[repr(u64)]
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Eq)]
     #[derive(Clone, Copy)]
     #[derive(Debug)]
     pub enum ProgramDynamicEntryType {
@@ -930,7 +930,7 @@ numeric_enum!{
 //Bit Width
 numeric_enum! {
     #[repr(u8)]
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Eq)]
     #[derive(Clone, Copy)]
     #[derive(Debug)]
     pub enum BitWidth {
@@ -942,7 +942,7 @@ numeric_enum! {
 //Endianness
 numeric_enum! {
     #[repr(u8)]
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Eq)]
     #[derive(Clone, Copy)]
     #[derive(Debug)]
     pub enum Endianness {
@@ -954,7 +954,7 @@ numeric_enum! {
 //Relocation Type
 numeric_enum! {
     #[repr(u64)]
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Eq)]
     #[derive(Clone, Copy)]
     #[derive(Debug)]
     pub enum RelocationType {

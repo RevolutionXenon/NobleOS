@@ -5,6 +5,7 @@
 // HEADER
 //Flags
 #![allow(clippy::needless_range_loop)]
+#![allow(unused_variables)]
 
 //Imports
 use crate::{numeric_enum, return_if_partial};
@@ -392,7 +393,7 @@ impl TryFrom<FATBootSector> for [u8;0x200] {
 //Bytes Per Sector
 numeric_enum! {
     #[repr(u16)]
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Eq)]
     #[derive(Clone, Copy)]
     #[derive(Debug)]
     pub enum BytesPerSector {
@@ -406,7 +407,7 @@ numeric_enum! {
 //Sectors Per Cluster
 numeric_enum! {
     #[repr(u8)]
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Eq)]
     #[derive(Clone, Copy)]
     #[derive(Debug)]
     pub enum SectorsPerCluster {
@@ -423,7 +424,7 @@ numeric_enum! {
 //Media Type
 numeric_enum! {
     #[repr(u8)]
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Eq)]
     #[derive(Clone, Copy)]
     #[derive(Debug)]
     pub enum MediaType {

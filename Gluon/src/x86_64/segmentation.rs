@@ -18,7 +18,6 @@ use core::ptr::write_volatile;
 // GLOBAL DESCRIPTOR TABLE
 //GDT
 #[repr(C)]
-#[repr(packed)]
 pub struct GlobalDescriptorTable {
     pub limit: u16,
     pub address: LinearAddress,
@@ -255,7 +254,6 @@ pub fn load_task_register(selector: SegmentSelector) {
 // INTERRUPT DESCRIPTOR TABLE
 //IDT
 #[repr(C)]
-#[repr(packed)]
 pub struct InterruptDescriptorTable {
     pub limit: u16,
     pub address: LinearAddress,

@@ -641,7 +641,7 @@ impl PageMapEntry {
 }
 
 //Page Map Level
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq)]
 #[derive(Clone, Copy)]
 #[derive(Debug)]
 pub enum PageMapLevel {
@@ -665,7 +665,7 @@ impl PageMapLevel {
 
 
 //Page Map Entry Type
-#[derive(PartialEq)]
+#[derive(PartialEq, Eq)]
 #[derive(Clone, Copy)]
 #[derive(Debug)]
 pub enum PageMapEntryType {
@@ -718,7 +718,7 @@ impl PageMap2 {
 pub struct PageMapEntry2 {
     pub entry_level:     PageMapLevel,
     pub entry_type:      PageMapEntryType, //Bit 7 in some cirumstances, indicates page refers to memory when it could refer to a table
-    pub physical:        PhysicalAddress,
+    pub physical:        PhysicalAddress,  //Bits 12-48, memory address of relevant entry
     pub present:         bool, //ALL: Bit 0, indicates entry exists
     pub write:           bool, //ALL: Bit 1, indicates page may be written to
     pub user:            bool, //ALL: Bit 2, indicates page can only be accessed in Ring 0
@@ -727,7 +727,7 @@ pub struct PageMapEntry2 {
     pub accessed:        bool, //ALL: Bit 5, indicates that a page has been accessed
     pub dirty:           Option<bool>, //MEMORY: Bit 6, indicates page has been written to
     pub attribute_table: Option<bool>, //MEMORY: Bit 7 (L1) or Bit 12 (L2, L3), indicates yet another thing about how memory access works
-    pub global:          Option<bool>, //MEMORY: Bit 8,
+    pub global:          Option<bool>, //MEMORY: Bit 8
     pub in_use:          bool, //ALL: Bit 52, indicates to the operating system that a page map entry is valid regardless of the state of the present bit
     pub execute_disable: bool, //ALL: Bit 63, indicates code may not be executed from this page
 }
@@ -736,7 +736,7 @@ impl PageMapEntry2 {
     pub fn from_u64(data: u64, entry_level: PageMapLevel) -> Result<Self, ReturnCode> {
         let entry_type = {
             if      entry_level == PageMapLevel::L5 || entry_level == PageMapLevel::L4 {PageMapEntryType::Table}
-            else if entry_level == PageMapLevel::L3 || entry_level == PageMapLevel::L2 { 
+            else if entry_level == PageMapLevel::L3 || entry_level == PageMapLevel::L2 {
                 if data & (1<<7) > 0                                                   {PageMapEntryType::Memory}
                 else                                                                   {PageMapEntryType::Table}}
             else                                                                       {PageMapEntryType::Memory}

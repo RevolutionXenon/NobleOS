@@ -3,7 +3,7 @@
 
 // HEADER
 //Imports
-use core::fmt::Write;
+use core::cell::RefCell;
 use core::ptr::read_volatile;
 use core::ptr::write_volatile;
 use core::intrinsics::write_bytes;
@@ -60,7 +60,7 @@ impl PageAllocator for StackAllocator {
 }
 
 
-// NEW SYSTEM
+// ADDRESS TRANSLATION
 //Address Translator Trait
 pub trait AddressTranslator {
     fn translate(&self, physical: PhysicalAddress) -> Result<LinearAddress, ReturnCode>;
@@ -74,10 +74,12 @@ pub struct OffsetIdentity {
 impl AddressTranslator for OffsetIdentity {
     fn translate(&self, physical: PhysicalAddress) -> Result<LinearAddress, ReturnCode> {
         if physical.0 > self.limit {return Err(ReturnCode::MemoryOutOfBounds)}
-        else {Ok(LinearAddress(physical.0 + self.offset))}
+        Ok(LinearAddress(physical.0 + self.offset))
     }
 }
 
+
+// PHYSICAL ADDRESS ALLOCATION
 //Physical Allocator Trait
 pub trait PhysicalAddressAllocator {
     fn take(&self, pages: &mut [PhysicalAddress]) -> Result<(), ReturnCode>;
@@ -93,9 +95,28 @@ pub trait PhysicalAddressAllocator {
     }
 }
 
+//Iterator Allocator
+pub struct IteratorAllocator<'s> {
+    pub iter_ref: RefCell<&'s mut dyn Iterator<Item = PhysicalAddress>>,
+}
+impl<'i> PhysicalAddressAllocator for IteratorAllocator<'i> {
+    fn take(&self, pages: &mut [PhysicalAddress]) -> Result<(), ReturnCode> {
+        for i in pages {
+            *i = match self.iter_ref.borrow_mut().next() {
+                Some(e) => e,
+                None => {return Err(ReturnCode::OutOfResources)},
+            };
+        }
+        Ok(())
+    }
+    fn give(&self, pages: &[PhysicalAddress]) -> Result<(), ReturnCode> {
+        Err(ReturnCode::UnsupportedFeature)
+    }
+}
+
 //Stack Allocator
 pub struct MemoryStack<'s> {
-    pub index: *mut usize,
+    pub index: RefCell<usize>,
     pub stack: *const PhysicalAddress,
     pub translator: &'s dyn AddressTranslator,
 }
@@ -103,16 +124,17 @@ impl<'i> PhysicalAddressAllocator for MemoryStack<'i> {
     fn take(&self, pages: &mut [PhysicalAddress]) -> Result<(), ReturnCode> {
         //CRITICAL SECTION
         {
-            let old_index: usize = unsafe {read_volatile(self.index)};
+            if pages.len() > *self.index.borrow() {return Err(ReturnCode::OutOfResources)}
+            let old_index: usize = *self.index.borrow(); //unsafe {read_volatile(self.index)};
             let new_index: usize = old_index - pages.len();
             if old_index < pages.len() {return Err(ReturnCode::OutOfResources)}
-            unsafe {write_volatile(self.index, new_index)};
+            *self.index.borrow_mut() = new_index; //unsafe {write_volatile(self.index, new_index)};
             unsafe {core::ptr::copy_nonoverlapping(self.stack.add(new_index), pages.as_mut_ptr(), pages.len())};
         }
         //Zero memory
         for physical in pages {
             let linear = self.translator.translate(*physical)?;
-            unsafe {write_bytes(linear.0 as *mut u8, 0, 4096)}
+            unsafe {write_bytes(linear.0 as *mut u8, 0, PAGE_SIZE_4KIB)}
         }
         Ok(())
     }
@@ -120,15 +142,17 @@ impl<'i> PhysicalAddressAllocator for MemoryStack<'i> {
     fn give(&self, pages: &[PhysicalAddress]) -> Result<(), ReturnCode> {
         //CRITICAL SECTION
         {
-            let old_index: usize = unsafe {read_volatile(self.index)};
+            let old_index: usize = *self.index.borrow(); //unsafe {read_volatile(self.index)};
             let new_index: usize = old_index + pages.len();
             unsafe {core::ptr::copy_nonoverlapping(pages.as_ptr(), self.stack.add(old_index) as *mut PhysicalAddress, pages.len())};
-            unsafe {write_volatile(self.index, new_index)}
+            *self.index.borrow_mut() = new_index; //unsafe {write_volatile(self.index, new_index)}
         }
         Ok(())
     }
 }
 
+
+// PAGE OPERATIONS
 //Page Operation Trait
 pub trait PageOperation {
     fn op(&mut self, entry: PageMapEntry2, start: LinearAddress, end: LinearAddress) -> Result<PageMapEntry2, ReturnCode>;
@@ -220,6 +244,50 @@ impl<'i> PageOperation for UnmapMemory<'i> {
     }
 }
 
+//Mark in use
+pub struct MarkInUse<'s> {
+    pub translator: &'s dyn AddressTranslator,
+}
+impl<'i> PageOperation for MarkInUse<'i> {
+    fn op(&mut self, mut entry: PageMapEntry2, start: LinearAddress, end: LinearAddress) -> Result<PageMapEntry2, ReturnCode> {
+        match (entry.in_use, entry.present, entry.entry_level) {
+            (true,  _,     _) => {},
+            (_,     false, _) => {},
+            (false, true,  PageMapLevel::L1) => {
+                entry.in_use = true;
+            },
+            (false, true, _) => {
+                let map = PageMap2::new(self.translator.translate(entry.physical)?, entry.entry_level.sub()?)?;
+                virtual_memory_editor(map, self, start, end)?;
+                entry.in_use = true;
+            },
+        }
+        Ok(entry)
+    }
+}
+
+//Deprivilege
+pub struct DePrivilege<'s> {
+    pub translator: &'s dyn AddressTranslator,
+}
+impl<'i> PageOperation for DePrivilege<'i> {
+    fn op(&mut self, mut entry: PageMapEntry2, start: LinearAddress, end: LinearAddress) -> Result<PageMapEntry2, ReturnCode> {
+        match (entry.in_use, entry.entry_level) {
+            (true, PageMapLevel::L1) => {
+                entry.user = true;
+            },
+            (true, _) => {
+                let map = PageMap2::new(self.translator.translate(entry.physical)?, entry.entry_level.sub()?)?;
+                virtual_memory_editor(map, self, start, end)?;
+                entry.user = true;
+            },
+            (_, _) => {},
+        }
+        Ok(entry)
+    }
+}
+
+// PAGE OPERATION
 //Virtual Memory Editor
 pub fn virtual_memory_editor(map: PageMap2, operation: &mut dyn PageOperation, start: LinearAddress, end: LinearAddress) -> Result<(), ReturnCode> {
     //

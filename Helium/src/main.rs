@@ -21,11 +21,13 @@
 #![feature(asm_const)]
 #![feature(naked_functions)]
 #![feature(panic_info_message)]
+#![feature(pointer_byte_offsets)]
 #![feature(start)]
 
 //Modules
 mod gdt;
 mod kstruct;
+mod limine;
 mod pmm;
 
 //Imports
@@ -46,16 +48,18 @@ use gluon::x86_64::paging::*;
 use gluon::x86_64::port::*;
 use gluon::x86_64::registers::*;
 use gluon::x86_64::segmentation::*;
+use ::limine::LimineMemoryMapEntryType;
 use photon::*;
-use photon::formats::f2::*;
+use photon::formats::f1::*;
 use core::arch::asm;
+use core::cell::RefCell;
 use core::convert::TryFrom;
 use core::fmt::Write;
 use core::panic::PanicInfo;
 use core::ptr::write_volatile;
 
 //Constants
-const HELIUM_VERSION: &str = "vDEV-2022-02-21"; //CURRENT VERSION OF KERNEL
+const HELIUM_VERSION: &str = "vDEV-2022"; //CURRENT VERSION OF KERNEL
 static WHITESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_WHITE, background: COLOR_BGRX_BLACK};
 static _BLACKSPACE: CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_WHITE};
 static _BLUESPACE:  CharacterTwoTone::<ColorBGRX> = CharacterTwoTone::<ColorBGRX> {codepoint: ' ', foreground: COLOR_BGRX_BLUE,  background: COLOR_BGRX_BLACK};
@@ -121,13 +125,20 @@ pub extern "sysv64" fn _start() -> ! {
     // DISABLE INTERRUPTS
     cli();
 
+    // LIMINE SETUP
+    let framebuffer = limine::REQ_FRAMEBUFFER.get_response().get().unwrap().framebuffers().unwrap();
+    let framebuffer_address = framebuffer[0].address.as_mut_ptr().unwrap();
+    unsafe {for i in 0..8000 {
+        *framebuffer_address.add(i) = 255;
+    }}
+
     // GRAPHICS SETUP
     let pixel_renderer: PixelRendererHWD<ColorBGRX>;
     let character_renderer: CharacterTwoToneRenderer16x16<ColorBGRX>;
     let mut printer: PrintWindow::<PRINT_LINES, PRINT_HEIGHT, PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>;
     let mut inputter: InputWindow::<INPUT_LENGTH, INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>;
     {
-        pixel_renderer = PixelRendererHWD {pointer: oct4_to_pointer(FRAME_BUFFER_OCT).unwrap() as *mut ColorBGRX, height: SCREEN_HEIGHT, width: SCREEN_WIDTH};
+        pixel_renderer = PixelRendererHWD {pointer: framebuffer_address as *mut ColorBGRX, height: SCREEN_HEIGHT, width: SCREEN_WIDTH};
         character_renderer = CharacterTwoToneRenderer16x16::<ColorBGRX> {renderer: &pixel_renderer, height: FRAME_HEIGHT, width: FRAME_WIDTH, y: 0, x: 0};
         let mut frame: FrameWindow::<FRAME_HEIGHT, FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = FrameWindow::<FRAME_HEIGHT, FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, WHITESPACE, 0, 0);
         inputter = InputWindow::<INPUT_LENGTH, INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, WHITESPACE, INPUT_Y, INPUT_X);
@@ -145,7 +156,10 @@ pub extern "sysv64" fn _start() -> ! {
         frame.horizontal_string("HELIUM KERNEL", 0, FRAME_WIDTH - 14 - HELIUM_VERSION.len(), REDSPACE);
         frame.horizontal_string(HELIUM_VERSION, 0, FRAME_WIDTH - HELIUM_VERSION.len(), REDSPACE);
         frame.render();
+        //Print Welcome
         writeln!(printer, "Welcome to Noble OS");
+        let boot_info = limine::REQ_INFO.get_response().get().expect("No Bootloader Info");
+        writeln!(printer, "{} Bootloader       v{}", boot_info.name.to_string().unwrap(), boot_info.version.to_string().unwrap());
         writeln!(printer, "Helium Kernel           {}", HELIUM_VERSION);
         writeln!(printer, "Photon Graphics Library {}", PHOTON_VERSION);
         writeln!(printer, "Gluon Memory Library    {}", GLUON_VERSION);
@@ -154,21 +168,66 @@ pub extern "sysv64" fn _start() -> ! {
     // NEW MEMORY SYSTEM TESTING
     writeln!(printer, "\n=== PAGE MAP ===\n");
     let pml4: PageMap2;
-    let pml3_kstack: PageMap2;
+    //let pml3_kstack: PageMap2 = PageMap2 { linear: LinearAddress(0), map_level: PageMapLevel::L3 };
     let translator: OffsetIdentity;
-    let allocator: MemoryStack;
+    let mut allocator: MemoryStack;
     let mut memmap: MapMemory;
     let mut memunmap: UnmapMemory;
     unsafe {
         //Physical to linear address translator
         translator = OffsetIdentity {
-            offset: oct4_to_usize(IDENTITY_OCT).unwrap(), 
+            offset: LIM_PYSMEM_PTR,
             limit: PAGE_SIZE_512G,
         };
-        //Alloctor
+        //Limine Setup
+        let limine_memmap_response = limine::REQ_MEMMAP.get_response().get().unwrap();
+        let limine_memmap = limine_memmap_response.entries.get().unwrap().as_ptr().unwrap();
+        let limine_memmap_slice = core::slice::from_raw_parts(limine_memmap, limine_memmap_response.entry_count as usize);
+        let limine_areas_usable = limine_memmap_slice.iter()
+            .filter(|x| x.typ == LimineMemoryMapEntryType::Usable);
+        let mut limine_pages_usable = limine_memmap_slice.iter()
+            .filter(|x| x.typ == LimineMemoryMapEntryType::Usable)
+            .flat_map(|x| (0..x.len as usize / PAGE_SIZE_4KIB).map(move |p| x.base as usize + PAGE_SIZE_4KIB * p))
+            .map(PhysicalAddress);
+        //Limine Allocator
+        let ref_cell: RefCell<&mut dyn Iterator<Item = PhysicalAddress>> = RefCell::new(&mut limine_pages_usable);
+        let mut limine_pages_allocator = IteratorAllocator {
+            iter_ref: ref_cell,
+        };
+        let mut limine_map_memory = MapMemory {
+            allocator: &mut limine_pages_allocator,
+            translator: &translator,
+            write: true,
+            user: true,
+            execute_disable: true,
+        };
+        //Page map
+        let pml4_physical = read_cr3_address();
+        pml4 = PageMap2::new(translator.translate(pml4_physical).unwrap(), PageMapLevel::L4).unwrap();
+        //Setup operations
+        let mut markinuse = MarkInUse {translator: &translator};
+        let mut deprivilege = DePrivilege {translator: &translator};
+        //Mark in use
+        virtual_memory_editor(pml4, &mut markinuse, LinearAddress(LIM_PYSMEM_PTR), LinearAddress(LIM_PYSMEM_PTR + page_size(LIM_PYSMEM_LVL)));
+        virtual_memory_editor(pml4, &mut markinuse, LinearAddress(LIM_KERNEL_PTR), LinearAddress(LIM_KERNEL_PTR - 1 + page_size(LIM_KERNEL_LVL)));
+        //Deprivilege
+        virtual_memory_editor(pml4, &mut deprivilege, LinearAddress(LIM_PYSMEM_PTR), LinearAddress(LIM_PYSMEM_PTR + page_size(LIM_PYSMEM_LVL)));
+        virtual_memory_editor(pml4, &mut deprivilege, LinearAddress(LIM_KERNEL_PTR), LinearAddress(LIM_KERNEL_PTR - 1 + page_size(LIM_KERNEL_LVL)));
+        //Create memory stack
+        let total_pages = {let mut sum: usize = 0; for i in limine_areas_usable {sum += i.len as usize / PAGE_SIZE_4KIB;} sum};
+        writeln!(printer, "FREE MEMORY 1: {}", total_pages);
+        virtual_memory_editor(pml4, &mut limine_map_memory, LinearAddress(LIM_PYSSTK_PTR), LinearAddress(LIM_PYSSTK_PTR + total_pages * 8));
+        let stack_ptr = LIM_PYSSTK_PTR as *mut PhysicalAddress;
+        let mut stack_count = 0;
+        for address in limine_pages_usable {
+            *stack_ptr.add(stack_count) = address;
+            stack_count += 1;
+        }
+        writeln!(printer, "FREE MEMORY 2: {}", stack_count);
+        //Create stack allocator
         allocator = MemoryStack {
-            index: oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut usize,
-            stack: (oct4_to_pointer(FREE_MEMORY_OCT).unwrap() as *mut PhysicalAddress).add(1),
+            index: RefCell::new(stack_count),
+            stack: stack_ptr.add(1),
             translator: &translator,
         };
         //Map and unmap operations
@@ -183,16 +242,6 @@ pub extern "sysv64" fn _start() -> ! {
             allocator: &allocator,
             translator: &translator,
         };
-        //Page map
-        let pml4_physical = read_cr3_address();
-        pml4 = PageMap2::new(translator.translate(pml4_physical).unwrap(), PageMapLevel::L4).unwrap();
-        pml3_kstack = PageMap2::new(translator.translate(pml4.read_entry(STACKS_OCT).unwrap().physical).unwrap(), PageMapLevel::L3).unwrap();
-        //Testing
-        pml4.erase_entry(0);
-        let result1 = virtual_memory_editor(pml4, &mut memmap, LinearAddress(0), LinearAddress(PAGE_SIZE_4KIB * 512));
-        let result2 = virtual_memory_editor(pml4, &mut memunmap, LinearAddress(0), LinearAddress(PAGE_SIZE_4KIB * 512));
-        writeln!(printer, "{:?}", result1);
-        writeln!(printer, "{:?}", result2);
     }
 
     // PCI TESTING
@@ -243,8 +292,11 @@ pub extern "sysv64" fn _start() -> ! {
     writeln!(printer, "\n=== GLOBAL DESCRIPTOR TABLE ===\n");
     unsafe {
         //Allocate space for GDT
-        gdt = GlobalDescriptorTable{address: translator.translate(allocator.take_one().unwrap()).unwrap(), limit: 512};
-        writeln!(printer, "GDT Linear Address: 0x{:016X}", gdt.address.0);
+        allocator.take_one().unwrap();
+        let a = allocator.take_one().unwrap();
+        writeln!(printer, "GDT Physical Address: 0x{:016X}", a.0);
+        gdt = GlobalDescriptorTable{address: translator.translate(a).unwrap(), limit: 512};
+        writeln!(printer, "GDT Linear Address:   0x{:016X}", gdt.address.0);
         //Substitute symbol in TSS entry for actual TSS
         gdt::TASK_STATE_SEGMENT_ENTRY.base = &TASK_STATE_SEGMENT as *const TaskStateSegment as u64;
         //Write TSS entry into GDT
@@ -365,13 +417,23 @@ pub extern "sysv64" fn _start() -> ! {
         //Write IDTR
         idt.write_idtr();
         //Diagnostic
-        writeln!(printer, "IDT Linear Address: 0x{:016X}", idt.address.0);
-        writeln!(printer, "{:?}", pml3_kstack);
+        writeln!(printer, "IDT Linear Address:         0x{:016X}", idt.address.0);
+    }
+
+    // IST SETUP
+    writeln!(printer, "\n=== INTERRUPT STACK TABLE\n");
+    //let pm_kstack: PageMap2;
+    unsafe {
         //Create kernel stack
-        let start: LinearAddress = LinearAddress(PAGE_SIZE_4KIB * 1);
-        let end: LinearAddress = LinearAddress(PAGE_SIZE_4KIB * 4);
-        virtual_memory_editor(pml3_kstack, &mut memmap, start, end);
-        let kernel_stack: u64 = oct_to_usize_4(STACKS_OCT, 0, 0, 4, 0).unwrap() as u64;
+        let start: LinearAddress = LinearAddress(LIM_KERSTK_PTR + PAGE_SIZE_4KIB * 1);
+        let end: LinearAddress   = LinearAddress(LIM_KERSTK_PTR + PAGE_SIZE_4KIB * 4);
+        virtual_memory_editor(pml4, &mut memmap, start, end);
+        let kernel_stack = (LIM_KERSTK_PTR + PAGE_SIZE_4KIB * 4) as u64;
+        //let p4 = extract_index(LinearAddress(LIM_KERSTK_PTR), PageMapLevel::L4);
+        //let p3 = extract_index(LinearAddress(LIM_KERSTK_PTR), PageMapLevel::L3);
+        //let pml3_kstack = PageMap2::new(translator.translate(pml4.read_entry(p4).unwrap().physical).unwrap(), PageMapLevel::L3).unwrap();
+        //let pml2_kstack = PageMap2::new(translator.translate(pml3_kstack.read_entry(p3).unwrap().physical).unwrap(), PageMapLevel::L2).unwrap();
+        //pm_kstack = pml2_kstack;
         //Update TSS
         TASK_STATE_SEGMENT.ist1 = kernel_stack;
         TASK_STATE_SEGMENT.ist2 = kernel_stack;
@@ -385,7 +447,7 @@ pub extern "sysv64" fn _start() -> ! {
         //Enable IRQ 1
         pic::enable_irq(0x1).unwrap();
         //Test ability to read PIC inputs
-        writeln!(printer, "{:08b} {:08b}", PIC1_DATA.read(), PIC2_DATA.read());
+        writeln!(printer, "PIC Data: {:08b} {:08b}", PIC1_DATA.read(), PIC2_DATA.read());
     }
 
     // PIT BUS SPEED MEASUREMENT
@@ -432,7 +494,7 @@ pub extern "sysv64" fn _start() -> ! {
         writeln!(printer, "Average MHz: {:16}", cpu_hz / 1_000_000);
     }
 
-    // PS/2 Bus
+    // PS/2 BUS
     writeln!(printer, "\n=== PERSONAL SYSTEM/2 BUS ===\n");
     unsafe {
         //Disable PS/2 ports
@@ -494,9 +556,9 @@ pub extern "sysv64" fn _start() -> ! {
         let i2p = byte_loop as fn() as usize as u64;
         let i3p = ps2_keyboard as unsafe fn() as usize as u64;
         //Create tasks
-        create_thread(1, pml3_kstack, &translator, &allocator, &mut memmap, i1p, gdt::SUPERVISOR_CODE, 0x00000202, s1p, gdt::SUPERVISOR_DATA);
-        create_thread(2, pml3_kstack, &translator, &allocator, &mut memmap, i2p, gdt::USER_CODE, 0x00000202, s2p, gdt::USER_DATA);
-        create_thread(3, pml3_kstack, &translator, &allocator, &mut memmap, i3p, gdt::USER_CODE, 0x00000202, s3p, gdt::USER_DATA);
+        create_thread(1, pml4, &translator, &mut memmap, i1p, gdt::SUPERVISOR_CODE, 0x00000202, s1p, gdt::SUPERVISOR_DATA);
+        create_thread(2, pml4, &translator, &mut memmap, i2p, gdt::USER_CODE, 0x00000202, s2p, gdt::USER_DATA);
+        create_thread(3, pml4, &translator, &mut memmap, i3p, gdt::USER_CODE, 0x00000202, s3p, gdt::USER_DATA);
         //Diagnostic
         writeln!(printer, "Thread 1 (PIPE READ AND PRINT):");
         writeln!(printer, "  Stack Pointer Before Init: 0x{:16X}", s1p);
@@ -519,7 +581,7 @@ pub extern "sysv64" fn _start() -> ! {
         writeln!(printer, "APIC Present: {}", lapic::apic_check());
         writeln!(printer, "APIC Base: 0x{:16X}", lapic::get_base());
         //Shift Base
-        lapic::LAPIC_ADDRESS = (lapic::get_base() as usize + oct4_to_usize(IDENTITY_OCT).unwrap()) as *mut u8;
+        lapic::LAPIC_ADDRESS = (lapic::get_base() as usize + LIM_PYSMEM_PTR) as *mut u8;
         //Spurious interrupt
         lapic::spurious(0xFF);
         //Diagnostic
@@ -533,7 +595,7 @@ pub extern "sysv64" fn _start() -> ! {
     }
 
     // RAMDISK TESTING
-    writeln!(printer, "\n=== RAMDISK TEST ===\n");
+    /*writeln!(printer, "\n=== RAMDISK TEST ===\n");
     unsafe {
         /*let bytes: [u8;0x200] = read_volatile(oct4_to_pointer(RAMDISK_OCT).unwrap() as *const [u8;0x200]);
         let boot_sector_r = FATBootSector::try_from(bytes);
@@ -575,7 +637,7 @@ pub extern "sysv64" fn _start() -> ! {
                 buffer
             });
         }
-    }
+    }*/
 
     // FINISH LOADING
     writeln!(printer, "\n=== STARTUP COMPLETE ===\n");
@@ -599,13 +661,13 @@ static mut TASK_INDEX: usize = 0;
 static mut TASK_STACKS: [u64; 4] = [0;4];
 
 //Thread Creation Function
-unsafe fn create_thread(thread_index: usize, map: PageMap2, translator: &dyn AddressTranslator, allocator: &dyn PhysicalAddressAllocator, mmap: &mut MapMemory, instruction_pointer: u64, code_selector: SegmentSelector, eflags_image: u32, stack_pointer: usize, stack_selector: SegmentSelector) {
+unsafe fn create_thread(thread_index: usize, map: PageMap2, translator: &dyn AddressTranslator, mmap: &mut MapMemory, instruction_pointer: u64, code_selector: SegmentSelector, eflags_image: u32, stack_pointer: usize, stack_selector: SegmentSelector) {
     //Create stack
-    assert!(map.map_level == PageMapLevel::L3);
-    let start = LinearAddress(KIB * (16 * thread_index + 4));
-    let end = LinearAddress(KIB * 16 * (thread_index + 1));
+    assert!(map.map_level == PageMapLevel::L4);
+    let start = LinearAddress(LIM_KERSTK_PTR + PAGE_SIZE_4KIB * (thread_index * 4 + 1));
+    let end   = LinearAddress(LIM_KERSTK_PTR + PAGE_SIZE_4KIB * (thread_index * 4 + 4));
     virtual_memory_editor(map, mmap, start, end);
-    let rsp = oct4_to_pointer(STACKS_OCT).unwrap().add((thread_index + 1) * 16 * KIB) as *mut u64;
+    let rsp = (LIM_KERSTK_PTR as *mut u64).byte_add(PAGE_SIZE_4KIB * (thread_index * 4 + 4));
     //Write stack frame
     write_volatile(rsp.sub(1), u16::from(stack_selector) as u64);
     write_volatile(rsp.sub(2), stack_pointer as u64);
@@ -617,7 +679,7 @@ unsafe fn create_thread(thread_index: usize, map: PageMap2, translator: &dyn Add
         write_volatile((stack_pointer as *mut u64).sub(i), 0);
     }
     //Save stack pointer
-    TASK_STACKS[thread_index] = rsp.sub(52) as u64;
+    TASK_STACKS[thread_index] = rsp.sub(20) as u64;
 }
 
 //Scheduler
@@ -628,7 +690,7 @@ unsafe extern "sysv64" fn scheduler() -> u64 {
     else if STRING_PIPE.state == RingBufferState::WriteWait || STRING_PIPE.state == RingBufferState::ReadBlock {TASK_INDEX = 1; TASK_STACKS[1]}
     else                                                                                                       {TASK_INDEX = 0; TASK_STACKS[0]};
     //Change task state segment to new task
-    TASK_STATE_SEGMENT.ist2 = (oct4_to_usize(STACKS_OCT).unwrap() + ((TASK_INDEX + 1) * 16 * KIB)) as u64;
+    TASK_STATE_SEGMENT.ist2 = (LIM_KERSTK_PTR as u64) + ((TASK_INDEX + 1) * 16 * KIB) as u64;
     //Finish
     result
 }
@@ -758,109 +820,54 @@ unsafe extern "x86-interrupt" fn interrupt_irq_01() {
 }
 
 //INT 30h: LAPIC Timer
-#[naked] unsafe extern "x86-interrupt" fn interrupt_timer() {
-    asm!(
-        //Save Program State
-        "PUSH RAX", "PUSH RBP", "PUSH R15", "PUSH R14",
-        "PUSH R13", "PUSH R12", "PUSH R11", "PUSH R10",
-        "PUSH R9",  "PUSH R8",  "PUSH RDI", "PUSH RSI",
-        "PUSH RDX", "PUSH RCX", "PUSH RBX",
-        //Save Extended State
-        "SUB RSP, 100h",
-        "MOVAPS XMMWORD PTR [RSP + 0xf0], XMM15", "MOVAPS XMMWORD PTR [RSP + 0xe0], XMM14",
-        "MOVAPS XMMWORD PTR [RSP + 0xd0], XMM13", "MOVAPS XMMWORD PTR [RSP + 0xc0], XMM12",
-        "MOVAPS XMMWORD PTR [RSP + 0xb0], XMM11", "MOVAPS XMMWORD PTR [RSP + 0xa0], XMM10",
-        "MOVAPS XMMWORD PTR [RSP + 0x90], XMM9",  "MOVAPS XMMWORD PTR [RSP + 0x80], XMM8",
-        "MOVAPS XMMWORD PTR [RSP + 0x70], XMM7",  "MOVAPS XMMWORD PTR [RSP + 0x60], XMM6",
-        "MOVAPS XMMWORD PTR [RSP + 0x50], XMM5",  "MOVAPS XMMWORD PTR [RSP + 0x40], XMM4",
-        "MOVAPS XMMWORD PTR [RSP + 0x30], XMM3",  "MOVAPS XMMWORD PTR [RSP + 0x20], XMM2",
-        "MOVAPS XMMWORD PTR [RSP + 0x10], XMM1",  "MOVAPS XMMWORD PTR [RSP + 0x00], XMM0",
-        //Save stack pointer
-        "MOV RAX, [{stack_index}+RIP]",
-        "SHL RAX, 3",
-        "LEA RCX, [{stack_array}+RIP]",
-        "MOV [RCX+RAX], RSP",
-        //End interrupt
-        "CALL {lapic_eoi}",
-        //Call scheduler
-        "CALL {scheduler}",
-        //Swap to thread stack
-        "MOV RSP, RAX",
-        //Load program state
-        "MOVAPS XMM0,  XMMWORD PTR [RSP + 0x00]", "MOVAPS XMM1,  XMMWORD PTR [RSP + 0x10]",
-        "MOVAPS XMM2,  XMMWORD PTR [RSP + 0x20]", "MOVAPS XMM3,  XMMWORD PTR [RSP + 0x30]",
-        "MOVAPS XMM4,  XMMWORD PTR [RSP + 0x40]", "MOVAPS XMM5,  XMMWORD PTR [RSP + 0x50]",
-        "MOVAPS XMM6,  XMMWORD PTR [RSP + 0x60]", "MOVAPS XMM7,  XMMWORD PTR [RSP + 0x70]",
-        "MOVAPS XMM8,  XMMWORD PTR [RSP + 0x80]", "MOVAPS XMM9,  XMMWORD PTR [RSP + 0x90]",
-        "MOVAPS XMM10, XMMWORD PTR [RSP + 0xA0]", "MOVAPS XMM11, XMMWORD PTR [RSP + 0xB0]",
-        "MOVAPS XMM12, XMMWORD PTR [RSP + 0xC0]", "MOVAPS XMM13, XMMWORD PTR [RSP + 0xD0]",
-        "MOVAPS XMM14, XMMWORD PTR [RSP + 0xE0]", "MOVAPS XMM15, XMMWORD PTR [RSP + 0xF0]",
-        "ADD RSP, 100h",
-                   "POP RBX", "POP RCX", "POP RDX",
-        "POP RSI", "POP RDI", "POP R8",  "POP R9",
-        "POP R10", "POP R11", "POP R12", "POP R13",
-        "POP R14", "POP R15", "POP RBP", "POP RAX",
-        //Enter code
-        "IRETQ",
-        //Symbols
-        stack_array  = sym TASK_STACKS,
-        stack_index  = sym TASK_INDEX,
-        scheduler    = sym scheduler,
-        lapic_eoi    = sym lapic::end_int,
-        options(noreturn),
-    )
-}
+#[naked] unsafe extern "x86-interrupt" fn interrupt_timer() {asm!(
+    "PUSH RAX", "PUSH RBP", "PUSH R15", "PUSH R14", //Save general registers
+    "PUSH R13", "PUSH R12", "PUSH R11", "PUSH R10", //Save general registers
+    "PUSH R9",  "PUSH R8",  "PUSH RDI", "PUSH RSI", //Save general registers
+    "PUSH RDX", "PUSH RCX", "PUSH RBX",             //Save general registers
+    "MOV RAX, [{stack_index}+RIP]",                 //Load stack index
+    "SHL RAX, 3",                                   //Multiply by 8 (64-bit align)
+    "LEA RCX, [{stack_array}+RIP]",                 //Load stack save loctation
+    "MOV [RCX+RAX], RSP",                           //Save stack pointer
+    "CALL {lapic_eoi}",                             //End interrupt
+    "CALL {scheduler}",                             //Call scheduler
+    "MOV RSP, RAX",                                 //Swap to thread stack
+    "POP RBX", "POP RCX", "POP RDX",                //Load general registers
+    "POP RSI", "POP RDI", "POP R8",  "POP R9",      //Load general registers
+    "POP R10", "POP R11", "POP R12", "POP R13",     //Load general registers
+    "POP R14", "POP R15", "POP RBP", "POP RAX",     //Load general registers
+    "IRETQ",                                        //Enter code
+    //Symbols
+    stack_array  = sym TASK_STACKS,
+    stack_index  = sym TASK_INDEX,
+    scheduler    = sym scheduler,
+    lapic_eoi    = sym lapic::end_int,
+    options(noreturn),
+)}
 
 //INT 80h: User Accessible CPU Yield
-#[naked] unsafe extern "x86-interrupt" fn interrupt_yield() {
-    asm!(
-        //"UD2",
-        //Save Program State
-        "PUSH RAX", "PUSH RBP", "PUSH R15", "PUSH R14",
-        "PUSH R13", "PUSH R12", "PUSH R11", "PUSH R10",
-        "PUSH R9",  "PUSH R8",  "PUSH RDI", "PUSH RSI",
-        "PUSH RDX", "PUSH RCX", "PUSH RBX",
-        "SUB RSP, 100h",
-        "MOVAPS XMMWORD PTR [RSP + 0xf0], XMM15", "MOVAPS XMMWORD PTR [RSP + 0xe0], XMM14",
-        "MOVAPS XMMWORD PTR [RSP + 0xd0], XMM13", "MOVAPS XMMWORD PTR [RSP + 0xc0], XMM12",
-        "MOVAPS XMMWORD PTR [RSP + 0xb0], XMM11", "MOVAPS XMMWORD PTR [RSP + 0xa0], XMM10",
-        "MOVAPS XMMWORD PTR [RSP + 0x90], XMM9",  "MOVAPS XMMWORD PTR [RSP + 0x80], XMM8",
-        "MOVAPS XMMWORD PTR [RSP + 0x70], XMM7",  "MOVAPS XMMWORD PTR [RSP + 0x60], XMM6",
-        "MOVAPS XMMWORD PTR [RSP + 0x50], XMM5",  "MOVAPS XMMWORD PTR [RSP + 0x40], XMM4",
-        "MOVAPS XMMWORD PTR [RSP + 0x30], XMM3",  "MOVAPS XMMWORD PTR [RSP + 0x20], XMM2",
-        "MOVAPS XMMWORD PTR [RSP + 0x10], XMM1",  "MOVAPS XMMWORD PTR [RSP + 0x00], XMM0",
-        //Save stack pointer
-        "MOV RAX, [{stack_index}+RIP]",
-        "SHL RAX, 3",
-        "LEA RCX, [{stack_array}+RIP]",
-        "MOV [RCX+RAX], RSP",
-        //Call scheduler
-        "CALL {scheduler}",
-        //Swap to thread stack
-        "MOV RSP, RAX",
-        //Load program state
-        "MOVAPS XMM0,  XMMWORD PTR [RSP + 0x00]", "MOVAPS XMM1,  XMMWORD PTR [RSP + 0x10]",
-        "MOVAPS XMM2,  XMMWORD PTR [RSP + 0x20]", "MOVAPS XMM3,  XMMWORD PTR [RSP + 0x30]",
-        "MOVAPS XMM4,  XMMWORD PTR [RSP + 0x40]", "MOVAPS XMM5,  XMMWORD PTR [RSP + 0x50]",
-        "MOVAPS XMM6,  XMMWORD PTR [RSP + 0x60]", "MOVAPS XMM7,  XMMWORD PTR [RSP + 0x70]",
-        "MOVAPS XMM8,  XMMWORD PTR [RSP + 0x80]", "MOVAPS XMM9,  XMMWORD PTR [RSP + 0x90]",
-        "MOVAPS XMM10, XMMWORD PTR [RSP + 0xA0]", "MOVAPS XMM11, XMMWORD PTR [RSP + 0xB0]",
-        "MOVAPS XMM12, XMMWORD PTR [RSP + 0xC0]", "MOVAPS XMM13, XMMWORD PTR [RSP + 0xD0]",
-        "MOVAPS XMM14, XMMWORD PTR [RSP + 0xE0]", "MOVAPS XMM15, XMMWORD PTR [RSP + 0xF0]",
-        "ADD RSP, 100h",
-                   "POP RBX", "POP RCX", "POP RDX",
-        "POP RSI", "POP RDI", "POP R8",  "POP R9",
-        "POP R10", "POP R11", "POP R12", "POP R13",
-        "POP R14", "POP R15", "POP RBP", "POP RAX",
-        //Enter code
-        "IRETQ",
-        //Symbols
-        stack_array  = sym TASK_STACKS,
-        stack_index  = sym TASK_INDEX,
-        scheduler    = sym scheduler,
-        options(noreturn),
-    )
-}
+#[naked] unsafe extern "x86-interrupt" fn interrupt_yield() {asm!(
+    "PUSH RAX", "PUSH RBP", "PUSH R15", "PUSH R14", //Save general registers
+    "PUSH R13", "PUSH R12", "PUSH R11", "PUSH R10", //Save general registers
+    "PUSH R9",  "PUSH R8",  "PUSH RDI", "PUSH RSI", //Save general registers
+    "PUSH RDX", "PUSH RCX", "PUSH RBX",             //Save general registers
+    "MOV RAX, [{stack_index}+RIP]",                 //Load stack index
+    "SHL RAX, 3",                                   //Multiply by 8 (64-bit align)
+    "LEA RCX, [{stack_array}+RIP]",                 //Load stack save loctation
+    "MOV [RCX+RAX], RSP",                           //Save stack pointer
+    "CALL {scheduler}",                             //Call scheduler
+    "MOV RSP, RAX",                                 //Swap to thread stack
+    "POP RBX", "POP RCX", "POP RDX",                //Load general registers
+    "POP RSI", "POP RDI", "POP R8",  "POP R9",      //Load general registers
+    "POP R10", "POP R11", "POP R12", "POP R13",     //Load general registers
+    "POP R14", "POP R15", "POP RBP", "POP RAX",     //Load general registers
+    "IRETQ",                                        //Enter code
+    //Symbols
+    stack_array  = sym TASK_STACKS,
+    stack_index  = sym TASK_INDEX,
+    scheduler    = sym scheduler,
+    options(noreturn),
+)}
 
 //INT FFh: LAPIC Spurious Interrupt
 extern "x86-interrupt" fn interrupt_spurious() {unsafe {lapic::end_int()}}
@@ -868,12 +875,13 @@ extern "x86-interrupt" fn interrupt_spurious() {unsafe {lapic::end_int()}}
 //Unused: Generic Interrupt
 #[naked] unsafe extern "x86-interrupt" fn _interrupt_gen<const FP: u64>() {
     asm!(
-        //Save Program State
+        //Save general registers
         "PUSH RAX", "PUSH RBP", "PUSH R15", "PUSH R14",
         "PUSH R13", "PUSH R12", "PUSH R11", "PUSH R10",
         "PUSH R9",  "PUSH R8",  "PUSH RDI", "PUSH RSI",
         "PUSH RDX", "PUSH RCX", "PUSH RBX", "PUSH 0",
-        "SUB RSP, 100h",
+        //Save SSE registers
+        /*"SUB RSP, 100h",
         "MOVAPS XMMWORD PTR [RSP + 0xf0], XMM15", "MOVAPS XMMWORD PTR [RSP + 0xe0], XMM14",
         "MOVAPS XMMWORD PTR [RSP + 0xd0], XMM13", "MOVAPS XMMWORD PTR [RSP + 0xc0], XMM12",
         "MOVAPS XMMWORD PTR [RSP + 0xb0], XMM11", "MOVAPS XMMWORD PTR [RSP + 0xa0], XMM10",
@@ -881,7 +889,7 @@ extern "x86-interrupt" fn interrupt_spurious() {unsafe {lapic::end_int()}}
         "MOVAPS XMMWORD PTR [RSP + 0x70], XMM7",  "MOVAPS XMMWORD PTR [RSP + 0x60], XMM6",
         "MOVAPS XMMWORD PTR [RSP + 0x50], XMM5",  "MOVAPS XMMWORD PTR [RSP + 0x40], XMM4",
         "MOVAPS XMMWORD PTR [RSP + 0x30], XMM3",  "MOVAPS XMMWORD PTR [RSP + 0x20], XMM2",
-        "MOVAPS XMMWORD PTR [RSP + 0x10], XMM1",  "MOVAPS XMMWORD PTR [RSP + 0x00], XMM0",
+        "MOVAPS XMMWORD PTR [RSP + 0x10], XMM1",  "MOVAPS XMMWORD PTR [RSP + 0x00], XMM0",*/
         //Save stack pointer
         "MOV RAX, [{stack_index}+RIP]",
         "SHL RAX, 3",
@@ -893,8 +901,8 @@ extern "x86-interrupt" fn interrupt_spurious() {unsafe {lapic::end_int()}}
         "CALL {function_call}",
         //Reload stack
         "MOV RSP, RAX",
-        //Load program state
-        "MOVAPS XMM0,  XMMWORD PTR [RSP + 0x00]", "MOVAPS XMM1,  XMMWORD PTR [RSP + 0x10]",
+        //Load SSE registers
+        /*"MOVAPS XMM0,  XMMWORD PTR [RSP + 0x00]", "MOVAPS XMM1,  XMMWORD PTR [RSP + 0x10]",
         "MOVAPS XMM2,  XMMWORD PTR [RSP + 0x20]", "MOVAPS XMM3,  XMMWORD PTR [RSP + 0x30]",
         "MOVAPS XMM4,  XMMWORD PTR [RSP + 0x40]", "MOVAPS XMM5,  XMMWORD PTR [RSP + 0x50]",
         "MOVAPS XMM6,  XMMWORD PTR [RSP + 0x60]", "MOVAPS XMM7,  XMMWORD PTR [RSP + 0x70]",
@@ -902,7 +910,8 @@ extern "x86-interrupt" fn interrupt_spurious() {unsafe {lapic::end_int()}}
         "MOVAPS XMM10, XMMWORD PTR [RSP + 0xA0]", "MOVAPS XMM11, XMMWORD PTR [RSP + 0xB0]",
         "MOVAPS XMM12, XMMWORD PTR [RSP + 0xC0]", "MOVAPS XMM13, XMMWORD PTR [RSP + 0xD0]",
         "MOVAPS XMM14, XMMWORD PTR [RSP + 0xE0]", "MOVAPS XMM15, XMMWORD PTR [RSP + 0xF0]",
-        "ADD RSP, 100h",
+        "ADD RSP, 100h",*/
+        //Load General registers
         "POP RBX", "POP RBX", "POP RCX", "POP RDX",
         "POP RSI", "POP RDI", "POP R8",  "POP R9",
         "POP R10", "POP R11", "POP R12", "POP R13",

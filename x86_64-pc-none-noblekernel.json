@@ -9,7 +9,8 @@
   "pre-link-args": {
     "ld.lld": [
       "--Bstatic",
-      "-znotext"
+      "-znotext",
+      "--image-base", "0xFFFFFFFFC0000000"
     ]
   },
   "no-default-libraries": true,

@@ -107,7 +107,7 @@ impl<Color: ColorFormat> PixelRenderer<Color> for PixelRendererHWD<Color> {
     }
     unsafe fn render_image(&self, image: &[&[Color]], y: usize, x: usize) {
         for (i, line) in image.iter().enumerate() {
-            self.render_line(*line, y+i, x)
+            self.render_line(line, y+i, x)
         }
     }
     unsafe fn render_screen(&self, color: Color) {

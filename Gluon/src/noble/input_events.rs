@@ -25,7 +25,7 @@ numeric_enum! {
     #[repr(u16)]
     #[derive(Clone, Copy)]
     #[derive(Debug)]
-    #[derive(PartialEq)]
+    #[derive(PartialEq, Eq)]
     pub enum InputEventType {
         Blank              = 0x00,
         DigitalKey         = 0x01,
