@@ -128,9 +128,6 @@ pub extern "sysv64" fn _start() -> ! {
     // LIMINE SETUP
     let framebuffer = limine::REQ_FRAMEBUFFER.get_response().get().unwrap().framebuffers().unwrap();
     let framebuffer_address = framebuffer[0].address.as_mut_ptr().unwrap();
-    unsafe {for i in 0..8000 {
-        *framebuffer_address.add(i) = 255;
-    }}
 
     // GRAPHICS SETUP
     let pixel_renderer: PixelRendererHWD<ColorBGRX>;
@@ -355,7 +352,7 @@ pub extern "sysv64" fn _start() -> ! {
             segment_selector: gdt::SUPERVISOR_CODE,
             segment_present: true,
             privilege_level: PrivilegeLevel::Supervisor,
-            interrupt_stack_table: 2,
+            interrupt_stack_table: 0,
             descriptor_type: DescriptorType::InterruptGate,
         };
         for position in 0x20..0xFF {idt.write_entry(&int_user, position);}
@@ -366,7 +363,7 @@ pub extern "sysv64" fn _start() -> ! {
             segment_selector: gdt::SUPERVISOR_CODE,
             segment_present: true,
             privilege_level: PrivilegeLevel::Supervisor,
-            interrupt_stack_table: 2,
+            interrupt_stack_table: 0,
             descriptor_type: DescriptorType::InterruptGate,
         };
         idt.write_entry(&int_pit, 0x20);
@@ -388,21 +385,32 @@ pub extern "sysv64" fn _start() -> ! {
             segment_selector: gdt::SUPERVISOR_CODE,
             segment_present: true,
             privilege_level: PrivilegeLevel::Supervisor,
-            interrupt_stack_table: 2,
+            interrupt_stack_table: 0,
             descriptor_type: DescriptorType::InterruptGate,
         };
         idt.write_entry(&int_timer, 0x30);
-        //INT 80h
+        //INT 31h
         //User accessible yield interrupt
         let int_yield: InterruptDescriptor = InterruptDescriptor {
             offset: interrupt_yield as unsafe extern "x86-interrupt" fn() as usize as u64,
             segment_selector: gdt::SUPERVISOR_CODE,
             segment_present: true,
             privilege_level: PrivilegeLevel::User,
-            interrupt_stack_table: 2,
+            interrupt_stack_table: 0,
             descriptor_type: DescriptorType::InterruptGate,
         };
-        idt.write_entry(&int_yield, 0x80);
+        idt.write_entry(&int_yield, 0x31);
+        //INT 32h
+        //System Call Interrupt
+        let int_syscall: InterruptDescriptor = InterruptDescriptor {
+            offset: interrupt_syscall as unsafe extern "x86-interrupt" fn() as usize as u64,
+            segment_selector: gdt::SUPERVISOR_CODE,
+            segment_present: true,
+            privilege_level: PrivilegeLevel::User,
+            interrupt_stack_table: 0,
+            descriptor_type: DescriptorType::InterruptGate,
+        };
+        idt.write_entry(&int_syscall, 0x32);
         //INT FFh
         //LAPIC Spurious Interrupt
         let int_spurious: InterruptDescriptor = InterruptDescriptor {
@@ -429,12 +437,8 @@ pub extern "sysv64" fn _start() -> ! {
         let end: LinearAddress   = LinearAddress(LIM_KERSTK_PTR + PAGE_SIZE_4KIB * 4);
         virtual_memory_editor(pml4, &mut memmap, start, end);
         let kernel_stack = (LIM_KERSTK_PTR + PAGE_SIZE_4KIB * 4) as u64;
-        //let p4 = extract_index(LinearAddress(LIM_KERSTK_PTR), PageMapLevel::L4);
-        //let p3 = extract_index(LinearAddress(LIM_KERSTK_PTR), PageMapLevel::L3);
-        //let pml3_kstack = PageMap2::new(translator.translate(pml4.read_entry(p4).unwrap().physical).unwrap(), PageMapLevel::L3).unwrap();
-        //let pml2_kstack = PageMap2::new(translator.translate(pml3_kstack.read_entry(p3).unwrap().physical).unwrap(), PageMapLevel::L2).unwrap();
-        //pm_kstack = pml2_kstack;
         //Update TSS
+        TASK_STATE_SEGMENT.rsp0 = kernel_stack;
         TASK_STATE_SEGMENT.ist1 = kernel_stack;
         TASK_STATE_SEGMENT.ist2 = kernel_stack;
     }
@@ -589,7 +593,7 @@ pub extern "sysv64" fn _start() -> ! {
         writeln!(printer, "APIC 0xF0: 0x{:08X}", lapic::read_register(0xF0).unwrap());
         //Set Timer Mode
         lapic::timer(0x30, false, lapic::TimerMode::Periodic);
-        lapic::divide_config(lapic::Divide::Divide_1);
+        lapic::divide_config(lapic::Divide::Divide_16);
         //Enable LAPIC
         lapic::enable();
     }
@@ -690,7 +694,7 @@ unsafe extern "sysv64" fn scheduler() -> u64 {
     else if STRING_PIPE.state == RingBufferState::WriteWait || STRING_PIPE.state == RingBufferState::ReadBlock {TASK_INDEX = 1; TASK_STACKS[1]}
     else                                                                                                       {TASK_INDEX = 0; TASK_STACKS[0]};
     //Change task state segment to new task
-    TASK_STATE_SEGMENT.ist2 = (LIM_KERSTK_PTR as u64) + ((TASK_INDEX + 1) * 16 * KIB) as u64;
+    TASK_STATE_SEGMENT.rsp0 = (LIM_KERSTK_PTR as u64) + ((TASK_INDEX + 1) * 16 * KIB) as u64;
     //Finish
     result
 }
@@ -704,8 +708,9 @@ fn read_loop() {unsafe {
     loop {
         write_volatile(&mut STRING_PIPE.state as *mut RingBufferState, RingBufferState::ReadBlock);
         writeln!(printer, "{}", core::str::from_utf8(STRING_PIPE.read(&mut [0xFF; 4096])).unwrap());
+        writeln!(printer, "SYSTEM CALL 00: 0x{:016X}", syscall_0());
         write_volatile(&mut STRING_PIPE.state as *mut RingBufferState, RingBufferState::ReadWait);
-        asm!("INT 80h");
+        asm!("INT 31h");
     }
 }}
 
@@ -715,7 +720,7 @@ fn byte_loop() {unsafe {
         write_volatile(&mut STRING_PIPE.state as *mut RingBufferState, RingBufferState::WriteBlock);
         STRING_PIPE.write("HELLO FROM USERSPACE! ".as_bytes());
         write_volatile(&mut STRING_PIPE.state as *mut RingBufferState, RingBufferState::WriteWait);
-        asm!("INT 80h");
+        asm!("INT 31h");
     }
 }}
 
@@ -765,6 +770,7 @@ unsafe fn ps2_keyboard() {
                                             Err(error) => error,
                                         };
                                         STRING_PIPE.write(string.as_bytes());
+                                        syscall_1();
                                         write_volatile(&mut STRING_PIPE.state as *mut RingBufferState, RingBufferState::WriteWait);
                                         inputter.flush(WHITESPACE);
                                     }
@@ -779,7 +785,7 @@ unsafe fn ps2_keyboard() {
             }
         }
         write_volatile(&mut INPUT_PIPE.state as *mut RingBufferState, RingBufferState::Free);
-        asm!("INT 80h");
+        asm!("INT 31h");
     }
 }
 
@@ -821,6 +827,7 @@ unsafe extern "x86-interrupt" fn interrupt_irq_01() {
 
 //INT 30h: LAPIC Timer
 #[naked] unsafe extern "x86-interrupt" fn interrupt_timer() {asm!(
+    //Code
     "PUSH RAX", "PUSH RBP", "PUSH R15", "PUSH R14", //Save general registers
     "PUSH R13", "PUSH R12", "PUSH R11", "PUSH R10", //Save general registers
     "PUSH R9",  "PUSH R8",  "PUSH RDI", "PUSH RSI", //Save general registers
@@ -842,11 +849,13 @@ unsafe extern "x86-interrupt" fn interrupt_irq_01() {
     stack_index  = sym TASK_INDEX,
     scheduler    = sym scheduler,
     lapic_eoi    = sym lapic::end_int,
+    //Options
     options(noreturn),
 )}
 
-//INT 80h: User Accessible CPU Yield
+//INT 31h: User Accessible CPU Yield
 #[naked] unsafe extern "x86-interrupt" fn interrupt_yield() {asm!(
+    //Code
     "PUSH RAX", "PUSH RBP", "PUSH R15", "PUSH R14", //Save general registers
     "PUSH R13", "PUSH R12", "PUSH R11", "PUSH R10", //Save general registers
     "PUSH R9",  "PUSH R8",  "PUSH RDI", "PUSH RSI", //Save general registers
@@ -866,66 +875,27 @@ unsafe extern "x86-interrupt" fn interrupt_irq_01() {
     stack_array  = sym TASK_STACKS,
     stack_index  = sym TASK_INDEX,
     scheduler    = sym scheduler,
+    //Options
+    options(noreturn),
+)}
+
+//INT 32h: System Call
+#[naked] unsafe extern "x86-interrupt" fn interrupt_syscall() {asm!(
+    //Code
+    "PUSH RBX", "PUSH RBP", "PUSH R12", //Save registers
+    "PUSH R13", "PUSH R14", "PUSH R15", //Save registers
+    "CALL {handler}",                   //Call handler
+    "POP R15", "POP R14", "POP R13",    //Load registers
+    "POP R12", "POP RBP", "POP RBX",    //Load registers
+    "IRETQ",                            //Return
+    //Symbols
+    handler = sym syscall_handler,
+    //Options
     options(noreturn),
 )}
 
 //INT FFh: LAPIC Spurious Interrupt
 extern "x86-interrupt" fn interrupt_spurious() {unsafe {lapic::end_int()}}
-
-//Unused: Generic Interrupt
-#[naked] unsafe extern "x86-interrupt" fn _interrupt_gen<const FP: u64>() {
-    asm!(
-        //Save general registers
-        "PUSH RAX", "PUSH RBP", "PUSH R15", "PUSH R14",
-        "PUSH R13", "PUSH R12", "PUSH R11", "PUSH R10",
-        "PUSH R9",  "PUSH R8",  "PUSH RDI", "PUSH RSI",
-        "PUSH RDX", "PUSH RCX", "PUSH RBX", "PUSH 0",
-        //Save SSE registers
-        /*"SUB RSP, 100h",
-        "MOVAPS XMMWORD PTR [RSP + 0xf0], XMM15", "MOVAPS XMMWORD PTR [RSP + 0xe0], XMM14",
-        "MOVAPS XMMWORD PTR [RSP + 0xd0], XMM13", "MOVAPS XMMWORD PTR [RSP + 0xc0], XMM12",
-        "MOVAPS XMMWORD PTR [RSP + 0xb0], XMM11", "MOVAPS XMMWORD PTR [RSP + 0xa0], XMM10",
-        "MOVAPS XMMWORD PTR [RSP + 0x90], XMM9",  "MOVAPS XMMWORD PTR [RSP + 0x80], XMM8",
-        "MOVAPS XMMWORD PTR [RSP + 0x70], XMM7",  "MOVAPS XMMWORD PTR [RSP + 0x60], XMM6",
-        "MOVAPS XMMWORD PTR [RSP + 0x50], XMM5",  "MOVAPS XMMWORD PTR [RSP + 0x40], XMM4",
-        "MOVAPS XMMWORD PTR [RSP + 0x30], XMM3",  "MOVAPS XMMWORD PTR [RSP + 0x20], XMM2",
-        "MOVAPS XMMWORD PTR [RSP + 0x10], XMM1",  "MOVAPS XMMWORD PTR [RSP + 0x00], XMM0",*/
-        //Save stack pointer
-        "MOV RAX, [{stack_index}+RIP]",
-        "SHL RAX, 3",
-        "LEA RCX, [{stack_array}+RIP]",
-        "MOV [RCX+RAX], RSP",
-        //Swap to kernel stack
-        "MOV RSP, [{kernel_stack}+RIP]",
-        //Call function
-        "CALL {function_call}",
-        //Reload stack
-        "MOV RSP, RAX",
-        //Load SSE registers
-        /*"MOVAPS XMM0,  XMMWORD PTR [RSP + 0x00]", "MOVAPS XMM1,  XMMWORD PTR [RSP + 0x10]",
-        "MOVAPS XMM2,  XMMWORD PTR [RSP + 0x20]", "MOVAPS XMM3,  XMMWORD PTR [RSP + 0x30]",
-        "MOVAPS XMM4,  XMMWORD PTR [RSP + 0x40]", "MOVAPS XMM5,  XMMWORD PTR [RSP + 0x50]",
-        "MOVAPS XMM6,  XMMWORD PTR [RSP + 0x60]", "MOVAPS XMM7,  XMMWORD PTR [RSP + 0x70]",
-        "MOVAPS XMM8,  XMMWORD PTR [RSP + 0x80]", "MOVAPS XMM9,  XMMWORD PTR [RSP + 0x90]",
-        "MOVAPS XMM10, XMMWORD PTR [RSP + 0xA0]", "MOVAPS XMM11, XMMWORD PTR [RSP + 0xB0]",
-        "MOVAPS XMM12, XMMWORD PTR [RSP + 0xC0]", "MOVAPS XMM13, XMMWORD PTR [RSP + 0xD0]",
-        "MOVAPS XMM14, XMMWORD PTR [RSP + 0xE0]", "MOVAPS XMM15, XMMWORD PTR [RSP + 0xF0]",
-        "ADD RSP, 100h",*/
-        //Load General registers
-        "POP RBX", "POP RBX", "POP RCX", "POP RDX",
-        "POP RSI", "POP RDI", "POP R8",  "POP R9",
-        "POP R10", "POP R11", "POP R12", "POP R13",
-        "POP R14", "POP R15", "POP RBP", "POP RAX",
-        //Enter code
-        "IRETQ",
-        //Symbols
-        stack_array   = sym TASK_STACKS,
-        stack_index   = sym TASK_INDEX,
-        kernel_stack  = sym TASK_STACKS,
-        function_call = const FP,
-        options(noreturn),
-    )
-}
 
 
 // PANIC HANDLER
@@ -1006,3 +976,61 @@ pub static mut TASK_STATE_SEGMENT: TaskStateSegment = TaskStateSegment {
     _3:    0,
     iomba: 0,
 };
+
+
+// SYSTEM CALLS
+//Call
+#[inline(always)]
+pub extern "sysv64" fn syscall(call_number: u64, arg1: u64, arg2: u64, arg3: u64) -> (u64, u64) {
+    let output_a: u64;
+    let output_b: u64;
+    unsafe {asm!(
+        "INT 32h",
+        in("rdi") call_number,
+        in("rsi") arg1,
+        in("rdx") arg2,
+        in("rcx") arg3,
+        lateout("rax") output_a,
+        lateout("rdx") output_b,
+        lateout("rdi") _,
+        lateout("rsi") _,
+        lateout("rcx") _,
+        lateout("r8") _,
+        lateout("r9") _,
+        lateout("r10") _,
+        lateout("r11") _,
+    )}
+    (output_a, output_b)
+}
+
+#[inline(always)]
+pub extern "sysv64" fn syscall_0() -> u64 {
+    syscall(0, 0, 0, 0).0
+}
+
+#[inline(always)]
+pub extern "sysv64" fn syscall_1()  {
+    syscall(1, 0, 0, 0);
+}
+
+//Handle
+pub extern "sysv64" fn syscall_handler(call_number: u64, arg1: u64, arg2: u64, arg3: u64) -> (u64, u64) {
+    let mut ret = (0, 0);
+    match call_number {
+        0 => {ret.0 = syscall_handler_0()},
+        1 => {syscall_handler_1()}
+        _ => panic!("Invalid System Call")
+    }
+    ret
+}
+
+fn syscall_handler_0() -> u64 {
+    0xFFFF_7777_3333_1111
+}
+
+fn syscall_handler_1() {
+    unsafe {
+        let printer = &mut *GLOBAL_WRITE_POINTER.unwrap();
+        writeln!(printer, "SYSTEM CALL 01");
+    }
+}

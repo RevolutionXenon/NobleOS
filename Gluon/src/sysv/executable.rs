@@ -76,8 +76,7 @@ impl<'a, RO: 'a+Volume> ELFFile<'a, RO> {
             write_volatile(location.add(position), 0x00);
         }
         let program_iterator = ProgramIterator::new(self.file, &self.header)
-        .filter(|result| result.is_ok())
-        .map(|result| result.unwrap())
+        .filter_map(|result| result.ok())
         .filter(|program| program.program_type == ProgramType::Loadable);
         for program in program_iterator {
             const BUFFER_SIZE: usize = 512;
@@ -103,8 +102,7 @@ impl<'a, RO: 'a+Volume> ELFFile<'a, RO> {
         if self.header.object_type != ObjectType::Shared {return Err(ReturnCode::UnsupportedFeature)}
         //Find relocation entries
         let explicit_relocation_sections = self.sections()
-                .filter(|result| result.is_ok())
-                .map(|result| result.unwrap())
+                .filter_map(|result| result.ok())
                 .filter(|section| section.section_type == SectionType::ExplicitRelocationTable);
         //Match to file architecture
         match self.header.architecture {
@@ -112,8 +110,7 @@ impl<'a, RO: 'a+Volume> ELFFile<'a, RO> {
             InstructionSetArchitecture::EmX86_64 => {
                 for section in explicit_relocation_sections {
                     let relocation_table = RelocationEntryIterator::new(self.file, self.header.bit_width, self.header.endianness, RelocationType::Explicit, section.file_size, section.file_offset)
-                    .filter(|result| result.is_ok())
-                    .map(|result| result.unwrap());
+                    .filter_map(|result| result.ok());
                     for entry in relocation_table {
                         match entry.relocation_entry_type {
                             RelocationEntryTypeX86_64::R_X86_64_NONE      => {},
