@@ -1,13 +1,6 @@
 // GLUON: NOBLE RETURN CODE
 
 
-// HEADER
-//Imports
-//use core::ops::FromResidual;
-//use core::ops::Try;
-//use core::ops::ControlFlow;
-
-
 // RETURN CODE
 #[repr(u64)]
 #[derive(Debug)]
@@ -80,34 +73,3 @@ pub enum ReturnCode {
     Test08                = 0xFFFF_FFFF_FFFF_FF08,
     Test09                = 0xFFFF_FFFF_FFFF_FF09,
 }
-
-/*impl ReturnCode {
-    pub fn as_result(self) -> Result<(), ReturnCode> {
-        match self {
-            ReturnCode::NoError => Ok(()),
-            error => Err(self)
-        }
-    }
-}
-impl Try for ReturnCode {
-    type Output = ();
-
-    type Residual = Self;
-
-    fn from_output(output: Self::Output) -> Self {
-        Self::NoError
-    }
-
-    fn branch(self) -> ControlFlow<Self::Residual, Self::Output> {
-        match self {
-            ReturnCode::NoError => ControlFlow::Continue(()),
-            _ => ControlFlow::Break(self),
-        }
-    }
-}
-impl FromResidual for ReturnCode {
-    fn from_residual(residual: <Self as Try>::Residual) -> Self {
-        residual
-    }
-}
-*/

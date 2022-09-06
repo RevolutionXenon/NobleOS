@@ -34,9 +34,10 @@ mod pmm;
 use self::pmm::*;
 use gluon::GLUON_VERSION;
 use gluon::noble::address_space::*;
-use gluon::noble::file_system::*;
+//use gluon::noble::file_system::*;
 use gluon::noble::input_events::*;
-use gluon::pc::fat::*;
+use gluon::noble::system_calls::*;
+//use gluon::pc::fat::*;
 use gluon::pc::ports::*;
 use gluon::pc::pci::*;
 use gluon::pc::pic;
@@ -57,6 +58,8 @@ use core::convert::TryFrom;
 use core::fmt::Write;
 use core::panic::PanicInfo;
 use core::ptr::write_volatile;
+use core::sync::atomic::AtomicU64;
+use core::sync::atomic::Ordering;
 
 //Constants
 const HELIUM_VERSION: &str = "vDEV-2022"; //CURRENT VERSION OF KERNEL
@@ -173,7 +176,7 @@ pub extern "sysv64" fn _start() -> ! {
     unsafe {
         //Physical to linear address translator
         translator = OffsetIdentity {
-            offset: LIM_PYSMEM_PTR,
+            offset: PHYSICAL_MEMORY_PTR,
             limit: PAGE_SIZE_512G,
         };
         //Limine Setup
@@ -205,16 +208,16 @@ pub extern "sysv64" fn _start() -> ! {
         let mut markinuse = MarkInUse {translator: &translator};
         let mut deprivilege = DePrivilege {translator: &translator};
         //Mark in use
-        virtual_memory_editor(pml4, &mut markinuse, LinearAddress(LIM_PYSMEM_PTR), LinearAddress(LIM_PYSMEM_PTR + page_size(LIM_PYSMEM_LVL)));
-        virtual_memory_editor(pml4, &mut markinuse, LinearAddress(LIM_KERNEL_PTR), LinearAddress(LIM_KERNEL_PTR - 1 + page_size(LIM_KERNEL_LVL)));
+        virtual_memory_editor(pml4, &mut markinuse, LinearAddress(PHYSICAL_MEMORY_PTR), LinearAddress(PHYSICAL_MEMORY_PTR + page_size(PHYSICAL_MEMORY_LVL)));
+        virtual_memory_editor(pml4, &mut markinuse, LinearAddress(KERNEL_CODE_PTR), LinearAddress(KERNEL_CODE_PTR - 1 + page_size(KERNEL_CODE_LVL)));
         //Deprivilege
-        virtual_memory_editor(pml4, &mut deprivilege, LinearAddress(LIM_PYSMEM_PTR), LinearAddress(LIM_PYSMEM_PTR + page_size(LIM_PYSMEM_LVL)));
-        virtual_memory_editor(pml4, &mut deprivilege, LinearAddress(LIM_KERNEL_PTR), LinearAddress(LIM_KERNEL_PTR - 1 + page_size(LIM_KERNEL_LVL)));
+        virtual_memory_editor(pml4, &mut deprivilege, LinearAddress(PHYSICAL_MEMORY_PTR), LinearAddress(PHYSICAL_MEMORY_PTR + page_size(PHYSICAL_MEMORY_LVL)));
+        virtual_memory_editor(pml4, &mut deprivilege, LinearAddress(KERNEL_CODE_PTR), LinearAddress(KERNEL_CODE_PTR - 1 + page_size(KERNEL_CODE_LVL)));
         //Create memory stack
         let total_pages = {let mut sum: usize = 0; for i in limine_areas_usable {sum += i.len as usize / PAGE_SIZE_4KIB;} sum};
         writeln!(printer, "FREE MEMORY 1: {}", total_pages);
-        virtual_memory_editor(pml4, &mut limine_map_memory, LinearAddress(LIM_PYSSTK_PTR), LinearAddress(LIM_PYSSTK_PTR + total_pages * 8));
-        let stack_ptr = LIM_PYSSTK_PTR as *mut PhysicalAddress;
+        virtual_memory_editor(pml4, &mut limine_map_memory, LinearAddress(ALLOCATOR_STACK_PTR), LinearAddress(ALLOCATOR_STACK_PTR + total_pages * 8));
+        let stack_ptr = ALLOCATOR_STACK_PTR as *mut PhysicalAddress;
         let mut stack_count = 0;
         for address in limine_pages_usable {
             *stack_ptr.add(stack_count) = address;
@@ -433,10 +436,10 @@ pub extern "sysv64" fn _start() -> ! {
     //let pm_kstack: PageMap2;
     unsafe {
         //Create kernel stack
-        let start: LinearAddress = LinearAddress(LIM_KERSTK_PTR + PAGE_SIZE_4KIB * 1);
-        let end: LinearAddress   = LinearAddress(LIM_KERSTK_PTR + PAGE_SIZE_4KIB * 4);
+        let start: LinearAddress = LinearAddress(KERNEL_STACKS_PTR + PAGE_SIZE_4KIB * 1);
+        let end: LinearAddress   = LinearAddress(KERNEL_STACKS_PTR + PAGE_SIZE_4KIB * 4);
         virtual_memory_editor(pml4, &mut memmap, start, end);
-        let kernel_stack = (LIM_KERSTK_PTR + PAGE_SIZE_4KIB * 4) as u64;
+        let kernel_stack = (KERNEL_STACKS_PTR + PAGE_SIZE_4KIB * 4) as u64;
         //Update TSS
         TASK_STATE_SEGMENT.rsp0 = kernel_stack;
         TASK_STATE_SEGMENT.ist1 = kernel_stack;
@@ -585,7 +588,7 @@ pub extern "sysv64" fn _start() -> ! {
         writeln!(printer, "APIC Present: {}", lapic::apic_check());
         writeln!(printer, "APIC Base: 0x{:16X}", lapic::get_base());
         //Shift Base
-        lapic::LAPIC_ADDRESS = (lapic::get_base() as usize + LIM_PYSMEM_PTR) as *mut u8;
+        lapic::LAPIC_ADDRESS = (lapic::get_base() as usize + PHYSICAL_MEMORY_PTR) as *mut u8;
         //Spurious interrupt
         lapic::spurious(0xFF);
         //Diagnostic
@@ -593,7 +596,7 @@ pub extern "sysv64" fn _start() -> ! {
         writeln!(printer, "APIC 0xF0: 0x{:08X}", lapic::read_register(0xF0).unwrap());
         //Set Timer Mode
         lapic::timer(0x30, false, lapic::TimerMode::Periodic);
-        lapic::divide_config(lapic::Divide::Divide_16);
+        lapic::divide_config(lapic::Divide::Divide_1);
         //Enable LAPIC
         lapic::enable();
     }
@@ -658,6 +661,7 @@ pub extern "sysv64" fn _start() -> ! {
 
 // TASKING
 //Global variables
+static GLOBAL_TIME: AtomicU64 = AtomicU64::new(0);
 static mut GLOBAL_WRITE_POINTER: Option<*mut dyn Write> = None;
 static mut GLOBAL_PRINT_POINTER: Option<*mut PrintWindow::<PRINT_LINES, PRINT_HEIGHT, PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>> = None;
 static mut GLOBAL_INPUT_POINTER: Option<*mut InputWindow::<INPUT_LENGTH, INPUT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>> = None;
@@ -668,10 +672,10 @@ static mut TASK_STACKS: [u64; 4] = [0;4];
 unsafe fn create_thread(thread_index: usize, map: PageMap, translator: &dyn AddressTranslator, mmap: &mut MapMemory, instruction_pointer: u64, code_selector: SegmentSelector, eflags_image: u32, stack_pointer: usize, stack_selector: SegmentSelector) {
     //Create stack
     assert!(map.map_level == PageMapLevel::L4);
-    let start = LinearAddress(LIM_KERSTK_PTR + PAGE_SIZE_4KIB * (thread_index * 4 + 1));
-    let end   = LinearAddress(LIM_KERSTK_PTR + PAGE_SIZE_4KIB * (thread_index * 4 + 4));
+    let start = LinearAddress(KERNEL_STACKS_PTR + PAGE_SIZE_4KIB * (thread_index * 4 + 1));
+    let end   = LinearAddress(KERNEL_STACKS_PTR + PAGE_SIZE_4KIB * (thread_index * 4 + 4));
     virtual_memory_editor(map, mmap, start, end);
-    let rsp = (LIM_KERSTK_PTR as *mut u64).byte_add(PAGE_SIZE_4KIB * (thread_index * 4 + 4));
+    let rsp = (KERNEL_STACKS_PTR as *mut u64).byte_add(PAGE_SIZE_4KIB * (thread_index * 4 + 4));
     //Write stack frame
     write_volatile(rsp.sub(1), u16::from(stack_selector) as u64);
     write_volatile(rsp.sub(2), stack_pointer as u64);
@@ -694,7 +698,9 @@ unsafe extern "sysv64" fn scheduler() -> u64 {
     else if STRING_PIPE.state == RingBufferState::WriteWait || STRING_PIPE.state == RingBufferState::ReadBlock {TASK_INDEX = 1; TASK_STACKS[1]}
     else                                                                                                       {TASK_INDEX = 0; TASK_STACKS[0]};
     //Change task state segment to new task
-    TASK_STATE_SEGMENT.rsp0 = (LIM_KERSTK_PTR as u64) + ((TASK_INDEX + 1) * 16 * KIB) as u64;
+    TASK_STATE_SEGMENT.rsp0 = (KERNEL_STACKS_PTR as u64) + ((TASK_INDEX + 1) * 16 * KIB) as u64;
+    //Update current time
+    GLOBAL_TIME.fetch_add(1, Ordering::SeqCst);
     //Finish
     result
 }
@@ -708,7 +714,11 @@ fn read_loop() {unsafe {
     loop {
         write_volatile(&mut STRING_PIPE.state as *mut RingBufferState, RingBufferState::ReadBlock);
         writeln!(printer, "{}", core::str::from_utf8(STRING_PIPE.read(&mut [0xFF; 4096])).unwrap());
-        writeln!(printer, "SYSTEM CALL 00: 0x{:016X}", syscall_0());
+        writeln!(printer, "SYSTEM CALL 00: 0x{:016X}", system_call_00());
+        system_call_01();
+        let a = system_call_02();
+        writeln!(printer, "SYSTEM CALL 02: 0x{:016X}", a);
+        writeln!(printer, "GLOBAL TIME:    0x{:016X}", GLOBAL_TIME.load(Ordering::Relaxed));
         write_volatile(&mut STRING_PIPE.state as *mut RingBufferState, RingBufferState::ReadWait);
         asm!("INT 31h");
     }
@@ -770,7 +780,6 @@ unsafe fn ps2_keyboard() {
                                             Err(error) => error,
                                         };
                                         STRING_PIPE.write(string.as_bytes());
-                                        syscall_1();
                                         write_volatile(&mut STRING_PIPE.state as *mut RingBufferState, RingBufferState::WriteWait);
                                         inputter.flush(WHITESPACE);
                                     }
@@ -979,58 +988,33 @@ pub static mut TASK_STATE_SEGMENT: TaskStateSegment = TaskStateSegment {
 
 
 // SYSTEM CALLS
-//Call
-#[inline(always)]
-pub extern "sysv64" fn syscall(call_number: u64, arg1: u64, arg2: u64, arg3: u64) -> (u64, u64) {
-    let output_a: u64;
-    let output_b: u64;
-    unsafe {asm!(
-        "INT 32h",
-        in("rdi") call_number,
-        in("rsi") arg1,
-        in("rdx") arg2,
-        in("rcx") arg3,
-        lateout("rax") output_a,
-        lateout("rdx") output_b,
-        lateout("rdi") _,
-        lateout("rsi") _,
-        lateout("rcx") _,
-        lateout("r8") _,
-        lateout("r9") _,
-        lateout("r10") _,
-        lateout("r11") _,
-    )}
-    (output_a, output_b)
-}
-
-#[inline(always)]
-pub extern "sysv64" fn syscall_0() -> u64 {
-    syscall(0, 0, 0, 0).0
-}
-
-#[inline(always)]
-pub extern "sysv64" fn syscall_1()  {
-    syscall(1, 0, 0, 0);
-}
-
 //Handle
-pub extern "sysv64" fn syscall_handler(call_number: u64, arg1: u64, arg2: u64, arg3: u64) -> (u64, u64) {
+#[inline(never)]
+extern "sysv64" fn syscall_handler(call_number: u64, arg1: u64, arg2: u64, arg3: u64) -> (u64, u64) {
     let mut ret = (0, 0);
     match call_number {
-        0 => {ret.0 = syscall_handler_0()},
-        1 => {syscall_handler_1()}
+        0 => {ret.0 = syscall_handler_00()},
+        1 => {syscall_handler_01()}
+        2 => {ret.0 = syscall_handler_02()}
         _ => panic!("Invalid System Call")
     }
     ret
 }
 
-fn syscall_handler_0() -> u64 {
-    0xFFFF_7777_3333_1111
+#[inline(never)]
+extern "sysv64" fn syscall_handler_00() -> u64 {
+    0x1111_2222_3333_4444
 }
 
-fn syscall_handler_1() {
+#[inline(never)]
+extern "sysv64" fn syscall_handler_01() {
     unsafe {
         let printer = &mut *GLOBAL_WRITE_POINTER.unwrap();
         writeln!(printer, "SYSTEM CALL 01");
     }
+}
+
+#[inline(never)]
+extern "sysv64" fn syscall_handler_02() -> u64 {
+    GLOBAL_TIME.load(Ordering::SeqCst)
 }

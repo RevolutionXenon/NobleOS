@@ -109,7 +109,7 @@ impl<'i> PhysicalAddressAllocator for IteratorAllocator<'i> {
         }
         Ok(())
     }
-    fn give(&self, pages: &[PhysicalAddress]) -> Result<(), ReturnCode> {
+    fn give(&self, _pages: &[PhysicalAddress]) -> Result<(), ReturnCode> {
         Err(ReturnCode::UnsupportedFeature)
     }
 }

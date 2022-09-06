@@ -1,4 +1,4 @@
-// GLUON: Noble Address Space
+// GLUON: NOBLE ADDRESS SPACE
 // Constants related to the Noble address space layout
 
 
@@ -19,7 +19,7 @@ pub const PAGE_MAP_OCT:     usize = 0o_________777__________________usize; //PML
 
 //Limine Constants
 //                                  SIGN PM5 PM4 PM3 PM2 PM1 OFFSET
-pub const LIM_PYSMEM_PTR: usize = 0o_177_777_400_000_000_000_0000_usize; pub const LIM_PYSMEM_LVL: PageMapLevel = PageMapLevel::L4;
-pub const LIM_KERSTK_PTR: usize = 0o_177_777_777_775_000_000_0000_usize; pub const LIM_KERSTK_LVL: PageMapLevel = PageMapLevel::L3;
-pub const LIM_PYSSTK_PTR: usize = 0o_177_777_777_776_000_000_0000_usize; pub const LIM_PYSSTK_LVL: PageMapLevel = PageMapLevel::L3;
-pub const LIM_KERNEL_PTR: usize = 0o_177_777_777_777_000_000_0000_usize; pub const LIM_KERNEL_LVL: PageMapLevel = PageMapLevel::L3;
+pub const PHYSICAL_MEMORY_PTR: usize = 0o_177_777_400_000_000_000_0000_usize; pub const PHYSICAL_MEMORY_LVL: PageMapLevel = PageMapLevel::L4;
+pub const KERNEL_STACKS_PTR:   usize = 0o_177_777_777_775_000_000_0000_usize; pub const KERNEL_STACKS_LVL:   PageMapLevel = PageMapLevel::L3;
+pub const ALLOCATOR_STACK_PTR: usize = 0o_177_777_777_776_000_000_0000_usize; pub const ALLOCATOR_STACK_LVL: PageMapLevel = PageMapLevel::L3;
+pub const KERNEL_CODE_PTR:     usize = 0o_177_777_777_777_000_000_0000_usize; pub const KERNEL_CODE_LVL:     PageMapLevel = PageMapLevel::L3;
