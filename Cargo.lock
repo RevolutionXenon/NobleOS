@@ -37,6 +37,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eac64618e505bab2387986e5b1014f5d344130d609685bbd8b71a10af3ee599d"
 
 [[package]]
+name = "neon"
+version = "0.1.0"
+dependencies = [
+ "gluon",
+]
+
+[[package]]
 name = "photon"
 version = "0.1.0"
 

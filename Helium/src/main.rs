@@ -30,10 +30,13 @@ mod kstruct;
 mod limine;
 mod pmm;
 
+use crate::limine::REQ_HHDM;
+
 //Imports
 use self::pmm::*;
 use gluon::GLUON_VERSION;
 use gluon::noble::address_space::*;
+use gluon::noble::file_system::MemoryVolume;
 //use gluon::noble::file_system::*;
 use gluon::noble::input_events::*;
 use gluon::noble::system_calls::*;
@@ -43,13 +46,17 @@ use gluon::pc::pci::*;
 use gluon::pc::pic;
 use gluon::pc::pit;
 use gluon::pc::ps2;
+use gluon::sysv::executable::*;
 use gluon::x86_64::instructions::*;
 use gluon::x86_64::lapic;
 use gluon::x86_64::paging::*;
 use gluon::x86_64::port::*;
 use gluon::x86_64::registers::*;
 use gluon::x86_64::segmentation::*;
+use ::limine::LimineFile;
 use ::limine::LimineMemoryMapEntryType;
+use ::limine::LimineModuleResponse;
+use ::limine::LiminePtr;
 use photon::*;
 use photon::formats::f1::*;
 use core::arch::asm;
@@ -167,13 +174,17 @@ pub extern "sysv64" fn _start() -> ! {
 
     // NEW MEMORY SYSTEM TESTING
     writeln!(printer, "\n=== PAGE MAP ===\n");
+    let hhdm_address: usize;
     let pml4: PageMap;
-    //let pml3_kstack: PageMap2 = PageMap2 { linear: LinearAddress(0), map_level: PageMapLevel::L3 };
     let translator: OffsetIdentity;
     let mut allocator: MemoryStack;
-    let mut memmap: MapMemory;
+    let mut memmap_xu: MapMemory;
+    let mut memmap_eu: MapMemory;
     let mut memunmap: UnmapMemory;
     unsafe {
+        //Limine HHDM
+        hhdm_address = REQ_HHDM.get_response().get().unwrap().offset as usize;
+        writeln!(printer, "HHDM Address: 0x{:016X}", hhdm_address);
         //Physical to linear address translator
         translator = OffsetIdentity {
             offset: PHYSICAL_MEMORY_PTR,
@@ -189,6 +200,7 @@ pub extern "sysv64" fn _start() -> ! {
             .filter(|x| x.typ == LimineMemoryMapEntryType::Usable)
             .flat_map(|x| (0..x.len as usize / PAGE_SIZE_4KIB).map(move |p| x.base as usize + PAGE_SIZE_4KIB * p))
             .map(PhysicalAddress);
+        writeln!(printer, "Successfully read Limine memory information.");
         //Limine Allocator
         let ref_cell: RefCell<&mut dyn Iterator<Item = PhysicalAddress>> = RefCell::new(&mut limine_pages_usable);
         let mut limine_pages_allocator = IteratorAllocator {
@@ -204,6 +216,7 @@ pub extern "sysv64" fn _start() -> ! {
         //Page map
         let pml4_physical = read_cr3_address();
         pml4 = PageMap::new(translator.translate(pml4_physical).unwrap(), PageMapLevel::L4).unwrap();
+        writeln!(printer, "Successfully retrieved CR3: 0x{:016X}", pml4_physical.0);
         //Setup operations
         let mut markinuse = MarkInUse {translator: &translator};
         let mut deprivilege = DePrivilege {translator: &translator};
@@ -213,6 +226,7 @@ pub extern "sysv64" fn _start() -> ! {
         //Deprivilege
         virtual_memory_editor(pml4, &mut deprivilege, LinearAddress(PHYSICAL_MEMORY_PTR), LinearAddress(PHYSICAL_MEMORY_PTR + page_size(PHYSICAL_MEMORY_LVL)));
         virtual_memory_editor(pml4, &mut deprivilege, LinearAddress(KERNEL_CODE_PTR), LinearAddress(KERNEL_CODE_PTR - 1 + page_size(KERNEL_CODE_LVL)));
+        writeln!(printer, "Successfully sanitized page maps.");
         //Create memory stack
         let total_pages = {let mut sum: usize = 0; for i in limine_areas_usable {sum += i.len as usize / PAGE_SIZE_4KIB;} sum};
         writeln!(printer, "FREE MEMORY 1: {}", total_pages);
@@ -231,12 +245,19 @@ pub extern "sysv64" fn _start() -> ! {
             translator: &translator,
         };
         //Map and unmap operations
-        memmap = MapMemory {
+        memmap_xu = MapMemory {
             allocator: &allocator,
             translator: &translator,
             write: true,
             user: true,
             execute_disable: true,
+        };
+        memmap_eu = MapMemory {
+            allocator: &allocator,
+            translator: &translator,
+            write: true,
+            user: true,
+            execute_disable: false,
         };
         memunmap = UnmapMemory {
             allocator: &allocator,
@@ -438,7 +459,7 @@ pub extern "sysv64" fn _start() -> ! {
         //Create kernel stack
         let start: LinearAddress = LinearAddress(KERNEL_STACKS_PTR + PAGE_SIZE_4KIB * 1);
         let end: LinearAddress   = LinearAddress(KERNEL_STACKS_PTR + PAGE_SIZE_4KIB * 4);
-        virtual_memory_editor(pml4, &mut memmap, start, end);
+        virtual_memory_editor(pml4, &mut memmap_xu, start, end);
         let kernel_stack = (KERNEL_STACKS_PTR + PAGE_SIZE_4KIB * 4) as u64;
         //Update TSS
         TASK_STATE_SEGMENT.rsp0 = kernel_stack;
@@ -546,41 +567,6 @@ pub extern "sysv64" fn _start() -> ! {
         else {writeln!(printer, "PS/2 Controller test failed.");}
     }
 
-    // CREATE THREADS
-    writeln!(printer, "\n=== THREAD STACK TEST===\n");
-    unsafe {
-        //Stack pointers
-        let s0p = oct_to_usize_4(0, 0, 0, 0, 0).unwrap();
-        let s1p = oct_to_usize_4(0, 0, 1, 0, 0).unwrap();
-        let s2p = oct_to_usize_4(0, 0, 2, 0, 0).unwrap();
-        let s3p = oct_to_usize_4(0, 0, 3, 0, 0).unwrap();
-        //Allocate stack space
-        virtual_memory_editor(pml4, &mut memmap, LinearAddress(s0p + PAGE_SIZE_4KIB), LinearAddress(s1p));
-        virtual_memory_editor(pml4, &mut memmap, LinearAddress(s1p + PAGE_SIZE_4KIB), LinearAddress(s2p));
-        virtual_memory_editor(pml4, &mut memmap, LinearAddress(s2p + PAGE_SIZE_4KIB), LinearAddress(s3p));
-        //Instruction pointers
-        let i1p = read_loop as fn() as usize as u64;
-        let i2p = byte_loop as fn() as usize as u64;
-        let i3p = ps2_keyboard as unsafe fn() as usize as u64;
-        //Create tasks
-        create_thread(1, pml4, &translator, &mut memmap, i1p, gdt::SUPERVISOR_CODE, 0x00000202, s1p, gdt::SUPERVISOR_DATA);
-        create_thread(2, pml4, &translator, &mut memmap, i2p, gdt::USER_CODE, 0x00000202, s2p, gdt::USER_DATA);
-        create_thread(3, pml4, &translator, &mut memmap, i3p, gdt::USER_CODE, 0x00000202, s3p, gdt::USER_DATA);
-        //Diagnostic
-        writeln!(printer, "Thread 1 (PIPE READ AND PRINT):");
-        writeln!(printer, "  Stack Pointer Before Init: 0x{:16X}", s1p);
-        writeln!(printer, "  Stack Pointer After Init:  0x{:16X}", TASK_STACKS[1]);
-        writeln!(printer, "  Instruction Pointer:       0x{:16X}", i1p);
-        writeln!(printer, "Thread 2 (PIPE WRITE):");
-        writeln!(printer, "  Stack Pointer Before Init: 0x{:16X}", s2p);
-        writeln!(printer, "  Stack Pointer After Init:  0x{:16X}", TASK_STACKS[2]);
-        writeln!(printer, "  Instruction Pointer:       0x{:16X}", i2p);
-        writeln!(printer, "Thread 3 (PS2 KEYBOARD):");
-        writeln!(printer, "  Stack Pointer Before Init: 0x{:16X}", s3p);
-        writeln!(printer, "  Stack Pointer After Init:  0x{:16X}", TASK_STACKS[3]);
-        writeln!(printer, "  Instruction Pointer:       0x{:16X}", i3p);
-    }
-
     // APIC SETUP
     writeln!(printer, "\n=== ADVANCED PROGRAMMABLE INTERRUPT CONTROLLER ===\n");
     unsafe {
@@ -588,7 +574,7 @@ pub extern "sysv64" fn _start() -> ! {
         writeln!(printer, "APIC Present: {}", lapic::apic_check());
         writeln!(printer, "APIC Base: 0x{:16X}", lapic::get_base());
         //Shift Base
-        lapic::LAPIC_ADDRESS = (lapic::get_base() as usize + PHYSICAL_MEMORY_PTR) as *mut u8;
+        lapic::LAPIC_ADDRESS = (lapic::get_base() as usize + hhdm_address as usize) as *mut u8;
         //Spurious interrupt
         lapic::spurious(0xFF);
         //Diagnostic
@@ -646,6 +632,101 @@ pub extern "sysv64" fn _start() -> ! {
         }
     }*/
 
+    // MODULE LOADING
+    writeln!(printer, "\n=== LIMINE MODULES ===\n");
+    let mut module_instruction_ptr: u64 = 0;
+    unsafe {
+        //Executable loading
+        let mut current_module_address = LinearAddress(MODULE_CODE_PTR);
+        //Load Modules
+        let modules_response: &LimineModuleResponse = limine::REQ_MODULE.get_response().get().unwrap();
+        let modules_count: u64 = modules_response.module_count;
+        let modules: *const LiminePtr<LimineFile> = modules_response.modules.as_ptr().unwrap();
+        //Iterate over modules
+        for i in 0..modules_count as usize {
+            //Load module path
+            let module_limine_ptr: *const LimineFile = (*modules.add(i)).as_ptr().unwrap();
+            let module_file_path: &str = (*module_limine_ptr).path.to_string().unwrap();
+            writeln!(printer, "MODULE: {}", module_file_path);
+            //Load file details
+            let module_file_location: usize = (*module_limine_ptr).base.as_ptr().unwrap() as usize;
+            let module_file_size: usize = (*module_limine_ptr).length as usize;
+            writeln!(printer, "MODULE FILE LOCATION: 0x{:016X}", module_file_location);
+            writeln!(printer, "MODULE FILE SIZE:     0x{:016X}", module_file_size);
+            //Executable module
+            if module_file_path.ends_with("x86-64.elf") {
+            writeln!(printer, "MODULE EXECUTABLE:    TRUE");
+                //Setup file
+                let module_file: MemoryVolume = MemoryVolume {offset: module_file_location, size: module_file_size};
+                if let Ok(mut module) = ELFFile::new(&module_file) {
+                    //Check ELF header validity
+                    let valid_binary_interface: bool = module.header.binary_interface == ApplicationBinaryInterface::None;
+                    let valid_binary_interface_version: bool = module.header.binary_interface_version == 0x00;
+                    let valid_architecture: bool = module.header.architecture == InstructionSetArchitecture::EmX86_64;
+                    let valid_object_type: bool = module.header.object_type == ObjectType::Shared;
+                    let valid: bool = valid_binary_interface && valid_binary_interface_version && valid_architecture && valid_object_type;
+                    writeln!(printer, "MODULE VALID:         {}", valid);
+                    if valid {
+                        //Allocate memory for module
+                        let module_size: usize = module.program_memory_size() as usize;
+                        writeln!(printer, "MODULE SIZE:          0x{:016X}", module_size);
+                        virtual_memory_editor(pml4, &mut memmap_eu, current_module_address, current_module_address.add(module_size)).unwrap();
+                        //Load and relocate module
+                        let module_ptr: *mut u8 = current_module_address.0 as *mut u8;
+                        writeln!(printer, "LOADING MODULE AT:    0x{:016X}", module_ptr as usize);
+                        module.load(module_ptr).unwrap();
+                        module.relocate(module_ptr, module_ptr).unwrap();
+                        //Save module instruction pointer
+                        module_instruction_ptr = (current_module_address.0 as u64) + module.header.entry_point;
+                        writeln!(printer, "MODULE ENTRY POINT:   0x{:016X}", module_instruction_ptr);
+                        //Adjust next module location
+                        current_module_address = current_module_address.add(page_size(align_lvl(module_size)));
+                    }
+                }
+                else {writeln!(printer, "MODULE CORRUPTED");}
+            }
+            else {writeln!(printer, "MODULE EXECUTABLE:    FALSE");}
+            writeln!(printer);
+        }
+    }
+
+    // CREATE THREADS
+    writeln!(printer, "\n=== THREAD STACK TEST ===\n");
+    unsafe {
+        //Stack pointers
+        let s0p = oct_to_usize_4(0, 0, 0, 0, 0).unwrap();
+        let s1p = oct_to_usize_4(0, 0, 1, 0, 0).unwrap();
+        let s2p = oct_to_usize_4(0, 0, 2, 0, 0).unwrap();
+        let s3p = oct_to_usize_4(0, 0, 3, 0, 0).unwrap();
+        let s4p = oct_to_usize_4(0, 0, 4, 0, 0).unwrap();
+        //Allocate stack space
+        virtual_memory_editor(pml4, &mut memmap_xu, LinearAddress(s0p + PAGE_SIZE_4KIB), LinearAddress(s1p));
+        virtual_memory_editor(pml4, &mut memmap_xu, LinearAddress(s1p + PAGE_SIZE_4KIB), LinearAddress(s2p));
+        virtual_memory_editor(pml4, &mut memmap_xu, LinearAddress(s2p + PAGE_SIZE_4KIB), LinearAddress(s3p));
+        virtual_memory_editor(pml4, &mut memmap_xu, LinearAddress(s3p + PAGE_SIZE_4KIB), LinearAddress(s4p));
+        //Instruction pointers
+        let i1p = read_loop as fn() as usize as u64;
+        let i2p = ps2_keyboard as unsafe fn() as usize as u64;
+        let i3p = module_instruction_ptr;
+        //Create tasks
+        create_thread(1, pml4, &translator, &mut memmap_xu, i1p, gdt::SUPERVISOR_CODE, 0x00000202, s1p, gdt::SUPERVISOR_DATA);
+        create_thread(2, pml4, &translator, &mut memmap_xu, i2p, gdt::USER_CODE, 0x00000202, s2p, gdt::USER_DATA);
+        create_thread(3, pml4, &translator, &mut memmap_xu, i3p, gdt::USER_CODE, 0x00000202, s3p, gdt::USER_DATA);
+        //Diagnostic
+        writeln!(printer, "Thread 1 (PIPE READ AND PRINT):");
+        writeln!(printer, "  Stack Pointer Before Init: 0x{:16X}", s1p);
+        writeln!(printer, "  Stack Pointer After Init:  0x{:16X}", TASK_STACKS[1]);
+        writeln!(printer, "  Instruction Pointer:       0x{:16X}", i1p);
+        writeln!(printer, "Thread 2 (PS2 KEYBOARD):");
+        writeln!(printer, "  Stack Pointer Before Init: 0x{:16X}", s2p);
+        writeln!(printer, "  Stack Pointer After Init:  0x{:16X}", TASK_STACKS[2]);
+        writeln!(printer, "  Instruction Pointer:       0x{:16X}", i2p);
+        writeln!(printer, "Thread 3 (TEST MODULE):");
+        writeln!(printer, "  Stack Pointer Before Init: 0x{:16X}", s3p);
+        writeln!(printer, "  Stack Pointer After Init:  0x{:16X}", TASK_STACKS[3]);
+        writeln!(printer, "  Instruction Pointer:       0x{:16X}", i3p);
+    }
+
     // FINISH LOADING
     writeln!(printer, "\n=== STARTUP COMPLETE ===\n");
     unsafe {
@@ -692,17 +773,20 @@ unsafe fn create_thread(thread_index: usize, map: PageMap, translator: &dyn Addr
 
 //Scheduler
 unsafe extern "sysv64" fn scheduler() -> u64 {
+    //Read current time
+    let time = GLOBAL_TIME.load(Ordering::Relaxed);
     //Process thread to switch to
-    let result = 
-    if      INPUT_PIPE.state  == RingBufferState::WriteWait                                                    {TASK_INDEX = 3; TASK_STACKS[3]}
-    else if STRING_PIPE.state == RingBufferState::WriteWait || STRING_PIPE.state == RingBufferState::ReadBlock {TASK_INDEX = 1; TASK_STACKS[1]}
-    else                                                                                                       {TASK_INDEX = 0; TASK_STACKS[0]};
+    TASK_INDEX = 
+    if time % 1000 == 0                                                                                        {3}
+    else if INPUT_PIPE.state  == RingBufferState::WriteWait                                                    {2}
+    else if STRING_PIPE.state == RingBufferState::WriteWait || STRING_PIPE.state == RingBufferState::ReadBlock {1}
+    else                                                                                                       {0};
     //Change task state segment to new task
     TASK_STATE_SEGMENT.rsp0 = (KERNEL_STACKS_PTR as u64) + ((TASK_INDEX + 1) * 16 * KIB) as u64;
     //Update current time
-    GLOBAL_TIME.fetch_add(1, Ordering::SeqCst);
+    GLOBAL_TIME.fetch_add(1, Ordering::Relaxed);
     //Finish
-    result
+    TASK_STACKS[TASK_INDEX]
 }
 
 

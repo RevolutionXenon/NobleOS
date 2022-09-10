@@ -120,6 +120,15 @@ pub fn page_size(level: PageMapLevel) -> usize {
     }
 }
 
+//Get capacity required
+pub fn align_lvl(size: usize) -> PageMapLevel {
+    if      size <= PAGE_SIZE_4KIB {PageMapLevel::L1}
+    else if size <= PAGE_SIZE_2MIB {PageMapLevel::L2}
+    else if size <= PAGE_SIZE_1GIB {PageMapLevel::L3}
+    else if size <= PAGE_SIZE_512G {PageMapLevel::L4}
+    else                           {PageMapLevel::L5}
+}
+
 
 // PAGING
 //Page Allocator

@@ -250,13 +250,13 @@ pub struct MarkInUse<'s> {
 }
 impl<'i> PageOperation for MarkInUse<'i> {
     fn op(&mut self, mut entry: PageMapEntry, start: LinearAddress, end: LinearAddress) -> Result<PageMapEntry, ReturnCode> {
-        match (entry.in_use, entry.present, entry.entry_level) {
+        match (entry.in_use, entry.present, entry.entry_type) {
             (true,  _,     _) => {},
             (_,     false, _) => {},
-            (false, true,  PageMapLevel::L1) => {
+            (false, true,  PageMapEntryType::Memory) => {
                 entry.in_use = true;
             },
-            (false, true, _) => {
+            (false, true,  PageMapEntryType::Table) => {
                 let map = PageMap::new(self.translator.translate(entry.physical)?, entry.entry_level.sub()?)?;
                 virtual_memory_editor(map, self, start, end)?;
                 entry.in_use = true;
@@ -272,11 +272,11 @@ pub struct DePrivilege<'s> {
 }
 impl<'i> PageOperation for DePrivilege<'i> {
     fn op(&mut self, mut entry: PageMapEntry, start: LinearAddress, end: LinearAddress) -> Result<PageMapEntry, ReturnCode> {
-        match (entry.in_use, entry.entry_level) {
-            (true, PageMapLevel::L1) => {
+        match (entry.in_use, entry.entry_type) {
+            (true, PageMapEntryType::Memory) => {
                 entry.user = true;
             },
-            (true, _) => {
+            (true, PageMapEntryType::Table) => {
                 let map = PageMap::new(self.translator.translate(entry.physical)?, entry.entry_level.sub()?)?;
                 virtual_memory_editor(map, self, start, end)?;
                 entry.user = true;
