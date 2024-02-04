@@ -45,7 +45,7 @@ impl<'a, RO: 'a+Volume> ELFFile<'a, RO> {
     }
 
     // FUNCTIONS
-    //Total memory size of program from lowest virtual address to highest virtual address
+    /// Total memory size of program from lowest virtual address to highest virtual address
     pub fn program_memory_size(&mut self) -> u64 {
         //Buffers
         let mut program_lowest_address:  u64 = 0xFFFF_FFFF_FFFF_FFFF;
@@ -70,7 +70,7 @@ impl<'a, RO: 'a+Volume> ELFFile<'a, RO> {
         if loadable_found {program_highest_address - program_lowest_address} else {0}
     }
 
-    //Load File Into Memory (Very Important to Allocate Memory First)
+    /// Load File Into Memory (Very Important to Allocate Memory First)
     pub unsafe fn load(&mut self, location: *mut u8) -> Result<(), ReturnCode> {
         for position in 0..self.program_memory_size() as usize {
             write_volatile(location.add(position), 0x00);
@@ -81,14 +81,14 @@ impl<'a, RO: 'a+Volume> ELFFile<'a, RO> {
         for program in program_iterator {
             const BUFFER_SIZE: usize = 512;
             let mut buffer: [u8; BUFFER_SIZE] = [0u8; BUFFER_SIZE];
-            let count: u64 = program.file_size as u64/BUFFER_SIZE as u64;
+            let count: u64 = program.file_size/BUFFER_SIZE as u64;
             for file_positon in 0..count {
-                self.file.read_all(program.file_offset as u64 +file_positon*BUFFER_SIZE as u64, &mut buffer)?;
+                self.file.read_all(program.file_offset +file_positon*BUFFER_SIZE as u64, &mut buffer)?;
                 copy_nonoverlapping(buffer.as_ptr(), location.add(program.virtual_address as usize + file_positon as usize * BUFFER_SIZE), BUFFER_SIZE);
             }
             let leftover: usize = program.file_size as usize %BUFFER_SIZE;
             if leftover != 0 {
-                self.file.read_all(program.file_offset as u64 + count*BUFFER_SIZE as u64, &mut buffer[0..leftover])?;
+                self.file.read_all(program.file_offset + count*BUFFER_SIZE as u64, &mut buffer[0..leftover])?;
                 copy_nonoverlapping(buffer.as_ptr(), location.add(program.virtual_address as usize + count as usize * BUFFER_SIZE), leftover);
             }
         }
@@ -96,7 +96,7 @@ impl<'a, RO: 'a+Volume> ELFFile<'a, RO> {
         Ok(())
     }
 
-    //Do Relocation (Very Important to Load First) **NOT FINISHED**
+    /// Do Relocation (Very Important to Load First) **NOT FINISHED**
     pub unsafe fn relocate(&mut self, loaded_location: *mut u8, reloc_location: *mut u8) -> Result<(), ReturnCode> {
         //Ensure correct object type
         if self.header.object_type != ObjectType::Shared {return Err(ReturnCode::UnsupportedFeature)}
@@ -154,7 +154,17 @@ pub struct Header {
     pub string_section_index:      u16,
 }
 impl Header {
-    // CONSTRUCTOR
+    /// ## NEW
+    /// 
+    /// Interpret Bytes as ELF File Header
+    /// 
+    /// #### Arguments
+    /// 
+    /// * **bytes**: &\[u8\] - The slice of bytes to read from.
+    /// 
+    /// #### Return
+    /// 
+    /// * Result<Header, ReturnCode> - Either a valid header or a return code.
     pub fn new(bytes: &[u8]) -> Result<Header, ReturnCode> {
         if bytes.len()       <  0x10                             {return Err(ReturnCode::BufferTooSmall)}
         if bytes[0x00..0x04] != [0x7Fu8, 0x45u8, 0x4cu8, 0x46u8] {return Err(ReturnCode::InvalidIdentifier)}
@@ -418,12 +428,12 @@ impl<'a, RO: 'a+Volume> ProgramIterator<'a, RO> {
         match self.bit_width {
             BitWidth::W32 => {
                 let mut buffer: [u8; 0x20] = [0u8; 0x20];
-                self.file.read_all(self.base_offset as u64 + 0x20*self.entry_position as u64, &mut buffer)?;
+                self.file.read_all(self.base_offset + 0x20*self.entry_position as u64, &mut buffer)?;
                 Program::new(&buffer, self.bit_width, self.endianness)
             },
             BitWidth::W64 => {
                 let mut buffer: [u8; 0x38] = [0u8; 0x38];
-                self.file.read_all(self.base_offset as u64 + 0x38*self.entry_position as u64, &mut buffer)?;
+                self.file.read_all(self.base_offset + 0x38*self.entry_position as u64, &mut buffer)?;
                 Program::new(&buffer, self.bit_width, self.endianness)
             },
         }
@@ -490,12 +500,12 @@ impl<'a, RO: 'a+Volume> SectionIterator<'a, RO> {
         match self.bit_width {
             BitWidth::W32 => {
                 let mut buffer: [u8; 0x28] = [0u8; 0x28];
-                self.file.read_all(self.base_offset as u64 + 0x28*self.entry_position as u64, &mut buffer)?;
+                self.file.read_all(self.base_offset + 0x28*self.entry_position as u64, &mut buffer)?;
                 Section::new(&buffer, self.bit_width, self.endianness)
             },
             BitWidth::W64 => {
                 let mut buffer: [u8; 0x40] = [0u8; 0x40];
-                self.file.read_all(self.base_offset as u64 + 0x40*self.entry_position as u64, &mut buffer)?;
+                self.file.read_all(self.base_offset + 0x40*self.entry_position as u64, &mut buffer)?;
                 Section::new(&buffer, self.bit_width, self.endianness)
             },
         }
@@ -655,9 +665,9 @@ impl ProgramDynamicEntry {
                 if data.len() != 16 {return Err(ReturnCode::IncorrectBufferLength)};
                 Ok(Self {
                     entry_type: ProgramDynamicEntryType::try_from(
-                           u64_fb(data[0x00..0x08].try_into().map_err( |_| ReturnCode::SlicingError)?) as u64)
+                           u64_fb(data[0x00..0x08].try_into().map_err( |_| ReturnCode::SlicingError)?))
                                                              .map_err( |_| ReturnCode::InvalidData)?,
-                    value: u64_fb(data[0x08..0x10].try_into().map_err( |_| ReturnCode::SlicingError)?) as u64,
+                    value: u64_fb(data[0x08..0x10].try_into().map_err( |_| ReturnCode::SlicingError)?),
                 })
             },
         }
@@ -691,12 +701,12 @@ impl<'a, RO: 'a+Volume> ProgramDynamicEntryIterator<'a, RO> {
         match self.bit_width {
             BitWidth::W32 => {
                 let mut buffer: [u8; 8] = [0u8; 8];
-                self.file.read_all(self.base_offset as u64 + 8*self.entry_position as u64, &mut buffer)?;
+                self.file.read_all(self.base_offset + 8*self.entry_position, &mut buffer)?;
                 ProgramDynamicEntry::new(&buffer, self.bit_width, self.endianness)
             },
             BitWidth::W64 => {
                 let mut buffer: [u8; 16] = [0u8; 16];
-                self.file.read_all(self.base_offset as u64 + 16*self.entry_position as u64, &mut buffer)?;
+                self.file.read_all(self.base_offset + 16*self.entry_position, &mut buffer)?;
                 ProgramDynamicEntry::new(&buffer, self.bit_width, self.endianness)
             },
         }
@@ -845,22 +855,22 @@ impl<'a, RO: 'a+Volume> RelocationEntryIterator<'a, RO> {
         match (self.bit_width, self.relocation_type) {
             (BitWidth::W32, RelocationType::Implicit) => {
                 let mut buffer: [u8; 0x08] = [0u8; 0x08];
-                self.file.read_all(self.file_offset as u64 + 0x08*self.entry_position as u64, &mut buffer)?;
+                self.file.read_all(self.file_offset + 0x08*self.entry_position, &mut buffer)?;
                 RelocationEntry::new(&buffer, self.bit_width, self.endianness, self.relocation_type)
             },
             (BitWidth::W32, RelocationType::Explicit) => {
                 let mut buffer: [u8; 0x0C] = [0u8; 0x0C];
-                self.file.read_all(self.file_offset as u64 + 0x0C*self.entry_position as u64, &mut buffer)?;
+                self.file.read_all(self.file_offset + 0x0C*self.entry_position, &mut buffer)?;
                 RelocationEntry::new(&buffer, self.bit_width, self.endianness, self.relocation_type)
             }, 
             (BitWidth::W64, RelocationType::Implicit) => {
                 let mut buffer: [u8; 0x10] = [0u8; 0x10];
-                self.file.read_all(self.file_offset as u64 + 0x10*self.entry_position as u64, &mut buffer)?;
+                self.file.read_all(self.file_offset + 0x10*self.entry_position, &mut buffer)?;
                 RelocationEntry::new(&buffer, self.bit_width, self.endianness, self.relocation_type)
             }, 
             (BitWidth::W64, RelocationType::Explicit) => {
                 let mut buffer: [u8; 0x18] = [0u8; 0x18];
-                self.file.read_all(self.file_offset as u64 + 0x18*self.entry_position as u64, &mut buffer)?;
+                self.file.read_all(self.file_offset + 0x18*self.entry_position, &mut buffer)?;
                 RelocationEntry::new(&buffer, self.bit_width, self.endianness, self.relocation_type)
             },
         }

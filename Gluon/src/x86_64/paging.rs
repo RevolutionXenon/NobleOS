@@ -3,6 +3,8 @@
 
 
 // HEADER
+#![allow(clippy::unusual_byte_groupings)]
+
 //Constants
 //                                    SIGN PM5 PM4 PM3 PM2 PM1 OFFSET
 pub const HIGHER_HALF_48:   usize = 0o_177_777_000_000_000_000_0000_usize; //HIGHER HALF SIGN EXTENSION IN FOUR LEVEL PAGE MAP (48-bit address space)
@@ -207,22 +209,22 @@ impl PageMap {
 #[derive(Debug)]
 pub struct PageMapEntry {
     pub entry_level:     PageMapLevel,
-    pub entry_type:      PageMapEntryType, //Bit 7 in some cirumstances, indicates page refers to memory when it could refer to a table
-    pub physical:        PhysicalAddress,  //Bits 12-48, memory address of relevant entry
-    pub present:         bool, //ALL: Bit 0, indicates entry exists
-    pub write:           bool, //ALL: Bit 1, indicates page may be written to
-    pub user:            bool, //ALL: Bit 2, indicates page can only be accessed in Ring 0
-    pub write_through:   bool, //ALL: Bit 3, something about how memory access works
-    pub cache_disable:   bool, //ALL: Bit 4, something else about how memory access works
-    pub accessed:        bool, //ALL: Bit 5, indicates that a page has been accessed
-    pub dirty:           Option<bool>, //MEMORY: Bit 6, indicates page has been written to
-    pub attribute_table: Option<bool>, //MEMORY: Bit 7 (L1) or Bit 12 (L2, L3), indicates yet another thing about how memory access works
-    pub global:          Option<bool>, //MEMORY: Bit 8
-    pub in_use:          bool, //ALL: Bit 52, indicates to the operating system that a page map entry is valid regardless of the state of the present bit
-    pub execute_disable: bool, //ALL: Bit 63, indicates code may not be executed from this page
+    pub entry_type:      PageMapEntryType, //LVL 2/3 : Bit 7     : In some cirumstances, indicates page refers to memory when it could refer to a table
+    pub physical:        PhysicalAddress,  //ALL     : Bit 12-48 : memory address of relevant entry
+    pub present:         bool,             //ALL     : Bit  0    : indicates entry exists
+    pub write:           bool,             //ALL     : Bit  1    : indicates page may be written to
+    pub user:            bool,             //ALL     : Bit  2    : indicates page can only be accessed in Ring 0
+    pub write_through:   bool,             //ALL     : Bit  3    : ?
+    pub cache_disable:   bool,             //ALL     : Bit  4    : ?
+    pub accessed:        bool,             //ALL     : Bit  5    : indicates that a page has been accessed
+    pub dirty:           Option<bool>,     //MEMORY  : Bit  6    : indicates page has been written to
+    pub attribute_table: Option<bool>,     //MEMORY  : Bit  7/12 : indicates yet another thing about how memory access works
+    pub global:          Option<bool>,     //MEMORY  : Bit  8    : ?
+    pub in_use:          bool,             //ALL     : Bit 52    : indicates to the operating system that a page map entry is valid regardless of the state of the present bit
+    pub execute_disable: bool,             //ALL     : Bit 63    : indicates code may not be executed from this page
 }
 impl PageMapEntry {
-    //Read from u64, intended to read a page table entry from RAM
+    /// Read from u64, intended to aid in reading a page table entry from RAM
     pub fn from_u64(data: u64, entry_level: PageMapLevel) -> Result<Self, ReturnCode> {
         let entry_type = {
             if      entry_level == PageMapLevel::L5 || entry_level == PageMapLevel::L4 {PageMapEntryType::Table}
@@ -268,8 +270,8 @@ impl PageMapEntry {
             execute_disable:                                         data & (1<<0o77) > 0,
         })
     }
-    
-    //Convert to u64, intended to aid in writing a page table entry into RAM
+
+    /// Convert to u64, intended to aid in writing a page table entry into RAM
     pub fn to_u64(&self) -> Result<u64, ReturnCode> {
         let mut result: u64 = 0;
         result |= match (self.entry_level, self.entry_type) {
@@ -301,16 +303,16 @@ impl PageMapEntry {
         Ok(result)
     }
 
-    //New
+    /// New
     pub fn new(entry_level: PageMapLevel, entry_type: PageMapEntryType, address: PhysicalAddress, present: bool, write: bool, user: bool, execute_disable: bool) -> Result<Self, ReturnCode> {
         match (entry_level, entry_type) {
-            (PageMapLevel::L5, PageMapEntryType::Table)  => {if address.0 as usize % PAGE_SIZE_4KIB != 0 {return Err(ReturnCode::UnalignedAddress)}},
-            (PageMapLevel::L4, PageMapEntryType::Table)  => {if address.0 as usize % PAGE_SIZE_4KIB != 0 {return Err(ReturnCode::UnalignedAddress)}},
-            (PageMapLevel::L3, PageMapEntryType::Table)  => {if address.0 as usize % PAGE_SIZE_4KIB != 0 {return Err(ReturnCode::UnalignedAddress)}},
-            (PageMapLevel::L2, PageMapEntryType::Table)  => {if address.0 as usize % PAGE_SIZE_4KIB != 0 {return Err(ReturnCode::UnalignedAddress)}},
-            (PageMapLevel::L3, PageMapEntryType::Memory) => {if address.0 as usize % PAGE_SIZE_1GIB != 0 {return Err(ReturnCode::UnalignedAddress)}},
-            (PageMapLevel::L2, PageMapEntryType::Memory) => {if address.0 as usize % PAGE_SIZE_2MIB != 0 {return Err(ReturnCode::UnalignedAddress)}},
-            (PageMapLevel::L1, PageMapEntryType::Memory) => {if address.0 as usize % PAGE_SIZE_4KIB != 0 {return Err(ReturnCode::UnalignedAddress)}},
+            (PageMapLevel::L5, PageMapEntryType::Table)  => {if address.0 % PAGE_SIZE_4KIB != 0 {return Err(ReturnCode::UnalignedAddress)}},
+            (PageMapLevel::L4, PageMapEntryType::Table)  => {if address.0 % PAGE_SIZE_4KIB != 0 {return Err(ReturnCode::UnalignedAddress)}},
+            (PageMapLevel::L3, PageMapEntryType::Table)  => {if address.0 % PAGE_SIZE_4KIB != 0 {return Err(ReturnCode::UnalignedAddress)}},
+            (PageMapLevel::L2, PageMapEntryType::Table)  => {if address.0 % PAGE_SIZE_4KIB != 0 {return Err(ReturnCode::UnalignedAddress)}},
+            (PageMapLevel::L3, PageMapEntryType::Memory) => {if address.0 % PAGE_SIZE_1GIB != 0 {return Err(ReturnCode::UnalignedAddress)}},
+            (PageMapLevel::L2, PageMapEntryType::Memory) => {if address.0 % PAGE_SIZE_2MIB != 0 {return Err(ReturnCode::UnalignedAddress)}},
+            (PageMapLevel::L1, PageMapEntryType::Memory) => {if address.0 % PAGE_SIZE_4KIB != 0 {return Err(ReturnCode::UnalignedAddress)}},
             _ => {return Err(ReturnCode::InvalidData)}
         };
         Ok(Self {

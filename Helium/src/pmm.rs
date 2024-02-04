@@ -10,6 +10,9 @@ use core::intrinsics::write_bytes;
 use gluon::x86_64::paging::*;
 use gluon::noble::return_code::*;
 
+use crate::kstruct::MemPort;
+use crate::kstruct::port_type;
+
 
 // MEMORY MANAGEMENT
 //Address translator which cannot allocate
@@ -313,4 +316,41 @@ pub fn virtual_memory_editor(map: PageMap, operation: &mut dyn PageOperation, st
     }
     //
     Ok(())
+}
+
+
+// SINGULAR MEMORY ADDRESS OPERATIONS
+pub struct MapPort<'s> {
+    pub allocator: &'s dyn PhysicalAddressAllocator,
+    pub translator: &'s dyn AddressTranslator,
+    pub write: bool,
+    pub user: bool,
+    pub execute_disable: bool,
+}
+impl<'i> MapPort<'i> {
+    pub fn map(&self, parent_map: PageMap, port: MemPort, address: LinearAddress) -> Result<(), ReturnCode> {
+        //
+        canonical_48(address)?;
+        //
+        let index: usize = extract_index(address, parent_map.map_level);
+        let entry: PageMapEntry = parent_map.read_entry(index)?;
+        if port.level == parent_map.map_level {
+            if entry.in_use {return Err(ReturnCode::Test00)}
+            else {
+                parent_map.write_entry(index, PageMapEntry::new(port.level, port_type(port.level), port.address, true, self.write, self.user, self.execute_disable)?)?;
+            }
+        }
+        else if entry.in_use {
+            if entry.entry_type == PageMapEntryType::Table {
+                self.map(PageMap::new(self.translator.translate(entry.physical)?, parent_map.map_level.sub()?)?, port, address)?;
+            }
+            else {return Err(ReturnCode::Test01)}
+        }
+        else {
+            let new_map_address = self.allocator.take_one()?;
+            parent_map.write_entry(index, PageMapEntry::new(parent_map.map_level, port_type(port.level), new_map_address, true, self.write, self.user, self.execute_disable)?)?;
+            self.map(PageMap::new(self.translator.translate(new_map_address)?, parent_map.map_level.sub()?)?, port, address)?;
+        }
+        Ok(())
+    }
 }

@@ -11,7 +11,7 @@
 use crate::{numeric_enum, return_if_partial};
 use crate::noble::file_system::*;
 use crate::noble::return_code::ReturnCode;
-use core::{convert::{TryFrom, TryInto}};
+use core::convert::{TryFrom, TryInto};
 use core::str;
 
 
@@ -56,7 +56,7 @@ impl<'s> FileSystem for FATFileSystem<'s> {
             let file = VolumeFromVolume {
                 volume: self.volume,
                 offset: self.boot_sector.root_location() as u64,
-                size: (self.boot_sector.root_entry_count as u64 * 32) as u64,
+                size:   self.boot_sector.root_entry_count as u64 * 32,
             };
             file.read(offset, buffer)
         }
@@ -367,7 +367,7 @@ impl TryFrom<FATBootSector> for [u8;0x200] {
         bytes[0x0003..0x000B].clone_from_slice(&sector.oem_name);
         bytes[0x000B..0x000D].clone_from_slice(&(sector.bytes_per_sector as u16).to_le_bytes());
         bytes[0x000D] = sector.sectors_per_cluster as u8;
-        bytes[0x000E..0x0010].clone_from_slice(&(sector.reserved_sector_count as u16).to_le_bytes());
+        bytes[0x000E..0x0010].clone_from_slice(&sector.reserved_sector_count.to_le_bytes());
         bytes[0x0010] = sector.fat_number;
         bytes[0x0011..0x0013].clone_from_slice(&sector.root_entry_count.to_le_bytes());
         bytes[0x0013..0x0015].clone_from_slice(&sector.total_sectors_16.to_le_bytes());

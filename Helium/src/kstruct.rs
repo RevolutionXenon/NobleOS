@@ -4,15 +4,15 @@
 
 // HEADER
 //Imports
-use gluon::{x86_64::paging::PhysicalAddress, noble::data_type::DataType};
+use gluon::{x86_64::paging::{PhysicalAddress, PageMap, PageMapLevel, PageMapEntryType}, noble::data_type::DataType};
 
 
 // IDENTIFIER STRUCTS
 //IDs
-struct ProcessID(u64);
-struct ThreadID (u64);
-struct PortID (u64);
-struct TimerID (u64);
+struct ProcessID (u64);
+struct ThreadID  (u64);
+struct PortID    (u64);
+struct TimerID   (u64);
 
 
 // BASE STRUCTS
@@ -20,7 +20,6 @@ struct TimerID (u64);
 #[repr(C)]
 struct Process {
     page_map_address: PhysicalAddress,
-    signal_stack: usize,
 }
 
 //Thread
@@ -31,9 +30,17 @@ struct Thread {
 
 //Port
 #[repr(C)]
-struct Port {
-    page_map_address: PhysicalAddress,
-    data_type: DataType,
+pub struct MemPort {
+    pub address: PhysicalAddress,
+    pub level: PageMapLevel,
+    pub data_type: DataType,
+}
+
+pub fn port_type(level: PageMapLevel) -> PageMapEntryType {
+    match level {
+        PageMapLevel::L1 => PageMapEntryType::Table,
+        _                => PageMapEntryType::Table,
+    }
 }
 
 //Timer

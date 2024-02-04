@@ -27,6 +27,6 @@ fn _start() {
 
 // PANIC HANDLER
 #[panic_handler]
-unsafe extern "sysv64" fn panic_handler(_panic_info: &PanicInfo) -> ! {
+unsafe fn panic_handler(_panic_info: &PanicInfo) -> ! {
     loop {hlt();}; //Halt the program
 }
