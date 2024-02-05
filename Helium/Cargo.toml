@@ -6,4 +6,4 @@ edition = "2018"
 [dependencies]
 photon = {path = "../Photon"}
 gluon = {path = "../Gluon"}
-limine = "0.1.8"
+limine = "0.2.0"

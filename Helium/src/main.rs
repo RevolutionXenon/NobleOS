@@ -21,6 +21,7 @@
 #![feature(naked_functions)]
 #![feature(panic_info_message)]
 #![feature(start)]
+#![feature(used_with_arg)]
 
 //Modules
 mod alloc;
@@ -31,7 +32,6 @@ mod pmm;
 
 //Imports
 use crate::alloc::*;
-use crate::limine_boot::REQ_HHDM;
 use crate::pmm::*;
 use crate::kstruct::*;
 use gluon::GLUON_VERSION;
@@ -54,10 +54,6 @@ use gluon::x86_64::paging::*;
 use gluon::x86_64::port::*;
 use gluon::x86_64::registers::*;
 use gluon::x86_64::segmentation::*;
-use limine::LimineFile;
-use limine::LimineMemoryMapEntryType;
-use limine::LimineModuleResponse;
-use limine::LiminePtr;
 use photon::*;
 use photon::formats::f1::*;
 use core::arch::asm;
@@ -137,8 +133,8 @@ pub extern "sysv64" fn _start() -> ! {
     cli();
 
     // LIMINE SETUP
-    let framebuffer = limine_boot::REQ_FRAMEBUFFER.get_response().get().unwrap().framebuffers().unwrap();
-    let framebuffer_address = framebuffer[0].address.as_mut_ptr().unwrap();
+    let framebuffer = limine_boot::LIMINE_FRAMEBUFFER.get_response().unwrap().framebuffers().next().unwrap();
+    let framebuffer_address = framebuffer.addr();
 
     // GRAPHICS SETUP
     let pixel_renderer: PixelRendererHWD<ColorBGRX>;
@@ -148,8 +144,10 @@ pub extern "sysv64" fn _start() -> ! {
     {
         //Pixel Renderer
         pixel_renderer = PixelRendererHWD {pointer: framebuffer_address as *mut ColorBGRX, height: SCREEN_HEIGHT, width: SCREEN_WIDTH};
+        for y in 0..SCREEN_HEIGHT {for x in 0..SCREEN_WIDTH {unsafe {pixel_renderer.render_pixel(COLOR_BGRX_BLACK, y, x);}}}
         //Character Renderer
         character_renderer = CharacterTwoToneRenderer16x16::<ColorBGRX> {renderer: &pixel_renderer, height: FRAME_HEIGHT, width: FRAME_WIDTH, y: 0, x: 0};
+        character_renderer.render_character(CharacterTwoTone::<ColorBGRX>{ codepoint: '?', foreground: COLOR_BGRX_BLACK, background: COLOR_BGRX_RED }, 0, 0);
         //Frame
         let mut frame: FrameWindow::<FRAME_HEIGHT, FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>> = FrameWindow::<FRAME_HEIGHT, FRAME_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>::new(&character_renderer, WHITESPACE, 0, 0);
         frame.horizontal_line(PRINT_Y-1, 0, FRAME_WIDTH-1, REDSPACE);
@@ -169,8 +167,8 @@ pub extern "sysv64" fn _start() -> ! {
         unsafe {GLOBAL_PRINT_POINTER = Some(&mut printer as *mut PrintWindow<PRINT_LINES, PRINT_HEIGHT, PRINT_WIDTH, ColorBGRX, CharacterTwoTone<ColorBGRX>>)}
         //Print Welcome
         writeln!(printer, "Welcome to Noble OS");
-        let boot_info = limine_boot::REQ_INFO.get_response().get().expect("No Bootloader Info");
-        writeln!(printer, "{} Bootloader       v{}", boot_info.name.to_string().unwrap(), boot_info.version.to_string().unwrap());
+        let boot_info = limine_boot::LIMINE_INFO.get_response().expect("No Bootloader Info");
+        writeln!(printer, "{} Bootloader       v{}", boot_info.name(), boot_info.version());
         writeln!(printer, "Helium Kernel           {}", HELIUM_VERSION);
         writeln!(printer, "Photon Graphics Library {}", PHOTON_VERSION);
         writeln!(printer, "Gluon Memory Library    {}", GLUON_VERSION);
@@ -187,7 +185,7 @@ pub extern "sysv64" fn _start() -> ! {
     let mut memunmap: UnmapMemory;
     unsafe {
         //Limine HHDM
-        hhdm_address = REQ_HHDM.get_response().get().unwrap().offset as usize;
+        hhdm_address = limine_boot::LIMINE_HHDM.get_response().unwrap().offset() as usize;
         writeln!(printer, "HHDM Address: 0x{:016X}", hhdm_address);
         //Physical to linear address translator
         translator = OffsetIdentity {
@@ -195,14 +193,13 @@ pub extern "sysv64" fn _start() -> ! {
             limit: PAGE_SIZE_512G,
         };
         //Limine Setup
-        let limine_memmap_response = limine_boot::REQ_MEMMAP.get_response().get().unwrap();
-        let limine_memmap = limine_memmap_response.entries.get().unwrap().as_ptr().unwrap();
-        let limine_memmap_slice = core::slice::from_raw_parts(limine_memmap, limine_memmap_response.entry_count as usize);
+        let limine_memmap_response = limine_boot::LIMINE_MEMMAP.get_response().unwrap();
+        let limine_memmap_slice = limine_memmap_response.entries();
         let limine_areas_usable = limine_memmap_slice.iter()
-            .filter(|x| x.typ == LimineMemoryMapEntryType::Usable);
+            .filter(|x| x.entry_type == limine::memory_map::EntryType::USABLE);
         let mut limine_pages_usable = limine_memmap_slice.iter()
-            .filter(|x| x.typ == LimineMemoryMapEntryType::Usable)
-            .flat_map(|x| (0..x.len as usize / PAGE_SIZE_4KIB).map(move |p| x.base as usize + PAGE_SIZE_4KIB * p))
+            .filter(|x| x.entry_type == limine::memory_map::EntryType::USABLE)
+            .flat_map(|x| (0..x.length as usize / PAGE_SIZE_4KIB).map(move |p| x.base as usize + PAGE_SIZE_4KIB * p))
             .map(PhysicalAddress);
         writeln!(printer, "Successfully read Limine memory information.");
         //Limine Allocator
@@ -232,7 +229,7 @@ pub extern "sysv64" fn _start() -> ! {
         virtual_memory_editor(pml4, &mut deprivilege, LinearAddress(KERNEL_CODE_PTR), LinearAddress(KERNEL_CODE_PTR - 1 + page_size(KERNEL_CODE_LVL)));
         writeln!(printer, "Successfully sanitized page maps.");
         //Create memory stack
-        let total_pages = {let mut sum: usize = 0; for i in limine_areas_usable {sum += i.len as usize / PAGE_SIZE_4KIB;} sum};
+        let total_pages = {let mut sum: usize = 0; for i in limine_areas_usable {sum += i.length as usize / PAGE_SIZE_4KIB;} sum};
         writeln!(printer, "FREE MEMORY 1: {}", total_pages);
         virtual_memory_editor(pml4, &mut limine_map_memory, LinearAddress(ALLOCATOR_STACK_PTR), LinearAddress(ALLOCATOR_STACK_PTR + total_pages * 8));
         let stack_ptr = ALLOCATOR_STACK_PTR as *mut PhysicalAddress;
@@ -672,25 +669,17 @@ pub extern "sysv64" fn _start() -> ! {
         //Executable loading
         let mut current_module_address = LinearAddress(MODULE_CODE_PTR);
         //Load Modules
-        let modules_response: &LimineModuleResponse = limine_boot::REQ_MODULE.get_response().get().unwrap();
-        let modules_count: u64 = modules_response.module_count;
-        writeln!(printer, "MODULE COUNT: {}", modules_count);
-        let modules: *const LiminePtr<LimineFile> = modules_response.modules.as_ptr().unwrap();
+        let modules_response = limine_boot::LIMINE_MODULES.get_response().unwrap();
+        let modules = modules_response.modules();
+        writeln!(printer, "MODULE COUNT: {}", modules.len());
         //Iterate over modules
-        for i in 0..modules_count as usize {
+        for module in modules {
             //Load module path
-            let module_limine_ptr: *const LimineFile = (*modules.add(i)).as_ptr().unwrap();
-            let module_file_path: &str = match (*module_limine_ptr).path.to_string() {
-                Some(a) => a,
-                None => {
-                    writeln!(printer, "MODULE {}: INVALID", i);
-                    continue;
-                },
-            };
-            writeln!(printer, "MODULE {}: {}", i, module_file_path);
+            let module_file_path: &str = core::str::from_utf8_unchecked(module.path());
+            writeln!(printer, "MODULE: {}", module_file_path);
             //Load file details
-            let module_file_location: usize = (*module_limine_ptr).base.as_ptr().unwrap() as usize;
-            let module_file_size: usize = (*module_limine_ptr).length as usize;
+            let module_file_location: usize = module.addr() as usize;
+            let module_file_size: usize = module.size() as usize;
             writeln!(printer, "MODULE FILE LOCATION: 0x{:016X}", module_file_location);
             writeln!(printer, "MODULE FILE SIZE:     0x{:016X}", module_file_size);
             //Executable module
@@ -817,7 +806,7 @@ unsafe extern "sysv64" fn scheduler() -> u64 {
     let time = GLOBAL_TIME.load(Ordering::Relaxed);
     //Process thread to switch to
     TASK_INDEX = 
-    //if time % 1000 == 0                                                                                   {3} else
+    if time % 1000 == 0                                                                                   {3} else
     if INPUT_PIPE.state  == RingBufferState::WriteWait                                                    {2} else
     if STRING_PIPE.state == RingBufferState::WriteWait || STRING_PIPE.state == RingBufferState::ReadBlock {1} else
                                                                                                           {0};
